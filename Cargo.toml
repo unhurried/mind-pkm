@@ -1,0 +1,35 @@
+[package]
+name = "mind-pkm"
+version = "0.7.0"
+edition = "2024"
+description = "A personal knowledge management system around a Freeplane-compatible mind map"
+license = "MIT"
+authors = ["unhurried"]
+
+[dependencies]
+iced = { version = "0.14", features = ["tokio", "advanced", "canvas"] }
+tantivy = "0.26"
+lindera = { version = "6.2", features = ["embed-ipadic"] }
+quick-xml = "0.38"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+pdf-extract = "0.9"
+opener = "0.8"
+rfd = "0.15"
+trash = "5.2"
+chrono = "0.4"
+percent-encoding = "2"
+dirs = "6"
+fastrand = "2"
+tokio = { version = "1", features = ["rt"] }
+unicode-normalization = "0.1"
+
+[build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+proptest = "1.12"
+tempfile = "3"
+
+[profile.release]
+strip = true
+lto = "thin"

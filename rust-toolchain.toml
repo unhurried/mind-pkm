@@ -1,0 +1,7 @@
+# The Rust toolchain for local builds, Claude Code sessions and CI (the build
+# workflow reads the channel from here), so that clippy and rustfmt agree
+# everywhere. Bump it deliberately, fixing any new lints in the same change.
+[toolchain]
+channel = "1.97.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

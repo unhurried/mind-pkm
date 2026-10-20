@@ -1,0 +1,443 @@
+//! The commands of the menus and keyboard shortcuts.
+
+use super::dialog::{ConfirmAction, InputAction};
+use super::file::{AfterUnsaved, FileAction};
+use super::{App, Message, blocking, settings, viewport};
+use crate::mindmap::{MindMap, NodeId, Subtree};
+use crate::pkm::commands::{self, EditKind};
+use crate::pkm::filter::FILTER_HELP_MESSAGE;
+use crate::pkm::{self, next_steps};
+use chrono::Local;
+use iced::Task;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+const NEW_TEXT_PROMPT: &str = "New Text";
+const NEW_NAME_PROMPT: &str = "New Name";
+const LINK_PROMPT: &str = "Link (a file path, URL, or #ID of a node; empty removes it)";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    New,
+    Open,
+    Save,
+    SaveAs,
+    Exit,
+    Undo,
+    Redo,
+    NewChild,
+    NewSibling,
+    EditText,
+    DeleteNode,
+    Cut,
+    Copy,
+    Paste,
+    MoveUp,
+    MoveDown,
+    ToggleFold,
+    SetLink,
+    CenterSelected,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    // PKM
+    PkmOpen,
+    PkmEdit,
+    FoldOneLevel,
+    UnfoldOneLevel,
+    Filter,
+    Search,
+    ToggleCheckmark,
+    AddToToDo,
+    NewPage,
+    NewDirectory,
+    PkmDelete,
+    Update,
+    AddAssets,
+    FindUnlinked,
+}
+
+impl Command {
+    /// Whether running it counts as a change of the map for the periodic
+    /// Next Steps / search index refresh.
+    fn counts_as_change(self) -> bool {
+        !matches!(
+            self,
+            Command::Save
+                | Command::SaveAs
+                | Command::CenterSelected
+                | Command::ZoomIn
+                | Command::ZoomOut
+                | Command::ZoomReset
+                | Command::Copy
+                | Command::PkmOpen
+                | Command::Filter
+                | Command::Search
+                | Command::Update
+                | Command::Undo
+                | Command::Redo
+        )
+    }
+}
+
+/// What was last cut or copied here: the subtrees, and the plain text put on
+/// the system clipboard.
+pub struct Clipboard {
+    text: String,
+    subtrees: Vec<Subtree>,
+}
+
+impl Clipboard {
+    /// The subtrees, unless the system clipboard (`text`, None when it can't
+    /// be read) holds something else by now.
+    fn subtrees_for(&self, text: Option<&str>) -> Option<&[Subtree]> {
+        match text {
+            Some(t) if t.replace("\r\n", "\n").trim_end() != self.text.trim_end() => None,
+            _ => Some(&self.subtrees),
+        }
+    }
+}
+
+impl App {
+    pub(super) fn run_command(&mut self, cmd: Command) -> Task<Message> {
+        match cmd {
+            Command::New => return self.guard_unsaved(AfterUnsaved::New),
+            Command::Open => return self.guard_unsaved(AfterUnsaved::Open),
+            Command::Exit => return self.guard_unsaved(AfterUnsaved::Exit),
+            _ => {}
+        }
+        let Some(doc) = &mut self.doc else { return Task::none() };
+        if cmd.counts_as_change() {
+            self.changed_since_update = true;
+        }
+        let focus = doc.focus;
+        match cmd {
+            Command::New | Command::Open | Command::Exit => Task::none(),
+            Command::Save => self.save(false),
+            Command::SaveAs => self.choose_file(FileAction::SaveAs),
+            Command::Undo => {
+                doc.undo();
+                Task::none()
+            }
+            Command::Redo => {
+                doc.redo();
+                Task::none()
+            }
+            Command::NewChild => {
+                let (n, serial) = doc.new_child();
+                self.open_input(NEW_TEXT_PROMPT, String::new(), InputAction::NewNode(n, serial))
+            }
+            Command::NewSibling => {
+                let (n, serial) = doc.new_sibling();
+                self.open_input(NEW_TEXT_PROMPT, String::new(), InputAction::NewNode(n, serial))
+            }
+            Command::EditText => {
+                let text = doc.map.text(focus);
+                self.open_input(NEW_TEXT_PROMPT, text, InputAction::EditText(focus))
+            }
+            Command::DeleteNode => {
+                doc.delete_selected();
+                Task::none()
+            }
+            Command::Cut => self.cut_or_copy(true),
+            Command::Copy => self.cut_or_copy(false),
+            Command::Paste => iced::clipboard::read().map(Message::ClipboardRead),
+            Command::MoveUp | Command::MoveDown => {
+                doc.move_focus(cmd == Command::MoveUp);
+                Task::none()
+            }
+            Command::ToggleFold => {
+                doc.toggle_fold_selected();
+                Task::none()
+            }
+            Command::SetLink => {
+                let link = doc.map.link(focus).unwrap_or("").to_string();
+                self.open_input(LINK_PROMPT, link, InputAction::SetLink(focus))
+            }
+            Command::CenterSelected => self.center_on_focus(),
+            // The relayout after the command keeps the focused node in place.
+            Command::ZoomIn | Command::ZoomOut | Command::ZoomReset => {
+                let zoom = match cmd {
+                    Command::ZoomIn => viewport::zoom_step(self.zoom, 1),
+                    Command::ZoomOut => viewport::zoom_step(self.zoom, -1),
+                    _ => 1.0,
+                };
+                self.set_zoom(zoom);
+                Task::none()
+            }
+
+            // --- PKM ---
+            Command::PkmOpen => {
+                let result = commands::open_targets(&doc.map, &doc.sorted_selection());
+                for file in self.report(result).unwrap_or_default() {
+                    self.open_in_desktop(&file);
+                }
+                Task::none()
+            }
+            Command::PkmEdit => self.pkm_edit(),
+            Command::FoldOneLevel | Command::UnfoldOneLevel => {
+                doc.fold_one_level(cmd == Command::FoldOneLevel);
+                Task::none()
+            }
+            Command::Filter => self.open_input(FILTER_HELP_MESSAGE, String::new(), InputAction::Filter),
+            Command::Search => self.open_search(),
+            Command::ToggleCheckmark => {
+                let selection = doc.sorted_selection();
+                doc.checkpoint();
+                commands::toggle_checkmark(&mut doc.map, &selection);
+                Task::none()
+            }
+            Command::AddToToDo => {
+                // In the order the nodes were selected.
+                let selection = doc.selection.clone();
+                match doc.try_change(|map| commands::add_to_todo(map, &selection)) {
+                    Ok(created) => doc.select(created),
+                    Err(e) => self.message(e),
+                }
+                Task::none()
+            }
+            Command::NewPage => self.create_documents(true),
+            Command::NewDirectory => self.create_documents(false),
+            Command::PkmDelete => {
+                match commands::delete_targets(&doc.map, &doc.sorted_selection()) {
+                    Ok(targets) => {
+                        let text = commands::delete_question(&doc.map, &targets);
+                        self.ask(text, ConfirmAction::DeleteDocs(targets));
+                    }
+                    Err(e) => self.message(e),
+                }
+                Task::none()
+            }
+            Command::Update => self.start_update(true),
+            Command::AddAssets => {
+                let result = commands::add_assets(&doc.map, &doc.sorted_selection(), focus);
+                self.report(result);
+                Task::none()
+            }
+            Command::FindUnlinked => {
+                match doc.try_change(commands::find_unlinked) {
+                    Ok(n) => {
+                        doc.map.set_folded(n, false);
+                        doc.select(vec![n]);
+                    }
+                    Err(e) => self.message(e),
+                }
+                Task::none()
+            }
+        }
+    }
+
+    /// Puts the selected subtrees (but the root, for Cut) on the clipboard,
+    /// and as indented text on the system clipboard.
+    fn cut_or_copy(&mut self, cut: bool) -> Task<Message> {
+        let Some(doc) = &mut self.doc else { return Task::none() };
+        let root = doc.map.root();
+        let nodes: Vec<NodeId> = doc.sorted_selection().into_iter().filter(|&n| !cut || n != root).collect();
+        if nodes.is_empty() {
+            return Task::none();
+        }
+        let subtrees = nodes.iter().map(|&n| doc.map.extract_subtree(n)).collect();
+        let text = plain_text_outline(&doc.map, &nodes);
+        if cut {
+            let parent = doc.map.parent(nodes[0]);
+            doc.checkpoint();
+            for &n in &nodes {
+                doc.map.delete(n);
+            }
+            if let Some(p) = parent {
+                doc.select(vec![p]);
+            }
+        }
+        self.clipboard = Some(Clipboard { text: text.clone(), subtrees });
+        iced::clipboard::write(text)
+    }
+
+    /// Pastes the subtrees last cut/copied here, or else the clipboard text,
+    /// one node per line (indentation nests them), under the focused node.
+    pub(super) fn paste(&mut self, text: Option<String>) -> Task<Message> {
+        let subtrees = self.clipboard.as_ref().and_then(|c| c.subtrees_for(text.as_deref())).map(<[Subtree]>::to_vec);
+        let text = text.filter(|t| t.lines().any(|l| !l.trim().is_empty()));
+        let Some(doc) = &mut self.doc else { return Task::none() };
+        if subtrees.is_none() && text.is_none() {
+            return Task::none();
+        }
+        let focus = doc.focus;
+        doc.checkpoint();
+        doc.map.set_folded(focus, false);
+        let pasted = match subtrees {
+            Some(subtrees) => subtrees.iter().map(|s| doc.map.insert_subtree(focus, None, s)).collect(),
+            None => insert_outline(&mut doc.map, focus, text.as_deref().unwrap_or_default()),
+        };
+        doc.select(pasted);
+        self.changed_since_update = true;
+        Task::none()
+    }
+
+    /// Edit (F2): renames a page or directory node with its file, else edits the text.
+    fn pkm_edit(&mut self) -> Task<Message> {
+        let Some(doc) = &self.doc else { return Task::none() };
+        let focus = doc.focus;
+        let text = doc.map.text(focus);
+        match commands::edit_kind(&doc.map, &doc.selection, focus) {
+            Ok(EditKind::Text) => self.open_input(NEW_TEXT_PROMPT, text, InputAction::EditText(focus)),
+            Ok(EditKind::Rename(kind)) => self.open_input(NEW_NAME_PROMPT, text, InputAction::Rename(focus, kind)),
+            Err(e) => {
+                self.message(e);
+                Task::none()
+            }
+        }
+    }
+
+    /// New Page (F9) / New Directory (F10) for every selected node; opens what
+    /// was created.
+    fn create_documents(&mut self, pages: bool) -> Task<Message> {
+        let Some(doc) = &mut self.doc else { return Task::none() };
+        let template = settings::page_template();
+        let today = Local::now().date_naive();
+        let selection = doc.sorted_selection();
+        doc.checkpoint();
+        let results: Vec<Result<PathBuf, String>> = selection
+            .into_iter()
+            .map(|n| {
+                if pages {
+                    commands::new_page(&mut doc.map, n, &template, today)
+                } else {
+                    commands::new_directory(&mut doc.map, n)
+                }
+            })
+            .collect();
+        for result in results {
+            if let Some(path) = self.report(result) {
+                self.open_in_desktop(&path);
+            }
+        }
+        Task::none()
+    }
+
+    pub(super) fn open_in_desktop(&mut self, path: &Path) {
+        if let Err(e) = opener::open(path) {
+            self.message(format!("failed to open {}: {e}", path.display()));
+        }
+    }
+
+    /// Opens what the node links: a file or directory, a URL, or another node.
+    pub(super) fn follow_link(&mut self, id: NodeId) -> Task<Message> {
+        let Some(doc) = &mut self.doc else { return Task::none() };
+        if let Some(target) = doc.map.link_node(id) {
+            doc.reveal(target);
+            self.relayout();
+            return self.center_on_focus();
+        }
+        if let Some(file) = doc.map.link_file(id) {
+            self.open_in_desktop(&file);
+        } else if let Some(link) = doc.map.link(id).map(str::to_string)
+            && let Err(e) = opener::open(&link)
+        {
+            self.message(format!("failed to open {link}: {e}"));
+        }
+        Task::none()
+    }
+
+    /// The document directory of the open map. When it can't be had, the
+    /// reason is shown if `report`.
+    pub(super) fn doc_dir(&mut self, report: bool) -> Option<PathBuf> {
+        let result = pkm::load_doc_dir(&self.doc.as_ref()?.map);
+        if report { self.report(result) } else { result.ok() }
+    }
+
+    /// Refreshes the Next Steps children and the search index in the background.
+    pub(super) fn start_update(&mut self, show_errors: bool) -> Task<Message> {
+        if self.doc.is_none() {
+            return Task::none();
+        }
+        self.last_update = Instant::now();
+        self.changed_since_update = false;
+        let Some(doc_dir) = self.doc_dir(show_errors) else { return Task::none() };
+        let Some(doc) = &self.doc else { return Task::none() };
+        let snapshot = next_steps::snapshot(&doc.map, &doc_dir);
+        let generation = doc.generation;
+        let today = Local::now().date_naive();
+        let dir = doc_dir.clone();
+        self.search.updating = true;
+        Task::batch([
+            Task::perform(blocking(move || next_steps::compute(&snapshot, today)), move |u| {
+                Message::NextStepsComputed(generation, dir.clone(), Box::new(u))
+            }),
+            Task::perform(blocking(move || crate::search::update_index(&doc_dir)), Message::IndexUpdated),
+        ])
+    }
+
+    /// Applies a Next Steps refresh computed for the map, unless another map
+    /// has been opened meanwhile.
+    pub(super) fn next_steps_computed(&mut self, generation: u64, doc_dir: &Path, update: &next_steps::Update) {
+        let Some(doc) = &mut self.doc else { return };
+        if doc.generation != generation {
+            return;
+        }
+        let before = doc.map.clone();
+        if next_steps::apply(&mut doc.map, doc_dir, update) {
+            doc.record(before);
+        }
+    }
+}
+
+/// The subtrees as indented text, one node per line (the format `insert_outline` reads).
+fn plain_text_outline(map: &MindMap, nodes: &[NodeId]) -> String {
+    fn walk(map: &MindMap, n: NodeId, depth: usize, out: &mut String) {
+        out.push_str(&"\t".repeat(depth));
+        out.push_str(&map.text(n).replace('\n', " "));
+        out.push('\n');
+        for c in map.children(n) {
+            walk(map, c, depth + 1, out);
+        }
+    }
+    let mut out = String::new();
+    for &n in nodes {
+        walk(map, n, 0, &mut out);
+    }
+    out
+}
+
+/// Creates a node under `parent` for every non-blank line of `text`, a line
+/// indented deeper than the one before it becoming its child. Returns the new
+/// direct children of `parent`.
+fn insert_outline(map: &mut MindMap, parent: NodeId, text: &str) -> Vec<NodeId> {
+    let mut top = Vec::new();
+    // The nodes the next line may go under, with their indentation.
+    let mut stack: Vec<(usize, NodeId)> = Vec::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let indent = line.chars().take_while(|c| c.is_whitespace()).count();
+        while stack.last().is_some_and(|&(i, _)| i >= indent) {
+            stack.pop();
+        }
+        let under = stack.last().map(|&(_, n)| n).unwrap_or(parent);
+        let n = map.add_child(under, line.trim());
+        if under == parent {
+            top.push(n);
+        }
+        stack.push((indent, n));
+    }
+    top
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outline_text_round_trips() {
+        let mut map = MindMap::new("root");
+        let root = map.root();
+        let a = map.add_child(root, "a");
+        let a1 = map.add_child(a, "a1");
+        map.add_child(a1, "a11");
+        let b = map.add_child(root, "b");
+        let text = plain_text_outline(&map, &[a, b]);
+        assert_eq!(text, "a\n\ta1\n\t\ta11\nb\n");
+
+        let target = map.add_child(root, "target");
+        let pasted = insert_outline(&mut map, target, &format!("{text}\n  \n"));
+        assert_eq!(map.child_texts(target), vec!["a", "b"]);
+        assert_eq!(plain_text_outline(&map, &pasted), text);
+    }
+}
