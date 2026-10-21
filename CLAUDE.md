@@ -42,6 +42,7 @@ The Rust toolchain is pinned in `rust-toolchain.toml` (CI reads it too); bump it
 - The map is laid out to the right only (`layout.rs` ignores `POSITION`); children added, pasted or moved under the root get `MindMap::set_right`. An existing node's `POSITION` is never rewritten unless it is moved.
 - Every map mutation goes through `Doc::checkpoint()` first (undo), or through `Doc::try_change` when the change may fail (recorded only if it succeeds). Undo entries carry a serial number (`checkpoint` returns it); take back a specific change by its serial (`Doc::cancel_new_node`), never by popping the latest entry - a background refresh may have been recorded since.
 - File I/O and indexing run via `blocking(...)` (tokio blocking pool), never in `update`/`view` - except the small, synchronous file operations of the PKM commands.
+- Pull requests (title and description) are written in English.
 - F1-F12 must keep the add-on's assignments (README table). Adding a command means: `Command` variant, `MENUS` entry, `command_for_key` if it has a shortcut, and the README; tests in `keys.rs` check that the menu shortcuts, the key bindings and the README's PKM table agree.
 
 ## Guardrails (never)
