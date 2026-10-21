@@ -25,7 +25,7 @@ impl SortOption {
 impl fmt::Display for SortOption {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(match self.0 {
-            SearchSort::Modified => "Last modified (newest first)",
+            SearchSort::Modified => "Last modified",
             SearchSort::Relevance => "Relevance",
         })
     }
@@ -44,7 +44,7 @@ impl fmt::Display for ScopeOption {
         f.write_str(match self.0 {
             SearchScope::Pages => "Pages",
             SearchScope::Assets => "Attachments",
-            SearchScope::All => "Pages and attachments",
+            SearchScope::All => "Both",
         })
     }
 }

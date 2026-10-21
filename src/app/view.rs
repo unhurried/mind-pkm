@@ -15,7 +15,7 @@ use iced::widget::canvas::{self, Cache, Path, Stroke};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::{
     Column, Stack, button, canvas as canvas_widget, center, column, container, mouse_area, opaque, pick_list, pin,
-    rich_text, row, scrollable, space, stack, text, text_input,
+    rich_text, row, scrollable, space, stack, text, text_input, tooltip,
 };
 use iced::{
     Alignment, Background, Border, Color, Element, Fill, Font, Length, Point, Rectangle, Renderer, Size, Theme, mouse,
@@ -429,20 +429,22 @@ impl App {
         let s = &self.search;
         let search = |m: SearchMsg| Message::Search(m);
         let controls = row![
-            text("Keyword:").size(12),
-            text_input("", &s.query)
+            text_input("Keyword", &s.query)
                 .id(SEARCH_INPUT_ID)
                 .on_input(|q| Message::Search(SearchMsg::QueryChanged(q)))
                 .on_submit(search(SearchMsg::Submit))
                 .size(12)
                 .padding(4)
                 .width(Fill),
-            text("Show:").size(12),
             pick_list(ScopeOption::ALL, Some(s.scope), |v| Message::Search(SearchMsg::Scope(v))).text_size(12),
-            text("Sort:").size(12),
             pick_list(SortOption::ALL, Some(s.sort), |v| Message::Search(SearchMsg::Sort(v))).text_size(12),
-            button(text("Search").size(12)).on_press_maybe((!s.searching).then(|| search(SearchMsg::Submit))),
-            button(text("Close").size(12)).style(button::secondary).on_press(search(SearchMsg::Close)),
+            icon_button(
+                PanelIcon::Search,
+                "Search",
+                button::primary,
+                (!s.searching).then(|| search(SearchMsg::Submit))
+            ),
+            icon_button(PanelIcon::Close, "Close", button::secondary, Some(search(SearchMsg::Close))),
         ]
         .spacing(6)
         .align_y(Alignment::Center);
@@ -746,6 +748,67 @@ fn edges(builder: &mut canvas::path::Builder, start: Point, ends: &[Point], zoom
             builder.bezier_curve_to(Point::new(x, start.y), Point::new(x, e.y), Point::new(x + r_up.max(r_down), e.y));
         }
         builder.line_to(*e);
+    }
+}
+
+/// A search panel button showing a drawn icon (no font has to carry the
+/// glyph), with its name as a tooltip.
+fn icon_button<'a>(
+    icon: PanelIcon,
+    name: &'a str,
+    style: fn(&Theme, button::Status) -> button::Style,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
+    let button = button(canvas_widget(icon).width(ICON_SIZE).height(ICON_SIZE))
+        .padding([5, 10])
+        .style(style)
+        .on_press_maybe(on_press);
+    tooltip(
+        button,
+        container(text(name).size(12)).padding([2, 6]).style(container::bordered_box),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
+const ICON_SIZE: f32 = 14.0;
+
+#[derive(Debug, Clone, Copy)]
+enum PanelIcon {
+    /// A magnifying glass.
+    Search,
+    /// A cross.
+    Close,
+}
+
+impl canvas::Program<Message> for PanelIcon {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        let s = bounds.width.min(bounds.height);
+        let path = match self {
+            PanelIcon::Search => Path::new(|b| {
+                b.circle(Point::new(s * 0.42, s * 0.42), s * 0.3);
+                b.move_to(Point::new(s * 0.64, s * 0.64));
+                b.line_to(Point::new(s * 0.92, s * 0.92));
+            }),
+            PanelIcon::Close => Path::new(|b| {
+                b.move_to(Point::new(s * 0.18, s * 0.18));
+                b.line_to(Point::new(s * 0.82, s * 0.82));
+                b.move_to(Point::new(s * 0.82, s * 0.18));
+                b.line_to(Point::new(s * 0.18, s * 0.82));
+            }),
+        };
+        frame.stroke(&path, Stroke::default().with_width(1.8).with_color(Color::WHITE));
+        vec![frame.into_geometry()]
     }
 }
 

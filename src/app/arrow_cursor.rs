@@ -169,13 +169,14 @@ where
         self.content.as_overlay_mut().update(event, layout, cursor, renderer, clipboard, shell)
     }
 
-    fn mouse_interaction(
-        &self,
-        _layout: Layout<'_>,
-        _cursor: mouse::Cursor,
-        _renderer: &Renderer,
-    ) -> mouse::Interaction {
-        mouse::Interaction::Idle
+    fn mouse_interaction(&self, layout: Layout<'_>, cursor: mouse::Cursor, renderer: &Renderer) -> mouse::Interaction {
+        // Only where the pop-up itself takes the pointer: anything but None
+        // makes the shell take the pointer away from the window underneath,
+        // which would close a tooltip as soon as it opens.
+        match self.content.as_overlay().mouse_interaction(layout, cursor, renderer) {
+            mouse::Interaction::None => mouse::Interaction::None,
+            _ => mouse::Interaction::Idle,
+        }
     }
 
     fn overlay<'b>(
