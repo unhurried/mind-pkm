@@ -115,19 +115,10 @@ jobs:
           if (-not $sig.SignerCertificate) { throw 'the exe has no signature' }
           Write-Output "Signed by $($sig.SignerCertificate.Subject) ($($sig.SignerCertificate.Thumbprint))"
 
-      - name: Package
-        shell: pwsh
-        env:
-          RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          $version = if ($env:RELEASE_TAG) { $env:RELEASE_TAG } else { "dev-$($env:GITHUB_SHA.Substring(0, 7))" }
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path target/release/mind-pkm.exe, assets/codesign.cer, README.md, LICENSE -DestinationPath "dist/mind-pkm-$version-windows-x64.zip"
-
       - uses: actions/upload-artifact@v4
         with:
           name: mind-pkm-windows-x64
-          path: dist/*.zip
+          path: target/release/mind-pkm.exe
           retention-days: 3
 
       - name: Release
@@ -138,5 +129,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
           files: |
-            dist/*.zip
+            target/release/mind-pkm.exe
             assets/codesign.cer
