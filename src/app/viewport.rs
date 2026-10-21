@@ -4,7 +4,7 @@ use super::{App, MAP_SCROLL_ID, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
 use iced::widget::{operation, scrollable};
-use iced::{Point, Size, Task, Vector};
+use iced::{Point, Size, Task, Vector, window};
 
 /// Room kept around the focused node when it is scrolled into view.
 const REVEAL_PADDING: f32 = 24.0;
@@ -153,9 +153,28 @@ impl App {
         }
     }
 
-    pub(super) fn window_resized(&mut self, size: Size) {
+    pub(super) fn window_resized(&mut self, size: Size) -> Task<Message> {
         self.window_size = size;
         self.viewport_size = None;
+        ask_window_state()
+    }
+
+    pub(super) fn window_moved(&mut self, position: Point) -> Task<Message> {
+        self.window_position = Some(position);
+        ask_window_state()
+    }
+
+    /// Takes the window's size and position as the ones to restore, unless it
+    /// is maximized (then only that is noted) or minimized.
+    pub(super) fn window_state(&mut self, maximized: bool, minimized: bool) {
+        if minimized || self.window_size.width < 1.0 || self.window_size.height < 1.0 {
+            return;
+        }
+        self.window.maximized = maximized;
+        if !maximized {
+            self.window.size = self.window_size;
+            self.window.position = self.window_position.or(self.window.position);
+        }
     }
 
     pub(super) fn pan_start(&mut self) {
@@ -181,6 +200,16 @@ impl App {
     pub(super) fn pan_end(&mut self) {
         self.pan = None;
     }
+}
+
+/// Asks whether the window is maximized or minimized now.
+fn ask_window_state() -> Task<Message> {
+    window::latest().and_then(|id| {
+        window::is_maximized(id).then(move |maximized| {
+            window::is_minimized(id)
+                .map(move |minimized| Message::WindowState { maximized, minimized: minimized.unwrap_or(false) })
+        })
+    })
 }
 
 #[cfg(test)]

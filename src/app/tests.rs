@@ -4,7 +4,7 @@
 use super::command::Command;
 use super::dialog::Dialog;
 use super::file::AfterUnsaved;
-use super::{App, Message};
+use super::{App, Message, settings};
 use crate::mindmap::MindMap;
 use crate::pkm::filter::Filter;
 use crate::pkm::next_steps;
@@ -240,4 +240,30 @@ fn a_map_opens_as_it_was_last_shown() {
 fn an_untitled_map_has_no_view_to_remember() {
     let app = app_with(MindMap::new("root"));
     assert!(app.current_view().is_none());
+}
+
+#[test]
+fn the_window_is_restored_as_it_was_before_maximizing_or_minimizing() {
+    use iced::{Point, Size};
+    let mut app = app_with(MindMap::new("root"));
+    send(&mut app, Message::WindowResized(Size::new(900.0, 600.0)));
+    send(&mut app, Message::WindowMoved(Point::new(50.0, 60.0)));
+    send(&mut app, Message::WindowState { maximized: false, minimized: false });
+    let normal = app.window;
+    assert_eq!(
+        (normal.size, normal.position, normal.maximized),
+        (Size::new(900.0, 600.0), Some(Point::new(50.0, 60.0)), false)
+    );
+
+    // Maximized: only that is noted.
+    send(&mut app, Message::WindowResized(Size::new(1920.0, 1040.0)));
+    send(&mut app, Message::WindowMoved(Point::new(-8.0, -8.0)));
+    send(&mut app, Message::WindowState { maximized: true, minimized: false });
+    assert_eq!(app.window, settings::WindowGeometry { maximized: true, ..normal });
+
+    // Minimized: nothing changes.
+    send(&mut app, Message::WindowResized(Size::new(0.0, 0.0)));
+    send(&mut app, Message::WindowMoved(Point::new(-32000.0, -32000.0)));
+    send(&mut app, Message::WindowState { maximized: false, minimized: true });
+    assert_eq!(app.window, settings::WindowGeometry { maximized: true, ..normal });
 }

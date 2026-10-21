@@ -1,12 +1,13 @@
 //! Per-user settings, kept in `<config dir>/mind-pkm/` (on Windows
-//! `%APPDATA%\mind-pkm\`): `settings.txt` remembers the last opened map,
-//! `views.txt` how each map was last shown (zoom, scroll position,
+//! `%APPDATA%\mind-pkm\`): `settings.txt` remembers the last opened map
+//! and the window's size and position (`key=value` lines), `views.txt` how each map was last shown (zoom, scroll position,
 //! selection), and an optional `template.md` replaces the built-in New Page
 //! template. A file missing there is read from the directory used under the
 //! application's former name, `freeplane-pkm`. Tests never touch these files.
 
 use crate::paths;
 use crate::pkm::commands::DEFAULT_TEMPLATE;
+use iced::{Point, Size};
 use std::path::{Path, PathBuf};
 
 const APP_DIR_NAME: &str = "mind-pkm";
@@ -15,6 +16,9 @@ const SETTINGS_FILE_NAME: &str = "settings.txt";
 const TEMPLATE_FILE_NAME: &str = "template.md";
 const VIEWS_FILE_NAME: &str = "views.txt";
 const LAST_FILE_KEY: &str = "last_file=";
+const WINDOW_KEY: &str = "window=";
+/// A remembered window smaller than this is not restored.
+const MIN_WINDOW_SIDE: f32 = 200.0;
 /// How many maps `views.txt` remembers, the most recently shown first.
 const MAX_VIEWS: usize = 50;
 
@@ -34,13 +38,69 @@ fn read(file_name: &str) -> Option<Vec<u8>> {
     [APP_DIR_NAME, LEGACY_APP_DIR_NAME].iter().find_map(|dir| std::fs::read(base.join(dir).join(file_name)).ok())
 }
 
-pub fn last_file() -> Option<PathBuf> {
+/// The value of `key` (`name=`) in `settings.txt`.
+fn value(key: &str) -> Option<String> {
     let text = String::from_utf8(read(SETTINGS_FILE_NAME)?).ok()?;
-    text.lines().find_map(|l| l.strip_prefix(LAST_FILE_KEY)).filter(|p| !p.is_empty()).map(PathBuf::from)
+    text.lines().find_map(|l| l.strip_prefix(key)).filter(|v| !v.is_empty()).map(str::to_string)
+}
+
+/// Sets `key` (`name=`) in `settings.txt`, keeping the other lines.
+fn set_value(key: &str, value: &str) {
+    let text = read(SETTINGS_FILE_NAME).and_then(|b| String::from_utf8(b).ok()).unwrap_or_default();
+    write(SETTINGS_FILE_NAME, with_value(&text, key, value));
+}
+
+/// `text` with the line of `key` replaced by `value` (or added).
+fn with_value(text: &str, key: &str, value: &str) -> String {
+    let others = text.lines().filter(|l| !l.is_empty() && !l.starts_with(key)).map(str::to_string);
+    others.chain([format!("{key}{value}")]).map(|l| l + "\n").collect()
+}
+
+pub fn last_file() -> Option<PathBuf> {
+    value(LAST_FILE_KEY).map(PathBuf::from)
 }
 
 pub fn set_last_file(path: &Path) {
-    write(SETTINGS_FILE_NAME, format!("{LAST_FILE_KEY}{}\n", path.display()));
+    set_value(LAST_FILE_KEY, &path.display().to_string());
+}
+
+/// The window's size and position when it is not maximized (in logical
+/// pixels), and whether it is maximized.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowGeometry {
+    pub size: Size,
+    pub position: Option<Point>,
+    pub maximized: bool,
+}
+
+/// The window as it was when the application last exited.
+pub fn window() -> Option<WindowGeometry> {
+    parse_window(&value(WINDOW_KEY)?)
+}
+
+pub fn set_window(window: &WindowGeometry) {
+    set_value(WINDOW_KEY, &format_window(window));
+}
+
+/// `width,height,x,y,maximized`; x and y are empty when the position is unknown.
+fn parse_window(text: &str) -> Option<WindowGeometry> {
+    let fields: Vec<&str> = text.split(',').collect();
+    let [w, h, x, y, maximized] = fields[..] else { return None };
+    let number = |s: &str| s.parse::<f32>().ok().filter(|n| n.is_finite());
+    let size = Size::new(number(w)?, number(h)?);
+    if size.width < MIN_WINDOW_SIDE || size.height < MIN_WINDOW_SIDE {
+        return None;
+    }
+    let position = match (x, y) {
+        ("", "") => None,
+        _ => Some(Point::new(number(x)?, number(y)?)),
+    };
+    Some(WindowGeometry { size, position, maximized: maximized == "1" })
+}
+
+fn format_window(w: &WindowGeometry) -> String {
+    let (x, y) = w.position.map_or((String::new(), String::new()), |p| (p.x.to_string(), p.y.to_string()));
+    format!("{},{},{x},{y},{}", w.size.width, w.size.height, u8::from(w.maximized))
 }
 
 /// Writes a settings file; a failure only means the setting is not kept.
@@ -117,6 +177,29 @@ mod tests {
 
     fn view(zoom: f32, ids: &[&str]) -> MapView {
         MapView { zoom, scroll: (12.5, 300.0), selection: ids.iter().map(|s| s.to_string()).collect() }
+    }
+
+    #[test]
+    fn a_value_replaces_its_line_and_keeps_the_others() {
+        let text = with_value("last_file=/a.mm\n", WINDOW_KEY, "1,2,3,4,0");
+        assert_eq!(text, "last_file=/a.mm\nwindow=1,2,3,4,0\n");
+        assert_eq!(with_value(&text, LAST_FILE_KEY, "/b.mm"), "window=1,2,3,4,0\nlast_file=/b.mm\n");
+    }
+
+    #[test]
+    fn the_window_reads_back_as_written() {
+        let placed = WindowGeometry {
+            size: Size::new(1000.0, 700.5),
+            position: Some(Point::new(-1200.0, 30.0)),
+            maximized: true,
+        };
+        let unplaced = WindowGeometry { position: None, maximized: false, ..placed };
+        for w in [placed, unplaced] {
+            assert_eq!(parse_window(&format_window(&w)), Some(w));
+        }
+        for bad in ["", "1000,700", "x,700,0,0,0", "100,700,0,0,0", "1000,700,5,,0", "1000,700,0,0,0,0"] {
+            assert_eq!(parse_window(bad), None, "{bad}");
+        }
     }
 
     #[test]
