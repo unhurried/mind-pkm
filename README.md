@@ -14,7 +14,7 @@ It reads and writes the same files as the add-on: your Freeplane `.mm` map and t
 
 ## Installation
 
-1. Download `mind-pkm-<version>-windows-x64.zip` from the [releases page](../../releases) and extract `mind-pkm.exe` anywhere.
+1. Download `mind-pkm.exe` from the [releases page](../../releases) and put it anywhere.
 2. Run it, and open your map with File → Open (`Ctrl+O`). The last opened map is reopened on the next start, with the zoom level, scroll position and selected nodes it was last shown with (remembered per map in `%APPDATA%\mind-pkm\views.txt`); a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence.
 
 The UI uses the Meiryo UI font; where it is missing, the system's fallback fonts are used.
@@ -23,7 +23,7 @@ There is nothing to install and no runtime to set up: the exe embeds everything,
 
 ### Code Signing Certificate
 
-`mind-pkm.exe` is signed with a self-signed certificate, `Mind PKM Code Signing` (SHA-1 thumbprint `8A2D49B3A38A3F6933F3367FA23663A694A5C597`, valid until 2036-10-11). Windows doesn't know that certificate, so until you install it the signature shows as untrusted. The certificate, `codesign.cer`, is included in the zip and attached to each release (it is also [`assets/codesign.cer`](assets/codesign.cer) in this repository).
+`mind-pkm.exe` is signed with a self-signed certificate, `Mind PKM Code Signing` (SHA-1 thumbprint `8A2D49B3A38A3F6933F3367FA23663A694A5C597`, valid until 2036-10-11). Windows doesn't know that certificate, so until you install it the signature shows as untrusted. The certificate, `codesign.cer`, is attached to each release (it is also [`assets/codesign.cer`](assets/codesign.cer) in this repository).
 
 To trust it for the current user only (no administrator rights needed), install it into the current user's **Trusted Root Certification Authorities** and **Trusted Publishers** stores. In PowerShell, in the folder holding `codesign.cer`:
 
@@ -170,7 +170,7 @@ openspec validate --all --strict      # also run by CI
 
 ### Release via GitHub Actions
 
-The `Build` workflow (`.github/workflows/build.yml`) runs the checks and tests on Windows on every push/PR and uploads the exe as a build artifact. A push to `main` (e.g. merging a pull request) additionally creates a GitHub release with the zipped exe attached: it tags the commit `v<version>`, with the version from `Cargo.toml`, and generates the release notes from the merged pull requests. If that tag already exists, no release is made, so to release, bump `version` in `Cargo.toml` (and `Cargo.lock`, e.g. with `cargo check`) in the pull request.
+The `Build` workflow (`.github/workflows/build.yml`) runs the checks and tests on Windows on every push/PR and uploads the exe as a build artifact. A push to `main` (e.g. merging a pull request) additionally creates a GitHub release with the exe and `codesign.cer` attached: it tags the commit `v<version>`, with the version from `Cargo.toml`, and generates the release notes from the merged pull requests. If that tag already exists, no release is made, so to release, bump `version` in `Cargo.toml` (and `Cargo.lock`, e.g. with `cargo check`) in the pull request.
 
 The workflow signs the exe (with `signtool`, SHA-256, timestamped) using two repository secrets: `CODESIGN_PFX`, the base64-encoded PKCS#12 file with the certificate and its private key, and `CODESIGN_PASSWORD`, its password. Without them the exe is left unsigned (a warning), except for a release, which then fails. `tools/make_codesign_cert.sh <out-dir>` creates a new certificate: it writes the PFX, its base64 form and the password to `<out-dir>` (keep these out of the repository) and the public certificate to `assets/codesign.cer`; update the thumbprint and expiry date above when you replace it.
 
