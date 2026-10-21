@@ -125,8 +125,8 @@ Press `F6` to open the search panel under the map: type keywords and press Enter
 
 - **Formats**: Markdown/plain text, PDF, and current-format Office documents (`.docx`, `.xlsx`, `.pptx`). Any other file type is still searchable by file name.
 - **Matching**: multiple space-separated keywords (a full-width space works too) are combined with AND, matched case-insensitively against both file content and file name. Japanese is analyzed morphologically (with the IPADIC dictionary), so `京都` doesn't match `東京都` and `読む` matches `読んだ`.
-- **Sorting**: the `Sort` box orders results by last-modified time, newest first (the default), or by relevance (file-name matches rank above content-only matches).
-- **Filtering**: the `Show` box limits results to pages (the default), attachments, or both. A page is a `.md` file outside any `<page>.assets/` directory; every other file counts as an attachment.
+- **Sorting**: the order box (`Last modified` / `Relevance`) orders results by last-modified time, newest first (the default), or by relevance (file-name matches rank above content-only matches).
+- **Filtering**: the scope box (`Pages` / `Attachments` / `Both`) limits results to pages (the default), attachments, or both. A page is a `.md` file outside any `<page>.assets/` directory; every other file counts as an attachment.
 - **Jumping to the map node**: a result's node is the node that links its file, its containing directory, or - for a file under a page's `.assets/` directory - its page. Select the result and press `Ctrl+Enter` or use `Select Node` to select and center that node in the map.
 - **Index**: kept at `<docDir>/.search-index/tantivy/` (with `tantivy.meta` recording each indexed file's last-modified time, to skip unchanged files on the next update). It is refreshed whenever the search panel opens, every few minutes while the map is being changed, and on F12. The Lucene index the Freeplane add-on kept in the same directory is left alone, so both can be used side by side.
 
