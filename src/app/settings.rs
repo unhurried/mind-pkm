@@ -1,25 +1,36 @@
 //! Per-user settings, kept in `<config dir>/mind-pkm/` (on Windows
 //! `%APPDATA%\mind-pkm\`): `settings.txt` remembers the last opened map,
-//! and an optional `template.md` replaces the built-in New Page template.
-//! A file missing there is read from the directory used under the
-//! application's former name, `freeplane-pkm`.
+//! `views.txt` how each map was last shown (zoom, scroll position,
+//! selection), and an optional `template.md` replaces the built-in New Page
+//! template. A file missing there is read from the directory used under the
+//! application's former name, `freeplane-pkm`. Tests never touch these files.
 
+use crate::paths;
 use crate::pkm::commands::DEFAULT_TEMPLATE;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const APP_DIR_NAME: &str = "mind-pkm";
 const LEGACY_APP_DIR_NAME: &str = "freeplane-pkm";
 const SETTINGS_FILE_NAME: &str = "settings.txt";
 const TEMPLATE_FILE_NAME: &str = "template.md";
+const VIEWS_FILE_NAME: &str = "views.txt";
 const LAST_FILE_KEY: &str = "last_file=";
+/// How many maps `views.txt` remembers, the most recently shown first.
+const MAX_VIEWS: usize = 50;
+
+/// The user's configuration directory; none in tests, so that they never
+/// read or write the real settings.
+fn base_dir() -> Option<PathBuf> {
+    if cfg!(test) { None } else { dirs::config_dir() }
+}
 
 pub fn config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join(APP_DIR_NAME))
+    base_dir().map(|d| d.join(APP_DIR_NAME))
 }
 
 /// Reads a settings file, falling back to the former name's directory.
 fn read(file_name: &str) -> Option<Vec<u8>> {
-    let base = dirs::config_dir()?;
+    let base = base_dir()?;
     [APP_DIR_NAME, LEGACY_APP_DIR_NAME].iter().find_map(|dir| std::fs::read(base.join(dir).join(file_name)).ok())
 }
 
@@ -28,10 +39,69 @@ pub fn last_file() -> Option<PathBuf> {
     text.lines().find_map(|l| l.strip_prefix(LAST_FILE_KEY)).filter(|p| !p.is_empty()).map(PathBuf::from)
 }
 
-pub fn set_last_file(path: &std::path::Path) {
+pub fn set_last_file(path: &Path) {
+    write(SETTINGS_FILE_NAME, format!("{LAST_FILE_KEY}{}\n", path.display()));
+}
+
+/// Writes a settings file; a failure only means the setting is not kept.
+fn write(file_name: &str, text: String) {
     let Some(dir) = config_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(dir.join(SETTINGS_FILE_NAME), format!("{LAST_FILE_KEY}{}\n", path.display()));
+    let _ = std::fs::write(dir.join(file_name), text);
+}
+
+/// How a map was last shown.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MapView {
+    pub zoom: f32,
+    /// The scroll position of the map, in screen pixels at `zoom`.
+    pub scroll: (f32, f32),
+    /// The Freeplane IDs of the selected nodes, in the order they were
+    /// selected (the focused one last).
+    pub selection: Vec<String>,
+}
+
+/// The remembered view of the map at `path`.
+pub fn map_view(path: &Path) -> Option<MapView> {
+    let text = String::from_utf8(read(VIEWS_FILE_NAME)?).ok()?;
+    let key = paths::key(path);
+    parse_views(&text).into_iter().find(|(p, _)| paths::key(p) == key).map(|(_, view)| view)
+}
+
+/// Remembers the view of the map at `path`, as the most recent one.
+pub fn set_map_view(path: &Path, view: MapView) {
+    let text = read(VIEWS_FILE_NAME).and_then(|b| String::from_utf8(b).ok()).unwrap_or_default();
+    write(VIEWS_FILE_NAME, format_views(&with_view(parse_views(&text), path, view)));
+}
+
+/// `views` with `view` for `path` first, replacing an older one, at most `MAX_VIEWS` long.
+fn with_view(views: Vec<(PathBuf, MapView)>, path: &Path, view: MapView) -> Vec<(PathBuf, MapView)> {
+    let key = paths::key(path);
+    let others = views.into_iter().filter(|(p, _)| paths::key(p) != key);
+    std::iter::once((path.to_path_buf(), view)).chain(others).take(MAX_VIEWS).collect()
+}
+
+/// One map per line: `zoom TAB x TAB y TAB id,id,... TAB path`; lines that
+/// don't read are skipped.
+fn parse_views(text: &str) -> Vec<(PathBuf, MapView)> {
+    let parse = |line: &str| {
+        let mut fields = line.splitn(5, '\t');
+        let mut number = || fields.next()?.parse::<f32>().ok().filter(|n| n.is_finite());
+        let (zoom, x, y) = (number()?, number()?, number()?);
+        let selection = fields.next()?.split(',').filter(|id| !id.is_empty()).map(str::to_string).collect();
+        let path = fields.next().filter(|p| !p.is_empty())?;
+        Some((PathBuf::from(path), MapView { zoom, scroll: (x, y), selection }))
+    };
+    text.lines().filter_map(parse).collect()
+}
+
+fn format_views(views: &[(PathBuf, MapView)]) -> String {
+    views
+        .iter()
+        .map(|(path, v)| {
+            format!("{}\t{}\t{}\t{}\t{}\n", v.zoom, v.scroll.0, v.scroll.1, v.selection.join(","), path.display())
+        })
+        .collect()
 }
 
 /// The New Page template: the user's `template.md` if there is one, else the built-in one.
@@ -39,4 +109,51 @@ pub fn page_template() -> String {
     read(TEMPLATE_FILE_NAME)
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .unwrap_or_else(|| DEFAULT_TEMPLATE.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(zoom: f32, ids: &[&str]) -> MapView {
+        MapView { zoom, scroll: (12.5, 300.0), selection: ids.iter().map(|s| s.to_string()).collect() }
+    }
+
+    #[test]
+    fn views_read_back_as_written() {
+        let views = vec![
+            (PathBuf::from("/maps/a map.mm"), view(1.5, &["ID_1", "ID_2"])),
+            (PathBuf::from("/maps/b.mm"), view(1.0, &[])),
+        ];
+        assert_eq!(parse_views(&format_views(&views)), views);
+    }
+
+    #[test]
+    fn lines_that_dont_read_are_skipped() {
+        let text = "x\t0\t0\tID_1\t/a.mm\n1\t0\t0\tID_1\n\n1.1\t5\t6\tID_9\t/b.mm\n1\tNaN\t0\t\t/c.mm\n";
+        assert_eq!(
+            parse_views(text),
+            vec![(PathBuf::from("/b.mm"), MapView { zoom: 1.1, scroll: (5.0, 6.0), selection: vec!["ID_9".into()] })]
+        );
+    }
+
+    #[test]
+    fn the_latest_view_comes_first_and_replaces_the_older_one() {
+        let views = vec![(PathBuf::from("/a.mm"), view(1.0, &[])), (PathBuf::from("/b.mm"), view(1.0, &[]))];
+        let views = with_view(views, Path::new("/b.mm"), view(2.0, &["ID_3"]));
+        assert_eq!(
+            views,
+            vec![(PathBuf::from("/b.mm"), view(2.0, &["ID_3"])), (PathBuf::from("/a.mm"), view(1.0, &[]))]
+        );
+    }
+
+    #[test]
+    fn at_most_max_views_are_kept() {
+        let mut views = Vec::new();
+        for i in 0..MAX_VIEWS + 5 {
+            views = with_view(views, &PathBuf::from(format!("/m{i}.mm")), view(1.0, &[]));
+        }
+        assert_eq!(views.len(), MAX_VIEWS);
+        assert_eq!(views[0].0, PathBuf::from(format!("/m{}.mm", MAX_VIEWS + 4)));
+    }
 }

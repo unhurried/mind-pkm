@@ -114,7 +114,7 @@ impl App {
         operation::scroll_by(MAP_SCROLL_ID, scrollable::AbsoluteOffset { x: delta.x, y: delta.y })
     }
 
-    fn scroll_to(&mut self, offset: Vector) -> Task<Message> {
+    pub(super) fn scroll_to(&mut self, offset: Vector) -> Task<Message> {
         self.scroll_offset = offset;
         operation::scroll_to(MAP_SCROLL_ID, scrollable::AbsoluteOffset { x: offset.x, y: offset.y })
     }

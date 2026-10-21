@@ -3,10 +3,11 @@
 use super::dialog::Dialog;
 use super::doc::Doc;
 use super::search_panel::SearchPanel;
-use super::{App, Message, settings};
+use super::settings::{self, MapView};
+use super::{App, Message};
 use crate::mindmap::MindMap;
 use crate::pkm;
-use iced::Task;
+use iced::{Task, Vector};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -35,7 +36,8 @@ impl App {
         match MindMap::load(&path) {
             Ok(map) => {
                 settings::set_last_file(&path);
-                self.set_doc(map)
+                let view = settings::map_view(&path);
+                self.set_doc(map, view)
             }
             Err(e) => {
                 self.message(format!("failed to open the map: {e}"));
@@ -44,14 +46,50 @@ impl App {
         }
     }
 
-    pub(super) fn set_doc(&mut self, map: MindMap) -> Task<Message> {
+    /// Shows `map` in place of the open one (whose view is remembered first):
+    /// as `view` says, else at the current zoom with the root centered.
+    pub(super) fn set_doc(&mut self, map: MindMap, view: Option<MapView>) -> Task<Message> {
+        self.remember_view();
         self.next_generation += 1;
-        self.doc = Some(Doc::new(map, self.next_generation));
+        let mut doc = Doc::new(map, self.next_generation);
+        if let Some(view) = &view {
+            self.set_zoom(super::viewport::zoom_step(view.zoom, 0));
+            // Nodes gone since are left out; hidden ones are handed to a shown ancestor by the relayout.
+            doc.select(view.selection.iter().filter_map(|id| doc.map.find_by_freeplane_id(id)).collect());
+        }
+        self.doc = Some(doc);
         self.search = SearchPanel::default();
         self.last_update = Instant::now();
         self.changed_since_update = false;
         self.relayout();
-        self.center_on_focus()
+        match view {
+            Some(view) => self.scroll_to(Vector::new(view.scroll.0.max(0.0), view.scroll.1.max(0.0))),
+            None => self.center_on_focus(),
+        }
+    }
+
+    /// How the open map is shown, if it has a file to be remembered by.
+    pub(super) fn current_view(&self) -> Option<(PathBuf, MapView)> {
+        let doc = self.doc.as_ref()?;
+        let path = doc.map.path()?.to_path_buf();
+        // The focused node last.
+        let nodes = doc.selection.iter().copied().filter(|&n| n != doc.focus).chain([doc.focus]);
+        let selection = nodes.map(|n| doc.map.freeplane_id(n).to_string()).collect();
+        let scroll = (self.scroll_offset.x, self.scroll_offset.y);
+        Some((path, MapView { zoom: self.zoom, scroll, selection }))
+    }
+
+    /// Remembers how the open map is shown, for when it is opened again.
+    fn remember_view(&self) {
+        if let Some((path, view)) = self.current_view() {
+            settings::set_map_view(&path, view);
+        }
+    }
+
+    /// Quits the application, remembering how the map is shown.
+    fn exit(&self) -> Task<Message> {
+        self.remember_view();
+        iced::exit()
     }
 
     /// Saves to the map's file (or asks for one first), then exits if `then_exit`.
@@ -60,7 +98,7 @@ impl App {
         let Some(path) = doc.map.path().map(Path::to_path_buf) else {
             return self.choose_file(if then_exit { FileAction::SaveAsThenExit } else { FileAction::SaveAs });
         };
-        if self.save_to(&path) && then_exit { iced::exit() } else { Task::none() }
+        if self.save_to(&path) && then_exit { self.exit() } else { Task::none() }
     }
 
     /// Saves the map to `path`; a failure is shown to the user.
@@ -70,6 +108,7 @@ impl App {
             Ok(()) => {
                 doc.dirty = false;
                 settings::set_last_file(path);
+                self.remember_view();
                 self.status = format!("saved {}", path.display());
                 true
             }
@@ -106,7 +145,7 @@ impl App {
             FileAction::SaveAs | FileAction::SaveAsThenExit => {
                 let path = if path.extension().is_none() { path.with_extension("mm") } else { path };
                 let exit = matches!(action, FileAction::SaveAsThenExit);
-                if self.save_to(&path) && exit { iced::exit() } else { Task::none() }
+                if self.save_to(&path) && exit { self.exit() } else { Task::none() }
             }
         }
     }
@@ -122,9 +161,9 @@ impl App {
 
     pub(super) fn after_unsaved(&mut self, after: AfterUnsaved) -> Task<Message> {
         match after {
-            AfterUnsaved::New => self.set_doc(pkm::new_map(NEW_MAP_ROOT_TEXT, NEW_MAP_DOC_DIR)),
+            AfterUnsaved::New => self.set_doc(pkm::new_map(NEW_MAP_ROOT_TEXT, NEW_MAP_DOC_DIR), None),
             AfterUnsaved::Open => self.choose_file(FileAction::Open),
-            AfterUnsaved::Exit => iced::exit(),
+            AfterUnsaved::Exit => self.exit(),
         }
     }
 }
