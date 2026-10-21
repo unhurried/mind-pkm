@@ -14,7 +14,7 @@ use iced::keyboard::{self, Key, Location, Modifiers, key::Named};
 
 fn app_with(map: MindMap) -> App {
     let mut app = App::new();
-    let _ = app.set_doc(map);
+    let _ = app.set_doc(map, None);
     app
 }
 
@@ -197,4 +197,47 @@ fn up_and_down_cross_to_cousins() {
     assert_eq!(app.doc.as_ref().unwrap().focus, a1);
     press(&mut app, Named::ArrowUp);
     assert_eq!(app.doc.as_ref().unwrap().focus, a1);
+}
+
+#[test]
+fn a_map_opens_as_it_was_last_shown() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    let a = f.add_child(root, "a");
+    let b = f.add_child(a, "b");
+    let c = f.add_child(root, "c");
+    let mut app = app_with(f.map.clone());
+    send(&mut app, Message::Command(Command::ZoomIn));
+    send(&mut app, Message::Command(Command::ZoomIn));
+    app.doc.as_mut().unwrap().select(vec![c, b]);
+    app.scroll_offset = iced::Vector::new(30.0, 40.0);
+    let (path, view) = app.current_view().unwrap();
+    assert_eq!(path, f.dir.path().join("map.mm"));
+    assert_eq!(view.zoom, 1.25);
+
+    let mut reopened = App::new();
+    let _ = reopened.set_doc(f.map.clone(), Some(view.clone()));
+    let doc = reopened.doc.as_ref().unwrap();
+    assert_eq!((doc.selection.clone(), doc.focus), (vec![c, b], b));
+    assert_eq!(reopened.zoom, 1.25);
+    assert_eq!(reopened.scroll_offset, iced::Vector::new(30.0, 40.0));
+
+    // A node gone since leaves the root selected; a folded one, its shown ancestor.
+    let mut gone = f.map.clone();
+    gone.delete(b);
+    gone.delete(c);
+    let mut reopened = App::new();
+    let _ = reopened.set_doc(gone, Some(view.clone()));
+    assert_eq!(reopened.doc.as_ref().unwrap().focus, root);
+    let mut folded = f.map.clone();
+    folded.set_folded(a, true);
+    let mut reopened = App::new();
+    let _ = reopened.set_doc(folded, Some(view));
+    assert_eq!(reopened.doc.as_ref().unwrap().focus, a);
+}
+
+#[test]
+fn an_untitled_map_has_no_view_to_remember() {
+    let app = app_with(MindMap::new("root"));
+    assert!(app.current_view().is_none());
 }

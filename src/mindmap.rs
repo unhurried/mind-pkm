@@ -482,7 +482,6 @@ impl MindMap {
         self.node_mut(id).set_attr("MODIFIED", &now);
     }
 
-    #[cfg(test)]
     pub fn freeplane_id(&self, id: NodeId) -> &str {
         self.node(id).attr("ID").unwrap_or("")
     }

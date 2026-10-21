@@ -15,7 +15,7 @@ It reads and writes the same files as the add-on: your Freeplane `.mm` map and t
 ## Installation
 
 1. Download `mind-pkm-<version>-windows-x64.zip` from the [releases page](../../releases) and extract `mind-pkm.exe` anywhere.
-2. Run it, and open your map with File → Open (`Ctrl+O`). The last opened map is reopened on the next start; a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence.
+2. Run it, and open your map with File → Open (`Ctrl+O`). The last opened map is reopened on the next start, with the zoom level, scroll position and selected nodes it was last shown with (remembered per map in `%APPDATA%\mind-pkm\views.txt`); a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence.
 
 The UI uses the Meiryo UI font; where it is missing, the system's fallback fonts are used.
 
