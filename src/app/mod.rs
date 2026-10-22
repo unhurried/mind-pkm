@@ -33,7 +33,7 @@ use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::scrollable;
 use iced::{Point, Size, Subscription, Task, Vector, window};
-use search_panel::{SearchMsg, SearchPanel};
+use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -395,8 +395,7 @@ impl App {
     /// can be dragged, and selects just the node if released without a drag.
     fn node_clicked(&mut self, id: NodeId) {
         self.menu = None;
-        self.search.results_focused = false;
-        self.search.input_focused = false;
+        self.search.focus = PanelFocus::Map;
         let Some(doc) = &mut self.doc else { return };
         let mut click = None;
         if self.modifiers.control() {

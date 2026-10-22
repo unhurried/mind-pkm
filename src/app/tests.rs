@@ -176,7 +176,7 @@ fn the_filter_dialog_sets_the_filter_and_cancel_keeps_it() {
 fn typing_in_the_search_box_reaches_the_map_only_through_function_keys() {
     let mut app = app_with(MindMap::new("root"));
     app.search.open = true;
-    app.search.input_focused = true;
+    app.search.focus = super::search_panel::PanelFocus::Input;
     let before = map(&app).to_xml();
     for key in [Named::Tab, Named::Enter, Named::Delete, Named::Space] {
         press(&mut app, key);

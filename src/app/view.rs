@@ -5,7 +5,7 @@ use super::dialog::Dialog;
 use super::doc::Doc;
 use super::drag::DropPlace;
 use super::layout::{MapLayout, NodeBox};
-use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SEARCH_INPUT_ID, ScopeOption, SearchMsg, SortOption};
+use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SCOPES, SEARCH_INPUT_ID, SORTS, SearchMsg};
 use super::{App, DIALOG_INPUT_ID, MAP_SCROLL_ID, Message};
 use crate::mindmap::{ICON_CHECKMARK, MindMap, NodeId};
 use crate::pkm;
@@ -436,8 +436,8 @@ impl App {
                 .size(12)
                 .padding(4)
                 .width(Fill),
-            pick_list(ScopeOption::ALL, Some(s.scope), |v| Message::Search(SearchMsg::Scope(v))).text_size(12),
-            pick_list(SortOption::ALL, Some(s.sort), |v| Message::Search(SearchMsg::Sort(v))).text_size(12),
+            pick_list(SCOPES, Some(s.scope), |v| Message::Search(SearchMsg::Scope(v))).text_size(12),
+            pick_list(SORTS, Some(s.sort), |v| Message::Search(SearchMsg::Sort(v))).text_size(12),
             icon_button(
                 PanelIcon::Search,
                 "Search",
