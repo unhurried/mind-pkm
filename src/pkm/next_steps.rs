@@ -30,7 +30,7 @@ const MIN_LIST_ITEM_LENGTH: usize = 3;
 
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    pub doc_dir: PathBuf,
+    doc_dir: PathBuf,
     /// Every node of the map with a linked file: (node, text, linked file).
     nodes: Vec<(NodeId, String, PathBuf)>,
     /// The direct children of root > ToDo: (node, text, directly linked file).
@@ -39,6 +39,7 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Default)]
 pub struct Update {
+    doc_dir: PathBuf,
     /// Page nodes (with their text when read) and their first Next Steps items.
     next_steps: Vec<(NodeId, String, Vec<String>)>,
     stale_todo_items: Vec<NodeId>,
@@ -98,7 +99,7 @@ pub fn compute(snapshot: &Snapshot, today: NaiveDate) -> Update {
         items_by_file.entry(paths::key(file)).or_insert_with(|| read_next_step_items(file)).clone()
     };
 
-    let mut update = Update::default();
+    let mut update = Update { doc_dir: dir.clone(), ..Update::default() };
     let mut pages: Vec<String> = Vec::new();
     for (node, text, linked) in &snapshot.nodes {
         if doc_type_of(text, linked, dir) != Some(DocType::Page) {
@@ -144,7 +145,7 @@ pub fn compute(snapshot: &Snapshot, today: NaiveDate) -> Update {
 
 /// Applies the update to the map; nodes deleted or renamed since the snapshot
 /// are skipped. Returns whether anything changed.
-pub fn apply(map: &mut MindMap, doc_dir: &Path, update: &Update) -> bool {
+pub fn apply(map: &mut MindMap, update: &Update) -> bool {
     let mut changed = false;
     for (node, text, lines) in &update.next_steps {
         if !map.exists(*node) || map.text(*node) != *text {
@@ -164,20 +165,21 @@ pub fn apply(map: &mut MindMap, doc_dir: &Path, update: &Update) -> bool {
             changed = true;
         }
     }
-    changed | apply_due_items(map, doc_dir, update)
+    changed | apply_due_items(map, update)
 }
 
-fn apply_due_items(map: &mut MindMap, doc_dir: &Path, update: &Update) -> bool {
+fn apply_due_items(map: &mut MindMap, update: &Update) -> bool {
+    let doc_dir = &update.doc_dir;
     let Some(todo) = map.find_child_by_text(map.root(), TODO_NODE_NAME) else { return false };
     let listed: HashSet<(String, Option<String>)> =
         map.children(todo).into_iter().map(|c| (map.text(c), map.link_file(c).map(|f| paths::key(&f)))).collect();
     let mut changed = false;
     for (name, items) in [(DUE_TODAY_NODE_NAME, &update.due_today), (PAST_DUE_NODE_NAME, &update.past_due)] {
-        let pending: Vec<&DueItem> = items
+        // The items not listed yet, as ToDo items: the text and the page linked.
+        let pending: Vec<(String, PathBuf)> = items
             .iter()
-            .filter(|i| {
-                !listed.contains(&(todo_item_text(&i.item, &i.page), Some(paths::key(&page_file(doc_dir, &i.page)))))
-            })
+            .map(|i| (todo_item_text(&i.item, &i.page), page_file(doc_dir, &i.page)))
+            .filter(|(text, page)| !listed.contains(&(text.clone(), Some(paths::key(page)))))
             .collect();
         let holder = match map.find_child_by_text(todo, name) {
             Some(h) => h,
@@ -186,14 +188,13 @@ fn apply_due_items(map: &mut MindMap, doc_dir: &Path, update: &Update) -> bool {
                 map.add_child(todo, name)
             }
         };
-        let texts: Vec<String> = pending.iter().map(|i| todo_item_text(&i.item, &i.page)).collect();
-        if map.child_texts(holder) == texts {
+        if map.child_texts(holder).iter().eq(pending.iter().map(|(text, _)| text)) {
             continue;
         }
         map.delete_children(holder);
-        for (i, text) in pending.iter().zip(&texts) {
+        for (text, page) in &pending {
             let c = map.add_child(holder, text);
-            map.set_link_file(c, &page_file(doc_dir, &i.page));
+            map.set_link_file(c, page);
         }
         changed = true;
     }
@@ -205,7 +206,7 @@ fn apply_due_items(map: &mut MindMap, doc_dir: &Path, update: &Update) -> bool {
 pub fn refresh(map: &mut MindMap, doc_dir: &Path, today: NaiveDate) -> bool {
     let snap = snapshot(map, doc_dir);
     let update = compute(&snap, today);
-    apply(map, doc_dir, &update)
+    apply(map, &update)
 }
 
 #[cfg(test)]

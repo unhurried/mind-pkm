@@ -153,7 +153,6 @@ impl App {
         let result = commands::delete_execute(&mut doc.map, targets, &mut |files| {
             trash::delete_all(files).map_err(|e| e.to_string())
         });
-        self.changed_since_update = true;
         self.report(result);
     }
 
@@ -169,14 +168,10 @@ impl App {
                 {
                     doc.checkpoint();
                     doc.map.set_text(id, &v);
-                    self.changed_since_update = true;
                 }
             }
             InputAction::NewNode(id, serial) => match non_empty {
-                Some(v) if doc.map.exists(id) => {
-                    doc.map.set_text(id, &v);
-                    self.changed_since_update = true;
-                }
+                Some(v) if doc.map.exists(id) => doc.map.set_text(id, &v),
                 _ => {
                     // The node goes; changes made meanwhile (a refresh) stay.
                     let parent = doc.map.exists(id).then(|| doc.map.parent(id)).flatten();
@@ -191,9 +186,7 @@ impl App {
                     && doc.map.exists(id)
                 {
                     let result = doc.try_change(|map| commands::rename(map, id, kind, &v));
-                    if self.report(result).is_some() {
-                        self.changed_since_update = true;
-                    }
+                    self.report(result);
                 }
             }
             InputAction::Filter => {

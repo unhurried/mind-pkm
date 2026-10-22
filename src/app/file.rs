@@ -9,7 +9,6 @@ use crate::mindmap::MindMap;
 use crate::pkm;
 use iced::{Task, Vector};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 /// Root text and document directory of a new map.
 const NEW_MAP_ROOT_TEXT: &str = "Map";
@@ -59,8 +58,6 @@ impl App {
         }
         self.doc = Some(doc);
         self.search = SearchPanel::default();
-        self.last_update = Instant::now();
-        self.changed_since_update = false;
         self.relayout();
         match view {
             Some(view) => self.scroll_to(Vector::new(view.scroll.0.max(0.0), view.scroll.1.max(0.0))),

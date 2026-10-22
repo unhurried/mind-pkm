@@ -79,12 +79,11 @@ fn a_refresh_landing_while_a_new_node_is_named_is_kept() {
     let root = f.map.root();
     f.write_page("Task", "### Next Steps\n* One\n");
     let page = f.add_page_node(root, "Task");
-    let doc_dir = f.doc_dir.clone();
-    let update = next_steps::compute(&next_steps::snapshot(&f.map, &doc_dir), chrono::Local::now().date_naive());
+    let update = next_steps::compute(&next_steps::snapshot(&f.map, &f.doc_dir), chrono::Local::now().date_naive());
     let mut app = app_with(f.map.clone());
     press(&mut app, Named::Tab);
     let generation = app.doc.as_ref().unwrap().generation;
-    send(&mut app, Message::NextStepsComputed(generation, doc_dir, Box::new(update)));
+    send(&mut app, Message::NextStepsComputed(generation, Box::new(update)));
     send(&mut app, Message::Escape);
     assert_eq!(map(&app).child_texts(page), vec!["One"]);
     assert_eq!(root_texts(&app), vec!["config", "ToDo", "Task"]);
@@ -266,4 +265,18 @@ fn the_window_is_restored_as_it_was_before_maximizing_or_minimizing() {
     send(&mut app, Message::WindowMoved(Point::new(-32000.0, -32000.0)));
     send(&mut app, Message::WindowState { maximized: false, minimized: true });
     assert_eq!(app.window, settings::WindowGeometry { maximized: true, ..normal });
+}
+
+#[test]
+fn only_edits_call_for_the_periodic_refresh() {
+    let mut app = app_with(MindMap::new("root"));
+    let edited = |app: &App| app.doc.as_ref().unwrap().edited_since_refresh;
+    send(&mut app, Message::Command(Command::ZoomIn));
+    press(&mut app, Named::F5);
+    send(&mut app, Message::DialogOk);
+    press(&mut app, Named::F2);
+    send(&mut app, Message::DialogCancel);
+    assert!(!edited(&app));
+    press(&mut app, Named::F7);
+    assert!(edited(&app));
 }

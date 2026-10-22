@@ -37,7 +37,7 @@ use search_panel::{SearchMsg, SearchPanel};
 use settings::WindowGeometry;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use viewport::Pan;
 
 /// The periodic Next Steps / search index refresh runs at most this often, and
@@ -120,7 +120,7 @@ pub enum Message {
     /// Unsaved changes: discard them.
     DialogDiscard,
     FileChosen(FileAction, Option<PathBuf>),
-    NextStepsComputed(u64, PathBuf, Box<next_steps::Update>),
+    NextStepsComputed(u64, Box<next_steps::Update>),
     IndexUpdated(Result<(), String>),
     ClipboardRead(Option<String>),
     Search(SearchMsg),
@@ -191,9 +191,6 @@ pub struct App {
     clipboard: Option<Clipboard>,
     /// The status bar message.
     status: String,
-    /// When the Next Steps / search index refresh last ran, and whether the map changed since.
-    last_update: Instant,
-    changed_since_update: bool,
     pan: Option<Pan>,
     /// A node drag, armed by a press on a selected node.
     drag: Option<NodeDrag>,
@@ -233,8 +230,6 @@ impl App {
             edges: Default::default(),
             clipboard: None,
             status: String::new(),
-            last_update: Instant::now(),
-            changed_since_update: false,
             pan: None,
             drag: None,
         }
@@ -367,10 +362,11 @@ impl App {
             }
             Message::CloseRequested => self.guard_unsaved(AfterUnsaved::Exit),
             Message::Tick => {
-                if self.changed_since_update && self.last_update.elapsed() >= UPDATE_INTERVAL {
-                    return self.start_update(false);
-                }
-                Task::none()
+                let due = self
+                    .doc
+                    .as_ref()
+                    .is_some_and(|d| d.edited_since_refresh && d.last_refresh.elapsed() >= UPDATE_INTERVAL);
+                if due { self.start_update(false) } else { Task::none() }
             }
             Message::DialogInput(value) => {
                 self.dialog_input(value);
@@ -381,8 +377,8 @@ impl App {
             Message::DialogSave => self.dialog_save(),
             Message::DialogDiscard => self.dialog_discard(),
             Message::FileChosen(action, path) => self.file_chosen(action, path),
-            Message::NextStepsComputed(generation, doc_dir, update) => {
-                self.next_steps_computed(generation, &doc_dir, &update);
+            Message::NextStepsComputed(generation, update) => {
+                self.next_steps_computed(generation, &update);
                 Task::none()
             }
             Message::IndexUpdated(result) => {

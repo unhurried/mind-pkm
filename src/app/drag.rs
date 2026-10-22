@@ -69,21 +69,20 @@ pub fn drop_target(map: &MindMap, layout: &MapLayout, dragged: &[NodeId], p: Poi
 impl Doc {
     /// Moves the nodes (in the given order) to the drop target, as one undo
     /// step; a move that leaves them all where they were is not recorded.
-    /// Returns whether the map changed.
-    pub(super) fn move_nodes(&mut self, nodes: &[NodeId], target: DropTarget) -> bool {
+    pub(super) fn move_nodes(&mut self, nodes: &[NodeId], target: DropTarget) {
         let map = &self.map;
         let nodes: Vec<NodeId> = nodes.iter().copied().filter(|&n| map.exists(n) && n != map.root()).collect();
         if nodes.is_empty()
             || !map.exists(target.node)
             || nodes.iter().any(|&n| n == target.node || map.is_ancestor(n, target.node))
         {
-            return false;
+            return;
         }
         let parent = match target.place {
             DropPlace::Child => target.node,
             DropPlace::Before | DropPlace::After => match map.parent(target.node) {
                 Some(p) => p,
-                None => return false,
+                None => return,
             },
         };
         let places =
@@ -109,13 +108,11 @@ impl Doc {
             map.move_node(n, parent, index);
             anchor = n;
         }
-        let changed = unfolds || places(&self.map) != old_places;
-        if changed {
+        if unfolds || places(&self.map) != old_places {
             self.record(before);
         } else {
             self.map = before;
         }
-        changed
     }
 }
 
@@ -154,10 +151,8 @@ impl App {
             if let Some(id) = drag.click.filter(|&id| doc.map.exists(id)) {
                 doc.select(vec![id]);
             }
-        } else if let Some(target) = drag.target
-            && doc.move_nodes(&drag.nodes, target)
-        {
-            self.changed_since_update = true;
+        } else if let Some(target) = drag.target {
+            doc.move_nodes(&drag.nodes, target);
         }
     }
 
