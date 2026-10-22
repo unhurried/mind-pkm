@@ -59,7 +59,7 @@ impl App {
         if self.drag_cancel() {
             Task::none()
         } else if !self.dialogs.is_empty() {
-            self.dismiss_dialog()
+            self.dialog_cancel()
         } else if self.menu.is_some() {
             self.menu = None;
             Task::none()

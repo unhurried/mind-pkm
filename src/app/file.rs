@@ -150,7 +150,7 @@ impl App {
     /// Runs `after` now, or once the user dealt with unsaved changes.
     pub(super) fn guard_unsaved(&mut self, after: AfterUnsaved) -> Task<Message> {
         if self.doc.as_ref().is_some_and(|d| d.dirty) {
-            self.dialogs.push(Dialog::Unsaved(after));
+            self.dialogs.push_back(Dialog::Unsaved(after));
             return Task::none();
         }
         self.after_unsaved(after)

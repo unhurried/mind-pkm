@@ -49,7 +49,7 @@ fn root_texts(app: &App) -> Vec<String> {
 fn a_new_node_asks_for_its_text_and_undo_removes_it() {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
-    assert!(matches!(app.dialogs.first(), Some(Dialog::Input { .. })));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Input { .. })));
     send(&mut app, Message::DialogInput("child".into()));
     press(&mut app, Named::Enter);
     assert!(app.dialogs.is_empty());
@@ -105,7 +105,7 @@ fn edited_app() -> App {
 fn closing_with_unsaved_changes_asks_and_cancel_keeps_them() {
     let mut app = edited_app();
     send(&mut app, Message::CloseRequested);
-    assert!(matches!(app.dialogs.first(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
     // Enter doesn't answer this question; Cancel and Esc keep the map.
     press(&mut app, Named::Enter);
     assert_eq!(app.dialogs.len(), 1);
@@ -123,7 +123,7 @@ fn closing_with_unsaved_changes_asks_and_cancel_keeps_them() {
 fn new_map_with_unsaved_changes_can_discard_them() {
     let mut app = edited_app();
     send(&mut app, Message::Command(Command::New));
-    assert!(matches!(app.dialogs.first(), Some(Dialog::Unsaved(AfterUnsaved::New))));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::New))));
     send(&mut app, Message::DialogDiscard);
     let doc = app.doc.as_ref().unwrap();
     assert!(!doc.dirty && doc.map.path().is_none());

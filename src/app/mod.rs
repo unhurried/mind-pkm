@@ -35,7 +35,7 @@ use iced::widget::scrollable;
 use iced::{Point, Size, Subscription, Task, Vector, window};
 use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 use viewport::Pan;
@@ -166,7 +166,7 @@ pub struct App {
     /// The generation given to the last opened document.
     next_generation: u64,
     /// The queued dialogs; the first one is shown.
-    dialogs: Vec<Dialog>,
+    dialogs: VecDeque<Dialog>,
     search: SearchPanel,
     /// The open menu: an index into `view::MENUS`.
     menu: Option<usize>,
@@ -215,7 +215,7 @@ impl App {
         App {
             doc: None,
             next_generation: 0,
-            dialogs: Vec::new(),
+            dialogs: VecDeque::new(),
             search: SearchPanel::default(),
             menu: None,
             modifiers: Modifiers::default(),

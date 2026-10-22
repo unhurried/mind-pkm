@@ -185,7 +185,7 @@ impl App {
         if let Some(i) = self.menu {
             layers = layers.push(self.menu_dropdown(i));
         }
-        if let Some(dialog) = self.dialogs.first() {
+        if let Some(dialog) = self.dialogs.front() {
             layers = layers.push(self.dialog_view(dialog));
         }
         // The pointer stays the normal arrow everywhere.
