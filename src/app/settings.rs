@@ -38,15 +38,20 @@ fn read(file_name: &str) -> Option<Vec<u8>> {
     [APP_DIR_NAME, LEGACY_APP_DIR_NAME].iter().find_map(|dir| std::fs::read(base.join(dir).join(file_name)).ok())
 }
 
+/// Reads a settings file as UTF-8 text.
+fn read_text(file_name: &str) -> Option<String> {
+    String::from_utf8(read(file_name)?).ok()
+}
+
 /// The value of `key` (`name=`) in `settings.txt`.
 fn value(key: &str) -> Option<String> {
-    let text = String::from_utf8(read(SETTINGS_FILE_NAME)?).ok()?;
+    let text = read_text(SETTINGS_FILE_NAME)?;
     text.lines().find_map(|l| l.strip_prefix(key)).filter(|v| !v.is_empty()).map(str::to_string)
 }
 
 /// Sets `key` (`name=`) in `settings.txt`, keeping the other lines.
 fn set_value(key: &str, value: &str) {
-    let text = read(SETTINGS_FILE_NAME).and_then(|b| String::from_utf8(b).ok()).unwrap_or_default();
+    let text = read_text(SETTINGS_FILE_NAME).unwrap_or_default();
     write(SETTINGS_FILE_NAME, with_value(&text, key, value));
 }
 
@@ -123,14 +128,14 @@ pub struct MapView {
 
 /// The remembered view of the map at `path`.
 pub fn map_view(path: &Path) -> Option<MapView> {
-    let text = String::from_utf8(read(VIEWS_FILE_NAME)?).ok()?;
+    let text = read_text(VIEWS_FILE_NAME)?;
     let key = paths::key(path);
     parse_views(&text).into_iter().find(|(p, _)| paths::key(p) == key).map(|(_, view)| view)
 }
 
 /// Remembers the view of the map at `path`, as the most recent one.
 pub fn set_map_view(path: &Path, view: MapView) {
-    let text = read(VIEWS_FILE_NAME).and_then(|b| String::from_utf8(b).ok()).unwrap_or_default();
+    let text = read_text(VIEWS_FILE_NAME).unwrap_or_default();
     write(VIEWS_FILE_NAME, format_views(&with_view(parse_views(&text), path, view)));
 }
 

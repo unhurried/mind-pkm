@@ -5,38 +5,25 @@
 
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use quick_xml::name::QName;
 use std::io::Read;
 use std::path::Path;
 
 // Keeps one pathological file (e.g. a huge PDF) from blowing up the index.
 pub const MAX_CONTENT_CHARS: usize = 2_000_000;
 
-const TEXT_EXTENSIONS: &[&str] = &["md", "markdown", "txt"];
-
-pub fn extension_of(path: &Path) -> String {
-    path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
-}
-
 pub fn extract_text(path: &Path) -> String {
-    let ext = extension_of(path);
-    let text = if TEXT_EXTENSIONS.contains(&ext.as_str()) {
-        std::fs::read(path)
-            .map(|b| {
-                let s = String::from_utf8_lossy(&b).into_owned();
-                s.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(s)
-            })
-            .unwrap_or_default()
-    } else if ext == "pdf" {
-        read_pdf(path)
-    } else if ext == "docx" {
-        read_ooxml(
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let text = match ext.as_str() {
+        "md" | "markdown" | "txt" => read_text(path),
+        "pdf" => read_pdf(path),
+        "docx" => read_ooxml(
             path,
             |name| name == "word/document.xml" || name.starts_with("word/header") || name.starts_with("word/footer"),
             &["w:t"],
             &["w:p", "w:tab", "w:br"],
-        )
-    } else if ext == "xlsx" {
-        read_ooxml(
+        ),
+        "xlsx" => read_ooxml(
             path,
             |name| {
                 name == "xl/sharedStrings.xml"
@@ -45,18 +32,16 @@ pub fn extract_text(path: &Path) -> String {
             },
             &["t", "v"],
             &["si", "c", "row", "sheet"],
-        )
-    } else if ext == "pptx" {
-        read_ooxml(
+        ),
+        "pptx" => read_ooxml(
             path,
             |name| {
                 (name.starts_with("ppt/slides/slide") || name.starts_with("ppt/notesSlides/")) && name.ends_with(".xml")
             },
             &["a:t"],
             &["a:p"],
-        )
-    } else {
-        String::new()
+        ),
+        _ => String::new(),
     };
     truncate_chars(text, MAX_CONTENT_CHARS)
 }
@@ -66,6 +51,13 @@ pub fn truncate_chars(s: String, max: usize) -> String {
         Some((i, _)) => s[..i].to_string(),
         None => s,
     }
+}
+
+/// A text file without its byte-order mark.
+fn read_text(path: &Path) -> String {
+    let Ok(bytes) = std::fs::read(path) else { return String::new() };
+    let text = String::from_utf8_lossy(&bytes);
+    text.strip_prefix('\u{feff}').unwrap_or(&text).to_string()
 }
 
 fn read_pdf(path: &Path) -> String {
@@ -105,31 +97,22 @@ fn read_ooxml(path: &Path, wanted: impl Fn(&str) -> bool, text_elements: &[&str]
 fn collect_xml_text(xml: &str, text_elements: &[&str], break_elements: &[&str], out: &mut String) {
     let mut reader = Reader::from_str(xml);
     let mut depth_in_text = 0usize;
+    let is_one_of = |names: &[&str], name: QName| names.contains(&String::from_utf8_lossy(name.as_ref()).as_ref());
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                if text_elements.contains(&String::from_utf8_lossy(e.name().as_ref()).as_ref()) {
-                    depth_in_text += 1;
-                }
-            }
+            Ok(Event::Start(e)) if is_one_of(text_elements, e.name()) => depth_in_text += 1,
             Ok(Event::End(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                if text_elements.contains(&name.as_str()) {
+                if is_one_of(text_elements, e.name()) {
                     depth_in_text = depth_in_text.saturating_sub(1);
                     if !out.ends_with([' ', '\n']) {
                         out.push(' ');
                     }
                 }
-                if break_elements.contains(&name.as_str()) && !out.ends_with('\n') {
+                if is_one_of(break_elements, e.name()) && !out.ends_with('\n') {
                     out.push('\n');
                 }
             }
-            Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
-                if break_elements.contains(&name.as_str()) && !out.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
+            Ok(Event::Empty(e)) if is_one_of(break_elements, e.name()) && !out.ends_with('\n') => out.push('\n'),
             Ok(Event::Text(t)) if depth_in_text > 0 => {
                 out.push_str(&crate::xml::unescape(&String::from_utf8_lossy(&t)));
             }

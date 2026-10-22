@@ -44,13 +44,14 @@ use viewport::Pan;
 /// only after the map changed.
 const UPDATE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TICK: Duration = Duration::from_secs(20);
-const INITIAL_WINDOW_SIZE: Size = Size::new(1280.0, 800.0);
+/// The window when none is remembered.
+const INITIAL_WINDOW: WindowGeometry =
+    WindowGeometry { size: Size::new(1280.0, 800.0), position: None, maximized: false };
 const MAP_SCROLL_ID: &str = "map";
 const DIALOG_INPUT_ID: &str = "dialog-input";
 
 pub fn run(initial: Option<PathBuf>) -> iced::Result {
-    let geometry =
-        settings::window().unwrap_or(WindowGeometry { size: INITIAL_WINDOW_SIZE, position: None, maximized: false });
+    let geometry = settings::window().unwrap_or(INITIAL_WINDOW);
     let position = geometry.position.map_or(window::Position::Default, window::Position::Specific);
     iced::application(move || App::boot(initial.clone(), geometry), App::update, App::view)
         .title(App::title)
@@ -219,9 +220,9 @@ impl App {
             search: SearchPanel::default(),
             menu: None,
             modifiers: Modifiers::default(),
-            window_size: INITIAL_WINDOW_SIZE,
+            window_size: INITIAL_WINDOW.size,
             window_position: None,
-            window: WindowGeometry { size: INITIAL_WINDOW_SIZE, position: None, maximized: false },
+            window: INITIAL_WINDOW,
             scroll_offset: Vector::ZERO,
             viewport_size: None,
             zoom: 1.0,
