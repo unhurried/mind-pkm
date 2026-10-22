@@ -3,7 +3,7 @@
 
 use super::command::Command;
 use super::dialog::Dialog;
-use super::file::AfterUnsaved;
+use super::file::{AfterUnsaved, FileAction};
 use super::{App, Message, settings};
 use crate::mindmap::MindMap;
 use crate::pkm::filter::Filter;
@@ -49,7 +49,7 @@ fn root_texts(app: &App) -> Vec<String> {
 fn a_new_node_asks_for_its_text_and_undo_removes_it() {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
-    assert!(matches!(app.dialogs.first(), Some(Dialog::Input { .. })));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Input { .. })));
     send(&mut app, Message::DialogInput("child".into()));
     press(&mut app, Named::Enter);
     assert!(app.dialogs.is_empty());
@@ -79,12 +79,11 @@ fn a_refresh_landing_while_a_new_node_is_named_is_kept() {
     let root = f.map.root();
     f.write_page("Task", "### Next Steps\n* One\n");
     let page = f.add_page_node(root, "Task");
-    let doc_dir = f.doc_dir.clone();
-    let update = next_steps::compute(&next_steps::snapshot(&f.map, &doc_dir), chrono::Local::now().date_naive());
+    let update = next_steps::compute(&next_steps::snapshot(&f.map, &f.doc_dir), chrono::Local::now().date_naive());
     let mut app = app_with(f.map.clone());
     press(&mut app, Named::Tab);
     let generation = app.doc.as_ref().unwrap().generation;
-    send(&mut app, Message::NextStepsComputed(generation, doc_dir, Box::new(update)));
+    send(&mut app, Message::NextStepsComputed(generation, Box::new(update)));
     send(&mut app, Message::Escape);
     assert_eq!(map(&app).child_texts(page), vec!["One"]);
     assert_eq!(root_texts(&app), vec!["config", "ToDo", "Task"]);
@@ -106,7 +105,7 @@ fn edited_app() -> App {
 fn closing_with_unsaved_changes_asks_and_cancel_keeps_them() {
     let mut app = edited_app();
     send(&mut app, Message::CloseRequested);
-    assert!(matches!(app.dialogs.first(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
     // Enter doesn't answer this question; Cancel and Esc keep the map.
     press(&mut app, Named::Enter);
     assert_eq!(app.dialogs.len(), 1);
@@ -124,12 +123,39 @@ fn closing_with_unsaved_changes_asks_and_cancel_keeps_them() {
 fn new_map_with_unsaved_changes_can_discard_them() {
     let mut app = edited_app();
     send(&mut app, Message::Command(Command::New));
-    assert!(matches!(app.dialogs.first(), Some(Dialog::Unsaved(AfterUnsaved::New))));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::New))));
     send(&mut app, Message::DialogDiscard);
     let doc = app.doc.as_ref().unwrap();
     assert!(!doc.dirty && doc.map.path().is_none());
     assert_eq!(doc.map.text(doc.map.root()), "Map");
     assert_eq!(root_texts(&app), vec!["config", "ToDo"]);
+}
+
+#[test]
+fn saving_a_new_map_from_the_unsaved_changes_question_goes_on_once_saved() {
+    let mut app = edited_app();
+    send(&mut app, Message::Command(Command::New));
+    // The map has no file yet: Save asks for one first.
+    send(&mut app, Message::DialogSave);
+    assert!(app.dialogs.is_empty());
+    assert_eq!(root_texts(&app), vec!["x"]);
+    let dir = tempfile::tempdir().unwrap();
+    send(&mut app, Message::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::New)), Some(dir.path().join("saved"))));
+    let saved = MindMap::load(&dir.path().join("saved.mm")).unwrap();
+    assert_eq!(saved.child_texts(saved.root()), vec!["x"]);
+    // Then the new map.
+    assert!(map(&app).path().is_none());
+    assert_eq!(root_texts(&app), vec!["config", "ToDo"]);
+}
+
+#[test]
+fn cancelling_save_as_from_the_unsaved_changes_question_keeps_the_changes() {
+    let mut app = edited_app();
+    send(&mut app, Message::CloseRequested);
+    send(&mut app, Message::DialogSave);
+    send(&mut app, Message::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::Exit)), None));
+    assert!(app.doc.as_ref().unwrap().dirty);
+    assert_eq!(root_texts(&app), vec!["x"]);
 }
 
 #[test]
@@ -150,7 +176,7 @@ fn the_filter_dialog_sets_the_filter_and_cancel_keeps_it() {
 fn typing_in_the_search_box_reaches_the_map_only_through_function_keys() {
     let mut app = app_with(MindMap::new("root"));
     app.search.open = true;
-    app.search.input_focused = true;
+    app.search.focus = super::search_panel::PanelFocus::Input;
     let before = map(&app).to_xml();
     for key in [Named::Tab, Named::Enter, Named::Delete, Named::Space] {
         press(&mut app, key);
@@ -266,4 +292,18 @@ fn the_window_is_restored_as_it_was_before_maximizing_or_minimizing() {
     send(&mut app, Message::WindowMoved(Point::new(-32000.0, -32000.0)));
     send(&mut app, Message::WindowState { maximized: false, minimized: true });
     assert_eq!(app.window, settings::WindowGeometry { maximized: true, ..normal });
+}
+
+#[test]
+fn only_edits_call_for_the_periodic_refresh() {
+    let mut app = app_with(MindMap::new("root"));
+    let edited = |app: &App| app.doc.as_ref().unwrap().edited_since_refresh;
+    send(&mut app, Message::Command(Command::ZoomIn));
+    press(&mut app, Named::F5);
+    send(&mut app, Message::DialogOk);
+    press(&mut app, Named::F2);
+    send(&mut app, Message::DialogCancel);
+    assert!(!edited(&app));
+    press(&mut app, Named::F7);
+    assert!(edited(&app));
 }

@@ -33,24 +33,25 @@ use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::scrollable;
 use iced::{Point, Size, Subscription, Task, Vector, window};
-use search_panel::{SearchMsg, SearchPanel};
+use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use viewport::Pan;
 
 /// The periodic Next Steps / search index refresh runs at most this often, and
 /// only after the map changed.
 const UPDATE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TICK: Duration = Duration::from_secs(20);
-const INITIAL_WINDOW_SIZE: Size = Size::new(1280.0, 800.0);
+/// The window when none is remembered.
+const INITIAL_WINDOW: WindowGeometry =
+    WindowGeometry { size: Size::new(1280.0, 800.0), position: None, maximized: false };
 const MAP_SCROLL_ID: &str = "map";
 const DIALOG_INPUT_ID: &str = "dialog-input";
 
 pub fn run(initial: Option<PathBuf>) -> iced::Result {
-    let geometry =
-        settings::window().unwrap_or(WindowGeometry { size: INITIAL_WINDOW_SIZE, position: None, maximized: false });
+    let geometry = settings::window().unwrap_or(INITIAL_WINDOW);
     let position = geometry.position.map_or(window::Position::Default, window::Position::Specific);
     iced::application(move || App::boot(initial.clone(), geometry), App::update, App::view)
         .title(App::title)
@@ -120,7 +121,7 @@ pub enum Message {
     /// Unsaved changes: discard them.
     DialogDiscard,
     FileChosen(FileAction, Option<PathBuf>),
-    NextStepsComputed(u64, PathBuf, Box<next_steps::Update>),
+    NextStepsComputed(u64, Box<next_steps::Update>),
     IndexUpdated(Result<(), String>),
     ClipboardRead(Option<String>),
     Search(SearchMsg),
@@ -166,7 +167,7 @@ pub struct App {
     /// The generation given to the last opened document.
     next_generation: u64,
     /// The queued dialogs; the first one is shown.
-    dialogs: Vec<Dialog>,
+    dialogs: VecDeque<Dialog>,
     search: SearchPanel,
     /// The open menu: an index into `view::MENUS`.
     menu: Option<usize>,
@@ -191,9 +192,6 @@ pub struct App {
     clipboard: Option<Clipboard>,
     /// The status bar message.
     status: String,
-    /// When the Next Steps / search index refresh last ran, and whether the map changed since.
-    last_update: Instant,
-    changed_since_update: bool,
     pan: Option<Pan>,
     /// A node drag, armed by a press on a selected node.
     drag: Option<NodeDrag>,
@@ -218,13 +216,13 @@ impl App {
         App {
             doc: None,
             next_generation: 0,
-            dialogs: Vec::new(),
+            dialogs: VecDeque::new(),
             search: SearchPanel::default(),
             menu: None,
             modifiers: Modifiers::default(),
-            window_size: INITIAL_WINDOW_SIZE,
+            window_size: INITIAL_WINDOW.size,
             window_position: None,
-            window: WindowGeometry { size: INITIAL_WINDOW_SIZE, position: None, maximized: false },
+            window: INITIAL_WINDOW,
             scroll_offset: Vector::ZERO,
             viewport_size: None,
             zoom: 1.0,
@@ -233,8 +231,6 @@ impl App {
             edges: Default::default(),
             clipboard: None,
             status: String::new(),
-            last_update: Instant::now(),
-            changed_since_update: false,
             pan: None,
             drag: None,
         }
@@ -367,10 +363,11 @@ impl App {
             }
             Message::CloseRequested => self.guard_unsaved(AfterUnsaved::Exit),
             Message::Tick => {
-                if self.changed_since_update && self.last_update.elapsed() >= UPDATE_INTERVAL {
-                    return self.start_update(false);
-                }
-                Task::none()
+                let due = self
+                    .doc
+                    .as_ref()
+                    .is_some_and(|d| d.edited_since_refresh && d.last_refresh.elapsed() >= UPDATE_INTERVAL);
+                if due { self.start_update(false) } else { Task::none() }
             }
             Message::DialogInput(value) => {
                 self.dialog_input(value);
@@ -381,8 +378,8 @@ impl App {
             Message::DialogSave => self.dialog_save(),
             Message::DialogDiscard => self.dialog_discard(),
             Message::FileChosen(action, path) => self.file_chosen(action, path),
-            Message::NextStepsComputed(generation, doc_dir, update) => {
-                self.next_steps_computed(generation, &doc_dir, &update);
+            Message::NextStepsComputed(generation, update) => {
+                self.next_steps_computed(generation, &update);
                 Task::none()
             }
             Message::IndexUpdated(result) => {
@@ -399,8 +396,7 @@ impl App {
     /// can be dragged, and selects just the node if released without a drag.
     fn node_clicked(&mut self, id: NodeId) {
         self.menu = None;
-        self.search.results_focused = false;
-        self.search.input_focused = false;
+        self.search.focus = PanelFocus::Map;
         let Some(doc) = &mut self.doc else { return };
         let mut click = None;
         if self.modifiers.control() {

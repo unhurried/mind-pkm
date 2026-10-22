@@ -1,7 +1,7 @@
 //! Keyboard input: the shortcuts and arrow key navigation.
 
 use super::command::Command;
-use super::search_panel::SearchMsg;
+use super::search_panel::{PanelFocus, SearchMsg};
 use super::{App, Message};
 use crate::mindmap::NodeId;
 use iced::Task;
@@ -31,7 +31,7 @@ impl App {
         if self.menu.is_some() {
             return Task::none();
         }
-        if self.search.open && self.search.results_focused {
+        if self.search.focus == PanelFocus::Results {
             match key {
                 Key::Named(Named::ArrowUp) => return self.on_search(SearchMsg::Move(-1)),
                 Key::Named(Named::ArrowDown) => return self.on_search(SearchMsg::Move(1)),
@@ -41,7 +41,7 @@ impl App {
             }
         }
         // While typing in the search box only the function keys reach the map.
-        if self.search.open && self.search.input_focused && !is_function_key(&key) {
+        if self.search.focus == PanelFocus::Input && !is_function_key(&key) {
             return Task::none();
         }
         match command_for_key(&key, modifiers) {
@@ -59,7 +59,7 @@ impl App {
         if self.drag_cancel() {
             Task::none()
         } else if !self.dialogs.is_empty() {
-            self.dismiss_dialog()
+            self.dialog_cancel()
         } else if self.menu.is_some() {
             self.menu = None;
             Task::none()

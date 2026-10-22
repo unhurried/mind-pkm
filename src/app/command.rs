@@ -57,29 +57,6 @@ pub enum Command {
     FindUnlinked,
 }
 
-impl Command {
-    /// Whether running it counts as a change of the map for the periodic
-    /// Next Steps / search index refresh.
-    fn counts_as_change(self) -> bool {
-        !matches!(
-            self,
-            Command::Save
-                | Command::SaveAs
-                | Command::CenterSelected
-                | Command::ZoomIn
-                | Command::ZoomOut
-                | Command::ZoomReset
-                | Command::Copy
-                | Command::PkmOpen
-                | Command::Filter
-                | Command::Search
-                | Command::Update
-                | Command::Undo
-                | Command::Redo
-        )
-    }
-}
-
 /// What was last cut or copied here: the subtrees, and the plain text put on
 /// the system clipboard.
 pub struct Clipboard {
@@ -107,14 +84,11 @@ impl App {
             _ => {}
         }
         let Some(doc) = &mut self.doc else { return Task::none() };
-        if cmd.counts_as_change() {
-            self.changed_since_update = true;
-        }
         let focus = doc.focus;
         match cmd {
             Command::New | Command::Open | Command::Exit => Task::none(),
-            Command::Save => self.save(false),
-            Command::SaveAs => self.choose_file(FileAction::SaveAs),
+            Command::Save => self.save(None),
+            Command::SaveAs => self.choose_file(FileAction::SaveAs(None)),
             Command::Undo => {
                 doc.undo();
                 Task::none()
@@ -269,7 +243,6 @@ impl App {
             None => insert_outline(&mut doc.map, focus, text.as_deref().unwrap_or_default()),
         };
         doc.select(pasted);
-        self.changed_since_update = true;
         Task::none()
     }
 
@@ -347,21 +320,18 @@ impl App {
 
     /// Refreshes the Next Steps children and the search index in the background.
     pub(super) fn start_update(&mut self, show_errors: bool) -> Task<Message> {
-        if self.doc.is_none() {
-            return Task::none();
-        }
-        self.last_update = Instant::now();
-        self.changed_since_update = false;
+        let Some(doc) = &mut self.doc else { return Task::none() };
+        doc.last_refresh = Instant::now();
+        doc.edited_since_refresh = false;
         let Some(doc_dir) = self.doc_dir(show_errors) else { return Task::none() };
         let Some(doc) = &self.doc else { return Task::none() };
         let snapshot = next_steps::snapshot(&doc.map, &doc_dir);
         let generation = doc.generation;
         let today = Local::now().date_naive();
-        let dir = doc_dir.clone();
         self.search.updating = true;
         Task::batch([
             Task::perform(blocking(move || next_steps::compute(&snapshot, today)), move |u| {
-                Message::NextStepsComputed(generation, dir.clone(), Box::new(u))
+                Message::NextStepsComputed(generation, Box::new(u))
             }),
             Task::perform(blocking(move || crate::search::update_index(&doc_dir)), Message::IndexUpdated),
         ])
@@ -369,14 +339,11 @@ impl App {
 
     /// Applies a Next Steps refresh computed for the map, unless another map
     /// has been opened meanwhile.
-    pub(super) fn next_steps_computed(&mut self, generation: u64, doc_dir: &Path, update: &next_steps::Update) {
-        let Some(doc) = &mut self.doc else { return };
-        if doc.generation != generation {
-            return;
-        }
-        let before = doc.map.clone();
-        if next_steps::apply(&mut doc.map, doc_dir, update) {
-            doc.record(before);
+    pub(super) fn next_steps_computed(&mut self, generation: u64, update: &next_steps::Update) {
+        if let Some(doc) = &mut self.doc
+            && doc.generation == generation
+        {
+            doc.apply_refresh(|map| next_steps::apply(map, update));
         }
     }
 }

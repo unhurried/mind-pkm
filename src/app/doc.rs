@@ -7,6 +7,7 @@ use crate::mindmap::{MindMap, NodeId};
 use crate::pkm::{self, commands, filter::Filter};
 use iced::{Rectangle, Size};
 use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 
 const UNDO_LIMIT: usize = 100;
 
@@ -22,6 +23,10 @@ pub struct Doc {
     pub(super) layout: MapLayout,
     /// Changed since last saved.
     pub(super) dirty: bool,
+    /// When the last Next Steps / search index refresh started, and whether
+    /// the map has been edited since.
+    pub(super) last_refresh: Instant,
+    pub(super) edited_since_refresh: bool,
     undo: VecDeque<Checkpoint>,
     redo: Vec<MindMap>,
     /// The serial number of the last checkpoint.
@@ -45,6 +50,8 @@ impl Doc {
             filter: Filter::HideArchive,
             layout: MapLayout::default(),
             dirty: false,
+            last_refresh: Instant::now(),
+            edited_since_refresh: false,
             undo: VecDeque::new(),
             redo: Vec::new(),
             serial: 0,
@@ -65,6 +72,7 @@ impl Doc {
         self.push_undo(before);
         self.redo.clear();
         self.dirty = true;
+        self.edited_since_refresh = true;
         self.serial
     }
 
@@ -94,6 +102,18 @@ impl Doc {
             self.record(before);
         }
         result
+    }
+
+    /// Applies the changes of a background refresh (`apply` tells whether it
+    /// made any) as an undo step; unlike an edit, it doesn't call for another
+    /// refresh.
+    pub(super) fn apply_refresh(&mut self, apply: impl FnOnce(&mut MindMap) -> bool) {
+        let before = self.map.clone();
+        if apply(&mut self.map) {
+            let edited = self.edited_since_refresh;
+            self.record(before);
+            self.edited_since_refresh = edited;
+        }
     }
 
     /// Takes back the creation of `node`, recorded by the checkpoint `serial`
@@ -307,13 +327,10 @@ impl Doc {
     /// Fold One Level (F3) or Unfold One Level (F4) on every selected node.
     pub(super) fn fold_one_level(&mut self, fold: bool) {
         let selection = self.sorted_selection();
+        let fold_one_level = if fold { commands::fold_one_level } else { commands::unfold_one_level };
         self.checkpoint();
         for n in selection {
-            if fold {
-                commands::fold_one_level(&mut self.map, n);
-            } else {
-                commands::unfold_one_level(&mut self.map, n);
-            }
+            fold_one_level(&mut self.map, n);
         }
     }
 
@@ -349,6 +366,23 @@ mod tests {
     }
 
     #[test]
+    fn edits_call_for_a_refresh_but_the_refresh_itself_does_not() {
+        let mut doc = doc();
+        let root = doc.map.root();
+        doc.apply_refresh(|map| {
+            map.add_child(root, "from refresh");
+            true
+        });
+        assert!(!doc.edited_since_refresh);
+        // Still an undo step.
+        assert!(doc.dirty);
+        doc.undo();
+        assert!(doc.map.child_texts(root).is_empty());
+        doc.new_child();
+        assert!(doc.edited_since_refresh);
+    }
+
+    #[test]
     fn cancelling_a_new_node_right_away_restores_the_map() {
         let mut doc = doc();
         let root = doc.map.root();
@@ -372,9 +406,12 @@ mod tests {
         let before_tab = doc.map.to_xml();
         let (n, serial) = doc.new_child();
         // A Next Steps refresh lands while the text dialog is open.
-        let before_refresh = doc.map.clone();
-        let refreshed = doc.map.add_child(root, "from refresh");
-        doc.record(before_refresh);
+        let mut refreshed = None;
+        doc.apply_refresh(|map| {
+            refreshed = Some(map.add_child(root, "from refresh"));
+            true
+        });
+        let refreshed = refreshed.unwrap();
         doc.cancel_new_node(n, serial);
         assert!(!doc.map.exists(n));
         assert_eq!(doc.map.child_texts(root), vec!["from refresh"]);

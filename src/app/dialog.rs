@@ -39,7 +39,7 @@ pub enum InputAction {
 impl App {
     /// Shows a message to the user.
     pub(super) fn message(&mut self, text: impl Into<String>) {
-        self.dialogs.push(Dialog::Message(text.into()));
+        self.dialogs.push_back(Dialog::Message(text.into()));
     }
 
     /// Shows the error of a failed command, if it failed.
@@ -48,82 +48,66 @@ impl App {
     }
 
     pub(super) fn ask(&mut self, text: String, action: ConfirmAction) {
-        self.dialogs.push(Dialog::Confirm { text, action });
+        self.dialogs.push_back(Dialog::Confirm { text, action });
     }
 
     pub(super) fn open_input(&mut self, prompt: &str, value: String, action: InputAction) -> Task<Message> {
-        self.dialogs.push(Dialog::Input { prompt: prompt.into(), value, action });
+        self.dialogs.push_back(Dialog::Input { prompt: prompt.into(), value, action });
         if self.dialogs.len() == 1 { focus_dialog_input() } else { Task::none() }
-    }
-
-    /// The shown dialog asks about unsaved changes (answered only by its own buttons).
-    pub(super) fn unsaved_dialog_shown(&self) -> bool {
-        matches!(self.dialogs.first(), Some(Dialog::Unsaved(_)))
-    }
-
-    fn take_dialog(&mut self) -> Option<Dialog> {
-        if self.dialogs.is_empty() { None } else { Some(self.dialogs.remove(0)) }
     }
 
     /// Closes the unsaved changes question, if it is the shown dialog.
     fn take_unsaved_dialog(&mut self) -> Option<AfterUnsaved> {
-        let &Dialog::Unsaved(after) = self.dialogs.first()? else { return None };
-        self.dialogs.remove(0);
+        let &Dialog::Unsaved(after) = self.dialogs.front()? else { return None };
+        self.dialogs.pop_front();
         Some(after)
     }
 
     /// Focus for the next dialog in the queue, if it has an input.
     fn after_dialog(&self) -> Task<Message> {
-        match self.dialogs.first() {
+        match self.dialogs.front() {
             Some(Dialog::Input { .. }) => focus_dialog_input(),
             _ => Task::none(),
         }
     }
 
     pub(super) fn dialog_input(&mut self, value: String) {
-        if let Some(Dialog::Input { value: v, .. }) = self.dialogs.first_mut() {
+        if let Some(Dialog::Input { value: v, .. }) = self.dialogs.front_mut() {
             *v = value;
         }
     }
 
     pub(super) fn dialog_ok(&mut self) -> Task<Message> {
-        if self.unsaved_dialog_shown() {
+        // The unsaved changes question is answered only by its own buttons.
+        if matches!(self.dialogs.front(), Some(Dialog::Unsaved(_))) {
             return Task::none();
         }
-        let Some(dialog) = self.take_dialog() else { return Task::none() };
-        let task = match dialog {
-            Dialog::Message(_) | Dialog::Unsaved(_) => Task::none(),
-            Dialog::Confirm { action: ConfirmAction::DeleteDocs(targets), .. } => {
+        let task = match self.dialogs.pop_front() {
+            None | Some(Dialog::Message(_) | Dialog::Unsaved(_)) => Task::none(),
+            Some(Dialog::Confirm { action: ConfirmAction::DeleteDocs(targets), .. }) => {
                 self.delete_docs(&targets);
                 Task::none()
             }
-            Dialog::Input { value, action, .. } => self.input_done(Some(value), action),
+            Some(Dialog::Input { value, action, .. }) => self.input_done(Some(value), action),
         };
         Task::batch([task, self.after_dialog()])
     }
 
+    /// Cancel, No, or Esc: closes the shown dialog (the unsaved changes
+    /// question keeping the changes).
     pub(super) fn dialog_cancel(&mut self) -> Task<Message> {
-        let Some(dialog) = self.take_dialog() else { return Task::none() };
-        let task = match dialog {
-            Dialog::Input { action, .. } => self.input_done(None, action),
+        let task = match self.dialogs.pop_front() {
+            Some(Dialog::Input { action, .. }) => self.input_done(None, action),
             _ => Task::none(),
         };
         Task::batch([task, self.after_dialog()])
     }
 
-    /// Unsaved changes: save them, then go on unless saving failed.
+    /// Unsaved changes: save them (choosing a file first for a new map), then
+    /// go on unless saving failed or was cancelled.
     pub(super) fn dialog_save(&mut self) -> Task<Message> {
         let Some(after) = self.take_unsaved_dialog() else { return Task::none() };
-        if let AfterUnsaved::Exit = after {
-            return self.save(true);
-        }
-        let saved = self.save(false);
-        if self.doc.as_ref().is_some_and(|d| d.dirty) {
-            // Not saved (yet): a failure was reported, or Save As asks for a file.
-            saved
-        } else {
-            Task::batch([saved, self.after_unsaved(after)])
-        }
+        self.save(Some(after))
     }
 
     /// Unsaved changes: discard them and go on.
@@ -135,16 +119,6 @@ impl App {
         self.after_unsaved(after)
     }
 
-    /// Closes the shown dialog with Escape: as Cancel would, except that the
-    /// unsaved changes question is just dismissed.
-    pub(super) fn dismiss_dialog(&mut self) -> Task<Message> {
-        if self.unsaved_dialog_shown() {
-            self.dialogs.remove(0);
-            return Task::none();
-        }
-        self.dialog_cancel()
-    }
-
     /// Deletes the pages and directories confirmed for deletion (F11), moving
     /// their files to the Recycle Bin.
     fn delete_docs(&mut self, targets: &[(NodeId, DocType)]) {
@@ -153,7 +127,6 @@ impl App {
         let result = commands::delete_execute(&mut doc.map, targets, &mut |files| {
             trash::delete_all(files).map_err(|e| e.to_string())
         });
-        self.changed_since_update = true;
         self.report(result);
     }
 
@@ -169,14 +142,10 @@ impl App {
                 {
                     doc.checkpoint();
                     doc.map.set_text(id, &v);
-                    self.changed_since_update = true;
                 }
             }
             InputAction::NewNode(id, serial) => match non_empty {
-                Some(v) if doc.map.exists(id) => {
-                    doc.map.set_text(id, &v);
-                    self.changed_since_update = true;
-                }
+                Some(v) if doc.map.exists(id) => doc.map.set_text(id, &v),
                 _ => {
                     // The node goes; changes made meanwhile (a refresh) stay.
                     let parent = doc.map.exists(id).then(|| doc.map.parent(id)).flatten();
@@ -191,9 +160,7 @@ impl App {
                     && doc.map.exists(id)
                 {
                     let result = doc.try_change(|map| commands::rename(map, id, kind, &v));
-                    if self.report(result).is_some() {
-                        self.changed_since_update = true;
-                    }
+                    self.report(result);
                 }
             }
             InputAction::Filter => {

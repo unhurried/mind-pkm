@@ -23,7 +23,7 @@ use tantivy::directory::MmapDirectory;
 use tantivy::query::{BooleanQuery, BoostQuery, Occur, PhraseQuery, Query, TermQuery};
 use tantivy::schema::{FAST, Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value};
 use tantivy::snippet::SnippetGenerator;
-use tantivy::{Index, IndexReader, Order, ReloadPolicy, TantivyDocument, Term, doc};
+use tantivy::{DocAddress, Index, IndexReader, Order, ReloadPolicy, TantivyDocument, Term, doc};
 
 /// Bump whenever the analyzer or the indexed fields change so that old and new
 /// tokens no longer match; update_index() then rebuilds the index from scratch.
@@ -41,6 +41,14 @@ pub const DEFAULT_MAX_RESULTS: usize = 100;
 const FILENAME_BOOST: f32 = 2.0;
 const CONTENT_BOOST: f32 = 1.0;
 const WRITER_MEMORY: usize = 50_000_000;
+
+// The fields of the index.
+const PATH_FIELD: &str = "path";
+const FILENAME_FIELD: &str = "filename";
+const CONTENT_FIELD: &str = "content";
+const PREVIEW_FIELD: &str = "preview";
+const KIND_FIELD: &str = "kind";
+const MODIFIED_FIELD: &str = "modified";
 
 /// One search result: the matched file, its path relative to the document
 /// directory ("/"-separated), its mtime (ms) when it was indexed, and a content
@@ -98,35 +106,34 @@ struct Fields {
     modified: Field,
 }
 
-fn schema() -> (Schema, Fields) {
+fn schema() -> Schema {
     let mut b = Schema::builder();
     let text = |tokenizer: &str| {
-        TextFieldIndexing::default().set_tokenizer(tokenizer).set_index_option(IndexRecordOption::WithFreqsAndPositions)
+        TextOptions::default().set_indexing_options(
+            TextFieldIndexing::default()
+                .set_tokenizer(tokenizer)
+                .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+        )
     };
-    let fields = Fields {
-        path: b.add_text_field("path", STRING | STORED),
-        filename: b.add_text_field(
-            "filename",
-            TextOptions::default().set_indexing_options(text(FILENAME_TOKENIZER)).set_stored(),
-        ),
-        content: b.add_text_field("content", TextOptions::default().set_indexing_options(text(CONTENT_TOKENIZER))),
-        preview: b.add_text_field("preview", STORED),
-        kind: b.add_text_field("kind", STRING),
-        modified: b.add_i64_field("modified", FAST | STORED),
-    };
-    (b.build(), fields)
+    b.add_text_field(PATH_FIELD, STRING | STORED);
+    b.add_text_field(FILENAME_FIELD, text(FILENAME_TOKENIZER).set_stored());
+    b.add_text_field(CONTENT_FIELD, text(CONTENT_TOKENIZER));
+    b.add_text_field(PREVIEW_FIELD, STORED);
+    b.add_text_field(KIND_FIELD, STRING);
+    b.add_i64_field(MODIFIED_FIELD, FAST | STORED);
+    b.build()
 }
 
 fn fields_of(index: &Index) -> Result<Fields, String> {
     let s = index.schema();
     let f = |name: &str| s.get_field(name).map_err(|e| e.to_string());
     Ok(Fields {
-        path: f("path")?,
-        filename: f("filename")?,
-        content: f("content")?,
-        preview: f("preview")?,
-        kind: f("kind")?,
-        modified: f("modified")?,
+        path: f(PATH_FIELD)?,
+        filename: f(FILENAME_FIELD)?,
+        content: f(CONTENT_FIELD)?,
+        preview: f(PREVIEW_FIELD)?,
+        kind: f(KIND_FIELD)?,
+        modified: f(MODIFIED_FIELD)?,
     })
 }
 
@@ -252,7 +259,7 @@ pub fn update_index(doc_dir: &Path) -> Result<(), String> {
         // A stale index (other schema) is replaced wholesale.
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        Index::create_in_dir(&dir, schema().0).map_err(|e| e.to_string())?
+        Index::create_in_dir(&dir, schema()).map_err(|e| e.to_string())?
     } else {
         Index::open_in_dir(&dir).map_err(|e| e.to_string())?
     };
@@ -357,20 +364,13 @@ pub fn search(
 
     let searcher = open_reader(&index)?.searcher();
     let limit = TopDocs::with_limit(max_results.max(1));
-    let addresses: Vec<_> = match sort {
-        SearchSort::Modified => searcher
-            .search(&*query, &limit.order_by_fast_field::<i64>("modified", Order::Desc))
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|(_, a)| a)
-            .collect(),
-        SearchSort::Relevance => searcher
-            .search(&*query, &limit.order_by_score())
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|(_, a)| a)
-            .collect(),
-    };
+    let addresses = match sort {
+        SearchSort::Modified => {
+            searcher.search(&*query, &limit.order_by_fast_field::<i64>(MODIFIED_FIELD, Order::Desc)).map(addresses)
+        }
+        SearchSort::Relevance => searcher.search(&*query, &limit.order_by_score()).map(addresses),
+    }
+    .map_err(|e| e.to_string())?;
 
     let mut generator = SnippetGenerator::create(&searcher, &kq, f.content).map_err(|e| e.to_string())?;
     generator.set_max_num_chars(SNIPPET_CHARS);
@@ -388,6 +388,11 @@ pub fn search(
         });
     }
     Ok(hits)
+}
+
+/// The documents of a ranked result, without what they were ranked by.
+fn addresses<T>(ranked: Vec<(T, DocAddress)>) -> Vec<DocAddress> {
+    ranked.into_iter().map(|(_, a)| a).collect()
 }
 
 fn best_snippet(generator: &SnippetGenerator, preview: &str) -> Snippet {

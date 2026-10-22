@@ -12,7 +12,7 @@ pub mod next_steps;
 use crate::mindmap::{MindMap, NodeId};
 use crate::paths;
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Date format used for due dates and journal entries throughout the map and pages.
@@ -238,24 +238,15 @@ pub fn collect_nodes_by_linked_file(map: &MindMap, id: NodeId) -> HashMap<String
 /// `<page>.assets/` - the page's node.
 pub fn find_node_for_file(nodes_by_file: &HashMap<String, NodeId>, file: &Path, doc_dir: &Path) -> Option<NodeId> {
     let doc_key = paths::key(doc_dir);
-    let current = paths::normalize(file);
-    if let Some(&n) = nodes_by_file.get(&paths::key(&current)) {
-        return Some(n);
-    }
-    let mut dir = current.parent();
-    while let Some(d) = dir {
-        if let Some(&n) = nodes_by_file.get(&paths::key(d)) {
+    for path in paths::normalize(file).ancestors() {
+        let key = paths::key(path);
+        let page_key = page_file_of_assets_dir(path).map(|page| paths::key(&page));
+        if let Some(&n) = nodes_by_file.get(&key).or_else(|| nodes_by_file.get(page_key.as_ref()?)) {
             return Some(n);
         }
-        if let Some(page) = page_file_of_assets_dir(d)
-            && let Some(&n) = nodes_by_file.get(&paths::key(&page))
-        {
-            return Some(n);
-        }
-        if paths::key(d) == doc_key {
+        if key == doc_key {
             break;
         }
-        dir = d.parent();
     }
     None
 }
@@ -274,8 +265,8 @@ pub fn sorted_selection(map: &MindMap, selection: &[NodeId]) -> Vec<NodeId> {
     let mut nodes: Vec<NodeId> = selection.iter().copied().filter(|n| order.contains_key(n)).collect();
     nodes.sort_by_key(|n| order[n]);
     nodes.dedup();
-    let all = nodes.clone();
-    nodes.retain(|&n| !all.iter().any(|&other| other != n && map.is_ancestor(other, n)));
+    let selected: HashSet<NodeId> = nodes.iter().copied().collect();
+    nodes.retain(|&n| !map.ancestors(n).any(|a| selected.contains(&a)));
     nodes
 }
 

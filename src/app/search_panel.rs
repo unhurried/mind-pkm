@@ -15,33 +15,23 @@ pub const SEARCH_INPUT_ID: &str = "search-input";
 pub const RESULTS_SCROLL_ID: &str = "search-results";
 pub const ROW_HEIGHT: f32 = 26.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SortOption(pub SearchSort);
+/// The orders and scopes the panel offers.
+pub const SORTS: [SearchSort; 2] = [SearchSort::Modified, SearchSort::Relevance];
+pub const SCOPES: [SearchScope; 3] = [SearchScope::Pages, SearchScope::Assets, SearchScope::All];
 
-impl SortOption {
-    pub const ALL: [SortOption; 2] = [SortOption(SearchSort::Modified), SortOption(SearchSort::Relevance)];
-}
-
-impl fmt::Display for SortOption {
+// Their labels in the panel's drop-downs.
+impl fmt::Display for SearchSort {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self.0 {
+        f.write_str(match self {
             SearchSort::Modified => "Last modified",
             SearchSort::Relevance => "Relevance",
         })
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScopeOption(pub SearchScope);
-
-impl ScopeOption {
-    pub const ALL: [ScopeOption; 3] =
-        [ScopeOption(SearchScope::Pages), ScopeOption(SearchScope::Assets), ScopeOption(SearchScope::All)];
-}
-
-impl fmt::Display for ScopeOption {
+impl fmt::Display for SearchScope {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self.0 {
+        f.write_str(match self {
             SearchScope::Pages => "Pages",
             SearchScope::Assets => "Attachments",
             SearchScope::All => "Both",
@@ -49,12 +39,25 @@ impl fmt::Display for ScopeOption {
     }
 }
 
+/// What the keys act on, as far as can be told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelFocus {
+    /// The map: the panel is closed, or a node was clicked.
+    #[default]
+    Map,
+    /// The keyword box, since it was focused or typed in: only the function
+    /// keys reach the map.
+    Input,
+    /// The result list, since a result was clicked: arrow keys and Enter act on it.
+    Results,
+}
+
 #[derive(Debug, Clone)]
 pub enum SearchMsg {
     QueryChanged(String),
     Submit,
-    Sort(SortOption),
-    Scope(ScopeOption),
+    Sort(SearchSort),
+    Scope(SearchScope),
     Done(u64, Result<Vec<SearchHit>, String>),
     RowClicked(usize),
     RowDoubleClicked(usize),
@@ -68,8 +71,8 @@ pub struct SearchPanel {
     pub open: bool,
     pub doc_dir: Option<PathBuf>,
     pub query: String,
-    pub sort: SortOption,
-    pub scope: ScopeOption,
+    pub sort: SearchSort,
+    pub scope: SearchScope,
     pub hits: Vec<SearchHit>,
     /// The node each hit resolves to (see `pkm::find_node_for_file`).
     pub nodes: Vec<Option<NodeId>>,
@@ -77,11 +80,7 @@ pub struct SearchPanel {
     pub status: String,
     pub searching: bool,
     pub updating: bool,
-    /// Arrow keys and Enter act on the result list (set by clicking a result).
-    pub results_focused: bool,
-    /// The keyword box has the keyboard (as far as can be told: since it was
-    /// focused or typed in, and no node or result was clicked).
-    pub input_focused: bool,
+    pub focus: PanelFocus,
     search_id: u64,
 }
 
@@ -91,16 +90,15 @@ impl Default for SearchPanel {
             open: false,
             doc_dir: None,
             query: String::new(),
-            sort: SortOption(SearchSort::Modified),
-            scope: ScopeOption(SearchScope::Pages),
+            sort: SearchSort::Modified,
+            scope: SearchScope::Pages,
             hits: Vec::new(),
             nodes: Vec::new(),
             selected: None,
             status: " ".into(),
             searching: false,
             updating: false,
-            results_focused: false,
-            input_focused: false,
+            focus: PanelFocus::Map,
             search_id: 0,
         }
     }
@@ -110,8 +108,7 @@ impl App {
     pub(super) fn open_search(&mut self) -> Task<Message> {
         let Some(doc_dir) = self.doc_dir(true) else { return Task::none() };
         self.search.open = true;
-        self.search.input_focused = true;
-        self.search.results_focused = false;
+        self.search.focus = PanelFocus::Input;
         self.search.doc_dir = Some(doc_dir.clone());
         self.viewport_size = None;
         let focus = Task::batch([operation::focus(SEARCH_INPUT_ID), operation::select_all(SEARCH_INPUT_ID)]);
@@ -151,7 +148,7 @@ impl App {
         self.search.status = "Searching...".into();
         self.search.search_id += 1;
         let id = self.search.search_id;
-        let (query, sort, scope) = (self.search.query.clone(), self.search.sort.0, self.search.scope.0);
+        let (query, sort, scope) = (self.search.query.clone(), self.search.sort, self.search.scope);
         Task::perform(
             blocking(move || search::search(&doc_dir, &query, sort, scope, search::DEFAULT_MAX_RESULTS)),
             move |r| Message::Search(SearchMsg::Done(id, r)),
@@ -162,8 +159,7 @@ impl App {
         match msg {
             SearchMsg::QueryChanged(q) => {
                 self.search.query = q;
-                self.search.input_focused = true;
-                self.search.results_focused = false;
+                self.search.focus = PanelFocus::Input;
                 Task::none()
             }
             SearchMsg::Submit => self.run_search(),
@@ -205,8 +201,7 @@ impl App {
             }
             SearchMsg::RowClicked(i) => {
                 self.search.selected = Some(i);
-                self.search.results_focused = true;
-                self.search.input_focused = false;
+                self.search.focus = PanelFocus::Results;
                 Task::none()
             }
             SearchMsg::RowDoubleClicked(i) => {
@@ -236,8 +231,7 @@ impl App {
             SearchMsg::SelectNode => self.select_hit_node(),
             SearchMsg::Close => {
                 self.search.open = false;
-                self.search.results_focused = false;
-                self.search.input_focused = false;
+                self.search.focus = PanelFocus::Map;
                 self.viewport_size = None;
                 Task::none()
             }

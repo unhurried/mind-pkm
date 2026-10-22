@@ -5,7 +5,7 @@ use super::dialog::Dialog;
 use super::doc::Doc;
 use super::drag::DropPlace;
 use super::layout::{MapLayout, NodeBox};
-use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SEARCH_INPUT_ID, ScopeOption, SearchMsg, SortOption};
+use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SCOPES, SEARCH_INPUT_ID, SORTS, SearchMsg};
 use super::{App, DIALOG_INPUT_ID, MAP_SCROLL_ID, Message};
 use crate::mindmap::{ICON_CHECKMARK, MindMap, NodeId};
 use crate::pkm;
@@ -18,7 +18,8 @@ use iced::widget::{
     rich_text, row, scrollable, space, stack, text, text_input, tooltip,
 };
 use iced::{
-    Alignment, Background, Border, Color, Element, Fill, Font, Length, Point, Rectangle, Renderer, Size, Theme, mouse,
+    Alignment, Background, Color, Element, Fill, Font, Length, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector,
+    border, mouse,
 };
 use std::collections::HashMap;
 
@@ -185,7 +186,7 @@ impl App {
         if let Some(i) = self.menu {
             layers = layers.push(self.menu_dropdown(i));
         }
-        if let Some(dialog) = self.dialogs.first() {
+        if let Some(dialog) = self.dialogs.front() {
             layers = layers.push(self.dialog_view(dialog));
         }
         // The pointer stays the normal arrow everywhere.
@@ -229,11 +230,7 @@ impl App {
         }
         container(bar)
             .width(Fill)
-            .style(|_| container::Style {
-                background: Some(Background::Color(BAR_BG)),
-                border: Border { color: BAR_BORDER, width: 1.0, radius: 0.0.into() },
-                ..Default::default()
-            })
+            .style(|_| container::background(BAR_BG).border(border::color(BAR_BORDER).width(1)))
             .into()
     }
 
@@ -248,7 +245,6 @@ impl App {
                 )
                 .width(Fill)
                 .padding([5, 12])
-                .style(button::text)
                 .style(|theme: &Theme, status| {
                     let mut s = button::text(theme, status);
                     s.text_color = Color::BLACK;
@@ -260,15 +256,14 @@ impl App {
                 .on_press(Message::Command(*cmd)),
             );
         }
-        let dropdown = container(list).padding(4).style(|_| container::Style {
-            background: Some(Background::Color(Color::WHITE)),
-            border: Border { color: Color::from_rgb(0.75, 0.77, 0.80), width: 1.0, radius: 4.0.into() },
-            shadow: iced::Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
-                offset: iced::Vector::new(0.0, 2.0),
-                blur_radius: 8.0,
-            },
-            ..Default::default()
+        let dropdown = container(list).padding(4).style(|_| {
+            container::background(Color::WHITE)
+                .border(border::color(Color::from_rgb(0.75, 0.77, 0.80)).width(1).rounded(4))
+                .shadow(Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
+                    offset: Vector::new(0.0, 2.0),
+                    blur_radius: 8.0,
+                })
         });
         stack![
             mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Menu(None)),
@@ -297,7 +292,7 @@ impl App {
         .padding([3, 8])
         .width(Fill)
         .clip(true)
-        .style(|_| container::Style { background: Some(Background::Color(BAR_BG)), ..Default::default() })
+        .style(|_| container::background(BAR_BG))
         .into()
     }
 
@@ -351,7 +346,7 @@ impl App {
         let map = mouse_area(map).on_press(Message::PanStart);
         // Ctrl+wheel zooms instead of scrolling.
         container(super::ctrl_wheel::ctrl_wheel(map, Message::ZoomWheel))
-            .style(|_| container::Style { background: Some(Background::Color(MAP_BG)), ..Default::default() })
+            .style(|_| container::background(MAP_BG))
             .width(Fill)
             .height(Fill)
             .into()
@@ -398,27 +393,21 @@ impl App {
                     .on_press(Message::LinkClicked(id)),
             ));
         }
+        // The focused node is always among the selected ones.
         let selected = doc.selection.contains(&id);
-        let focused = doc.focus == id;
+        let border_width = if doc.focus == id { 2 } else { 1 };
         let boxed = container(content)
             .padding(NODE_PADDING.map(|p| p * zoom))
             .width(b.rect.width)
             .height(b.rect.height)
             .align_y(Alignment::Center)
             .style(move |_| {
-                let (bg, border) = if selected {
-                    (
-                        Some(SELECTED_BG),
-                        Border {
-                            color: SELECTED_BORDER,
-                            width: if focused { 2.0 } else { 1.0 },
-                            radius: (NODE_RADIUS * zoom).into(),
-                        },
-                    )
+                if selected {
+                    container::background(SELECTED_BG)
+                        .border(border::color(SELECTED_BORDER).width(border_width).rounded(NODE_RADIUS * zoom))
                 } else {
-                    (None, Border { color: Color::TRANSPARENT, width: 1.0, radius: (NODE_RADIUS * zoom).into() })
-                };
-                container::Style { background: bg.map(Background::Color), border, ..Default::default() }
+                    container::Style::default()
+                }
             });
         mouse_area(boxed).on_press(Message::NodeClicked(id)).on_double_click(Message::NodeDoubleClicked(id)).into()
     }
@@ -436,8 +425,8 @@ impl App {
                 .size(12)
                 .padding(4)
                 .width(Fill),
-            pick_list(ScopeOption::ALL, Some(s.scope), |v| Message::Search(SearchMsg::Scope(v))).text_size(12),
-            pick_list(SortOption::ALL, Some(s.sort), |v| Message::Search(SearchMsg::Sort(v))).text_size(12),
+            pick_list(SCOPES, Some(s.scope), |v| Message::Search(SearchMsg::Scope(v))).text_size(12),
+            pick_list(SORTS, Some(s.sort), |v| Message::Search(SearchMsg::Sort(v))).text_size(12),
             icon_button(
                 PanelIcon::Search,
                 "Search",
@@ -476,21 +465,17 @@ impl App {
                 controls,
                 header,
                 container(scrollable(rows).id(RESULTS_SCROLL_ID).width(Fill).height(Fill))
-                    .style(|_| container::Style {
-                        background: Some(Background::Color(Color::WHITE)),
-                        border: Border { color: PANEL_BORDER, width: 1.0, radius: 2.0.into() },
-                        ..Default::default()
-                    })
+                    .style(
+                        |_| container::background(Color::WHITE).border(border::color(PANEL_BORDER).width(1).rounded(2))
+                    )
                     .height(Fill),
                 footer,
             ]
             .spacing(6),
         )
         .padding(8)
-        .style(|_| container::Style {
-            background: Some(Background::Color(Color::from_rgb(0.97, 0.97, 0.98))),
-            border: Border { color: PANEL_BORDER, width: 1.0, radius: 0.0.into() },
-            ..Default::default()
+        .style(|_| {
+            container::background(Color::from_rgb(0.97, 0.97, 0.98)).border(border::color(PANEL_BORDER).width(1))
         })
         .into()
     }
@@ -498,63 +483,58 @@ impl App {
     // --- Dialogs ---
 
     fn dialog_view(&self, dialog: &Dialog) -> Element<'_, Message> {
-        let ok = |label: &'static str| button(text(label).size(13).center()).width(90).on_press(Message::DialogOk);
-        let cancel = |label: &'static str| {
-            button(text(label).size(13).center()).width(90).style(button::secondary).on_press(Message::DialogCancel)
-        };
-        let body: Element<Message> = match dialog {
-            Dialog::Message(msg) => {
-                column![text(msg.clone()).size(13), row![space().width(Fill), ok("OK")]].spacing(16).into()
-            }
+        let ok = |label| dialog_button(label, button::primary, Message::DialogOk);
+        let cancel = |label| dialog_button(label, button::secondary, Message::DialogCancel);
+        let (body, buttons): (Element<Message>, Vec<Element<Message>>) = match dialog {
+            Dialog::Message(msg) => (text(msg.clone()).size(13).into(), vec![ok("OK")]),
             Dialog::Confirm { text: question, .. } => {
-                column![text(question.clone()).size(13), row![space().width(Fill), ok("Yes"), cancel("No")].spacing(8)]
-                    .spacing(16)
-                    .into()
+                (text(question.clone()).size(13).into(), vec![ok("Yes"), cancel("No")])
             }
-            Dialog::Input { prompt, value, .. } => column![
-                text(prompt.clone()).size(13).font(if prompt.contains('\n') { Font::MONOSPACE } else { APP_FONT }),
-                text_input("", value)
-                    .id(DIALOG_INPUT_ID)
-                    .on_input(Message::DialogInput)
-                    .on_submit(Message::DialogOk)
-                    .size(13)
-                    .padding(6),
-                row![space().width(Fill), ok("OK"), cancel("Cancel")].spacing(8)
-            ]
-            .spacing(12)
-            .into(),
-            Dialog::Unsaved(_) => column![
-                text("The map has unsaved changes. Save them?").size(13),
-                row![
-                    space().width(Fill),
-                    button(text("Save").size(13).center()).width(90).on_press(Message::DialogSave),
-                    button(text("Don't Save").size(13).center())
-                        .width(100)
-                        .style(button::secondary)
-                        .on_press(Message::DialogDiscard),
-                    cancel("Cancel"),
+            Dialog::Input { prompt, value, .. } => (
+                column![
+                    text(prompt.clone()).size(13).font(if prompt.contains('\n') { Font::MONOSPACE } else { APP_FONT }),
+                    text_input("", value)
+                        .id(DIALOG_INPUT_ID)
+                        .on_input(Message::DialogInput)
+                        .on_submit(Message::DialogOk)
+                        .size(13)
+                        .padding(6),
                 ]
-                .spacing(8)
-            ]
-            .spacing(16)
-            .into(),
+                .spacing(12)
+                .into(),
+                vec![ok("OK"), cancel("Cancel")],
+            ),
+            Dialog::Unsaved(_) => (
+                text("The map has unsaved changes. Save them?").size(13).into(),
+                vec![
+                    dialog_button("Save", button::primary, Message::DialogSave),
+                    dialog_button("Don't Save", button::secondary, Message::DialogDiscard),
+                    cancel("Cancel"),
+                ],
+            ),
         };
-        let card = container(body).padding(20).max_width(560).style(|_| container::Style {
-            background: Some(Background::Color(Color::WHITE)),
-            border: Border { color: Color::from_rgb(0.7, 0.72, 0.75), width: 1.0, radius: 8.0.into() },
-            shadow: iced::Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
-                offset: iced::Vector::new(0.0, 4.0),
-                blur_radius: 16.0,
-            },
-            text_color: Some(Color::BLACK),
-            ..Default::default()
+        let buttons = row![space().width(Fill)].extend(buttons).spacing(8);
+        let card = container(column![body, buttons].spacing(16)).padding(20).max_width(560).style(|_| {
+            container::background(Color::WHITE)
+                .border(border::color(Color::from_rgb(0.7, 0.72, 0.75)).width(1).rounded(8))
+                .shadow(Shadow {
+                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
+                    offset: Vector::new(0.0, 4.0),
+                    blur_radius: 16.0,
+                })
+                .color(Color::BLACK)
         });
-        opaque(center(card).style(|_| container::Style {
-            background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.25))),
-            ..Default::default()
-        }))
+        opaque(center(card).style(|_| container::background(Color::from_rgba(0.0, 0.0, 0.0, 0.25))))
     }
+}
+
+/// A dialog's button: all of them have the same width.
+fn dialog_button<'a>(
+    label: &'a str,
+    style: fn(&Theme, button::Status) -> button::Style,
+    on_press: Message,
+) -> Element<'a, Message> {
+    button(text(label).size(13).center()).width(100).style(style).on_press(on_press).into()
 }
 
 const FILE_COLUMN: f32 = 260.0;
@@ -606,21 +586,8 @@ fn highlighted_spans(snippet: &Snippet) -> Vec<Span<'static, (), Font>> {
 
 /// The child count shown right of a folded node; clicking it unfolds the node.
 fn fold_marker<'a>(b: &NodeBox, count: usize, zoom: f32) -> Element<'a, Message> {
-    let size = FOLD_MARKER_SIZE * zoom;
-    let marker = button(text(count.to_string()).size(FOLD_MARKER_FONT_SIZE * zoom).center())
-        .width(size)
-        .height(size)
-        .padding(0)
-        .style(move |_, _| button::Style {
-            background: Some(Background::Color(Color::WHITE)),
-            text_color: MUTED,
-            border: Border { color: EDGE_COLOR, width: 1.0, radius: (size / 2.0).into() },
-            ..Default::default()
-        })
-        .on_press(Message::FoldClicked(b.id));
-    pin(super::arrow_cursor::hand_cursor(marker))
-        .position(Point::new(b.rect.x + b.rect.width + 2.0 * zoom, b.rect.center_y() - size / 2.0))
-        .into()
+    let center = Point::new(b.rect.x + b.rect.width + (2.0 + FOLD_MARKER_SIZE / 2.0) * zoom, b.rect.center_y());
+    fold_button(count.to_string(), b.id, center, zoom, true)
 }
 
 /// Where the edges from a node to its shown children branch: halfway to the
@@ -638,45 +605,44 @@ fn branch_x(start: f32, child: f32) -> f32 {
 /// The clickable branch point of an unfolded node: invisible until hovered,
 /// then a circle like the fold marker; clicking it folds the node.
 fn branch_handle<'a>(id: NodeId, point: Point, zoom: f32) -> Element<'a, Message> {
+    fold_button("−".into(), id, point, zoom, false)
+}
+
+/// A round button centered at `center` that folds or unfolds `id`; unless
+/// `always_shown`, it shows only while hovered.
+fn fold_button<'a>(label: String, id: NodeId, center: Point, zoom: f32, always_shown: bool) -> Element<'a, Message> {
     let size = FOLD_MARKER_SIZE * zoom;
-    let handle = button(text("−").size(FOLD_MARKER_FONT_SIZE * zoom).center())
+    let button = button(text(label).size(FOLD_MARKER_FONT_SIZE * zoom).center())
         .width(size)
         .height(size)
         .padding(0)
-        .style(move |_, status| match status {
-            button::Status::Hovered | button::Status::Pressed => button::Style {
-                background: Some(Background::Color(Color::WHITE)),
-                text_color: MUTED,
-                border: Border { color: EDGE_COLOR, width: 1.0, radius: (size / 2.0).into() },
-                ..Default::default()
-            },
-            _ => button::Style { text_color: Color::TRANSPARENT, ..Default::default() },
+        .style(move |_, status| {
+            if always_shown || matches!(status, button::Status::Hovered | button::Status::Pressed) {
+                button::Style {
+                    background: Some(Background::Color(Color::WHITE)),
+                    text_color: MUTED,
+                    border: border::color(EDGE_COLOR).width(1).rounded(size / 2.0),
+                    ..Default::default()
+                }
+            } else {
+                button::Style { text_color: Color::TRANSPARENT, ..Default::default() }
+            }
         })
         .on_press(Message::FoldClicked(id));
-    pin(super::arrow_cursor::hand_cursor(handle))
-        .position(Point::new(point.x - size / 2.0, point.y - size / 2.0))
-        .into()
+    pin(super::arrow_cursor::hand_cursor(button)).position(center - Vector::new(size / 2.0, size / 2.0)).into()
 }
 
 /// Where dragged nodes would be dropped: an outline around the target for a
 /// child, a line along its top or bottom edge for a sibling.
 fn drop_indicator<'a>(r: Rectangle, place: DropPlace) -> Element<'a, Message> {
     const LINE: f32 = 3.0;
-    let line = || {
-        container(space())
-            .width(r.width)
-            .height(LINE)
-            .style(|_| container::Style { background: Some(Background::Color(SELECTED_BORDER)), ..Default::default() })
-    };
+    let line = || container(space()).width(r.width).height(LINE).style(|_| container::background(SELECTED_BORDER));
     let (marker, position): (Element<'a, Message>, Point) = match place {
         DropPlace::Child => (
             container(space())
                 .width(r.width)
                 .height(r.height)
-                .style(|_| container::Style {
-                    border: Border { color: SELECTED_BORDER, width: 2.0, radius: 5.0.into() },
-                    ..Default::default()
-                })
+                .style(|_| container::Style::default().border(border::color(SELECTED_BORDER).width(2).rounded(5)))
                 .into(),
             r.position(),
         ),
