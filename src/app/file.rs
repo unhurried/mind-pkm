@@ -86,9 +86,10 @@ impl App {
         }
     }
 
-    /// Quits the application, remembering how the map is shown.
+    /// Quits the application, remembering how the map and the window are shown.
     fn exit(&self) -> Task<Message> {
         self.remember_view();
+        settings::set_window(&self.window);
         iced::exit()
     }
 

@@ -32,8 +32,9 @@ use drag::NodeDrag;
 use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::scrollable;
-use iced::{Size, Subscription, Task, Vector, window};
+use iced::{Point, Size, Subscription, Task, Vector, window};
 use search_panel::{SearchMsg, SearchPanel};
+use settings::WindowGeometry;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -48,13 +49,22 @@ const MAP_SCROLL_ID: &str = "map";
 const DIALOG_INPUT_ID: &str = "dialog-input";
 
 pub fn run(initial: Option<PathBuf>) -> iced::Result {
-    iced::application(move || App::boot(initial.clone()), App::update, App::view)
+    let geometry =
+        settings::window().unwrap_or(WindowGeometry { size: INITIAL_WINDOW_SIZE, position: None, maximized: false });
+    let position = geometry.position.map_or(window::Position::Default, window::Position::Specific);
+    iced::application(move || App::boot(initial.clone(), geometry), App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
         .theme(App::theme)
         .default_font(view::APP_FONT)
         .exit_on_close_request(false)
-        .window(window::Settings { size: INITIAL_WINDOW_SIZE, icon: window_icon(), ..Default::default() })
+        .window(window::Settings {
+            size: geometry.size,
+            position,
+            maximized: geometry.maximized,
+            icon: window_icon(),
+            ..Default::default()
+        })
         .run()
 }
 
@@ -93,6 +103,13 @@ pub enum Message {
     NodeDragEnd,
     NodeDragCancel,
     WindowResized(Size),
+    /// The window moved to this position on the screen.
+    WindowMoved(Point),
+    /// Whether the window is maximized or minimized, asked after it was resized or moved.
+    WindowState {
+        maximized: bool,
+        minimized: bool,
+    },
     CloseRequested,
     Tick,
     DialogInput(String),
@@ -124,6 +141,8 @@ impl Message {
                 | Message::PanEnd
                 | Message::NodeDragMove(_)
                 | Message::NodeDragCancel
+                | Message::WindowMoved(_)
+                | Message::WindowState { .. }
         )
     }
 
@@ -153,6 +172,10 @@ pub struct App {
     menu: Option<usize>,
     modifiers: Modifiers,
     window_size: Size,
+    /// The window's position as last reported.
+    window_position: Option<Point>,
+    /// The window as it is to be restored on the next start.
+    window: WindowGeometry,
     /// The map's scroll position, as last scrolled to or reported.
     scroll_offset: Vector,
     /// The size of the map's scrollable as last reported; None when it may have changed.
@@ -177,8 +200,11 @@ pub struct App {
 }
 
 impl App {
-    fn boot(initial: Option<PathBuf>) -> (Self, Task<Message>) {
+    fn boot(initial: Option<PathBuf>, window: WindowGeometry) -> (Self, Task<Message>) {
         let mut app = App::new();
+        app.window_size = window.size;
+        app.window_position = window.position;
+        app.window = window;
         let explicit = initial.is_some();
         let task = match initial.or_else(settings::last_file) {
             Some(path) if explicit || path.exists() => app.open_path(path),
@@ -197,6 +223,8 @@ impl App {
             menu: None,
             modifiers: Modifiers::default(),
             window_size: INITIAL_WINDOW_SIZE,
+            window_position: None,
+            window: WindowGeometry { size: INITIAL_WINDOW_SIZE, position: None, maximized: false },
             scroll_offset: Vector::ZERO,
             viewport_size: None,
             zoom: 1.0,
@@ -237,6 +265,10 @@ impl App {
                 _ => None,
             }),
             window::resize_events().map(|(_, size)| Message::WindowResized(size)),
+            iced::event::listen_with(|event, _status, _window| match event {
+                iced::Event::Window(window::Event::Moved(position)) => Some(Message::WindowMoved(position)),
+                _ => None,
+            }),
             window::close_requests().map(|_| Message::CloseRequested),
             iced::time::every(TICK).map(|_| Message::Tick),
             // Pointer tracking only while panning, so ordinary moves cost nothing.
@@ -327,8 +359,10 @@ impl App {
                 Task::none()
             }
             Message::ZoomWheel(delta, at) => self.zoom_wheel(delta, at),
-            Message::WindowResized(size) => {
-                self.window_resized(size);
+            Message::WindowResized(size) => self.window_resized(size),
+            Message::WindowMoved(position) => self.window_moved(position),
+            Message::WindowState { maximized, minimized } => {
+                self.window_state(maximized, minimized);
                 Task::none()
             }
             Message::CloseRequested => self.guard_unsaved(AfterUnsaved::Exit),
