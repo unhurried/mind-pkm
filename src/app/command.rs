@@ -87,8 +87,8 @@ impl App {
         let focus = doc.focus;
         match cmd {
             Command::New | Command::Open | Command::Exit => Task::none(),
-            Command::Save => self.save(false),
-            Command::SaveAs => self.choose_file(FileAction::SaveAs),
+            Command::Save => self.save(None),
+            Command::SaveAs => self.choose_file(FileAction::SaveAs(None)),
             Command::Undo => {
                 doc.undo();
                 Task::none()

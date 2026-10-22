@@ -18,8 +18,8 @@ const NEW_MAP_DOC_DIR: &str = "C:\\path\\to\\documents";
 #[derive(Debug, Clone, Copy)]
 pub enum FileAction {
     Open,
-    SaveAs,
-    SaveAsThenExit,
+    /// Save As, then what the unsaved changes question was asked for, if anything.
+    SaveAs(Option<AfterUnsaved>),
 }
 
 /// What to do once the user dealt with unsaved changes.
@@ -90,30 +90,30 @@ impl App {
         iced::exit()
     }
 
-    /// Saves to the map's file (or asks for one first), then exits if `then_exit`.
-    pub(super) fn save(&mut self, then_exit: bool) -> Task<Message> {
+    /// Saves to the map's file (or asks for one first), then goes on with `then`.
+    pub(super) fn save(&mut self, then: Option<AfterUnsaved>) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
-        let Some(path) = doc.map.path().map(Path::to_path_buf) else {
-            return self.choose_file(if then_exit { FileAction::SaveAsThenExit } else { FileAction::SaveAs });
-        };
-        if self.save_to(&path) && then_exit { self.exit() } else { Task::none() }
+        match doc.map.path().map(Path::to_path_buf) {
+            Some(path) => self.save_to(&path, then),
+            None => self.choose_file(FileAction::SaveAs(then)),
+        }
     }
 
-    /// Saves the map to `path`; a failure is shown to the user.
-    fn save_to(&mut self, path: &Path) -> bool {
-        let Some(doc) = &mut self.doc else { return false };
-        match doc.map.save(path) {
-            Ok(()) => {
-                doc.dirty = false;
-                settings::set_last_file(path);
-                self.remember_view();
-                self.status = format!("saved {}", path.display());
-                true
-            }
-            Err(e) => {
-                self.message(format!("failed to save the map: {e}"));
-                false
-            }
+    /// Saves the map to `path`, then goes on with `then`; a failure is shown
+    /// to the user instead.
+    fn save_to(&mut self, path: &Path, then: Option<AfterUnsaved>) -> Task<Message> {
+        let Some(doc) = &mut self.doc else { return Task::none() };
+        if let Err(e) = doc.map.save(path) {
+            self.message(format!("failed to save the map: {e}"));
+            return Task::none();
+        }
+        doc.dirty = false;
+        settings::set_last_file(path);
+        self.remember_view();
+        self.status = format!("saved {}", path.display());
+        match then {
+            Some(after) => self.after_unsaved(after),
+            None => Task::none(),
         }
     }
 
@@ -127,7 +127,7 @@ impl App {
                 }
                 let handle = match action {
                     FileAction::Open => dialog.pick_file().await,
-                    FileAction::SaveAs | FileAction::SaveAsThenExit => dialog.set_file_name("map.mm").save_file().await,
+                    FileAction::SaveAs(_) => dialog.set_file_name("map.mm").save_file().await,
                 };
                 handle.map(|h| h.path().to_path_buf())
             },
@@ -140,10 +140,9 @@ impl App {
         let Some(path) = path else { return Task::none() };
         match action {
             FileAction::Open => self.open_path(path),
-            FileAction::SaveAs | FileAction::SaveAsThenExit => {
+            FileAction::SaveAs(then) => {
                 let path = if path.extension().is_none() { path.with_extension("mm") } else { path };
-                let exit = matches!(action, FileAction::SaveAsThenExit);
-                if self.save_to(&path) && exit { self.exit() } else { Task::none() }
+                self.save_to(&path, then)
             }
         }
     }

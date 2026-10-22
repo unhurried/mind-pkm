@@ -111,19 +111,11 @@ impl App {
         Task::batch([task, self.after_dialog()])
     }
 
-    /// Unsaved changes: save them, then go on unless saving failed.
+    /// Unsaved changes: save them (choosing a file first for a new map), then
+    /// go on unless saving failed or was cancelled.
     pub(super) fn dialog_save(&mut self) -> Task<Message> {
         let Some(after) = self.take_unsaved_dialog() else { return Task::none() };
-        if let AfterUnsaved::Exit = after {
-            return self.save(true);
-        }
-        let saved = self.save(false);
-        if self.doc.as_ref().is_some_and(|d| d.dirty) {
-            // Not saved (yet): a failure was reported, or Save As asks for a file.
-            saved
-        } else {
-            Task::batch([saved, self.after_unsaved(after)])
-        }
+        self.save(Some(after))
     }
 
     /// Unsaved changes: discard them and go on.

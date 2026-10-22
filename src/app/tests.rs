@@ -3,7 +3,7 @@
 
 use super::command::Command;
 use super::dialog::Dialog;
-use super::file::AfterUnsaved;
+use super::file::{AfterUnsaved, FileAction};
 use super::{App, Message, settings};
 use crate::mindmap::MindMap;
 use crate::pkm::filter::Filter;
@@ -129,6 +129,33 @@ fn new_map_with_unsaved_changes_can_discard_them() {
     assert!(!doc.dirty && doc.map.path().is_none());
     assert_eq!(doc.map.text(doc.map.root()), "Map");
     assert_eq!(root_texts(&app), vec!["config", "ToDo"]);
+}
+
+#[test]
+fn saving_a_new_map_from_the_unsaved_changes_question_goes_on_once_saved() {
+    let mut app = edited_app();
+    send(&mut app, Message::Command(Command::New));
+    // The map has no file yet: Save asks for one first.
+    send(&mut app, Message::DialogSave);
+    assert!(app.dialogs.is_empty());
+    assert_eq!(root_texts(&app), vec!["x"]);
+    let dir = tempfile::tempdir().unwrap();
+    send(&mut app, Message::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::New)), Some(dir.path().join("saved"))));
+    let saved = MindMap::load(&dir.path().join("saved.mm")).unwrap();
+    assert_eq!(saved.child_texts(saved.root()), vec!["x"]);
+    // Then the new map.
+    assert!(map(&app).path().is_none());
+    assert_eq!(root_texts(&app), vec!["config", "ToDo"]);
+}
+
+#[test]
+fn cancelling_save_as_from_the_unsaved_changes_question_keeps_the_changes() {
+    let mut app = edited_app();
+    send(&mut app, Message::CloseRequested);
+    send(&mut app, Message::DialogSave);
+    send(&mut app, Message::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::Exit)), None));
+    assert!(app.doc.as_ref().unwrap().dirty);
+    assert_eq!(root_texts(&app), vec!["x"]);
 }
 
 #[test]
