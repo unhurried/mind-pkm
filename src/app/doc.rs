@@ -327,13 +327,10 @@ impl Doc {
     /// Fold One Level (F3) or Unfold One Level (F4) on every selected node.
     pub(super) fn fold_one_level(&mut self, fold: bool) {
         let selection = self.sorted_selection();
+        let fold_one_level = if fold { commands::fold_one_level } else { commands::unfold_one_level };
         self.checkpoint();
         for n in selection {
-            if fold {
-                commands::fold_one_level(&mut self.map, n);
-            } else {
-                commands::unfold_one_level(&mut self.map, n);
-            }
+            fold_one_level(&mut self.map, n);
         }
     }
 
