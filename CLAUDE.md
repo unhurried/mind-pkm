@@ -17,9 +17,9 @@ cargo build --release                      # target/release/mind-pkm(.exe)
 cargo build --release --target x86_64-pc-windows-gnu   # Windows exe from Linux (needs mingw-w64)
 ```
 
-The first build downloads the IPADIC dictionary (lindera's `embed-ipadic`), which is embedded in the binary. A push to `main` releases the `Cargo.toml` version as tag `v<version>` unless that tag exists (`.github/workflows/build.yml`, Windows runner) - bump the version to release.
+The first build downloads the IPADIC dictionary (lindera's `embed-ipadic`; embedded in the binary) into `.cache/lindera/` (`.cargo/config.toml`), which every profile, target and toolchain shares and `cargo clean` keeps. A push to `main` releases the `Cargo.toml` version as tag `v<version>` unless that tag exists (`.github/workflows/build.yml`, Windows runner) - bump the version to release.
 
-The Rust toolchain is pinned in `rust-toolchain.toml` (CI reads it too); bump it on purpose, fixing new lints in the same change. In Claude Code cloud sessions `.claude/hooks/session-start.sh` installs that toolchain (rustup), Node.js and the OpenSpec CLI via [mise](https://mise.jdx.dev) (`mise.toml` pins the versions; CI uses the same file), Xvfb, xdotool and ImageMagick, and prebuilds the tests.
+The Rust toolchain is pinned in `rust-toolchain.toml` (CI reads it too); bump it on purpose, fixing new lints in the same change. In Claude Code cloud sessions `.claude/hooks/session-start.sh` installs that toolchain (rustup), Node.js and the OpenSpec CLI via [mise](https://mise.jdx.dev) (`mise.toml` pins the versions; CI uses the same file), Xvfb, xdotool and ImageMagick, and prebuilds the tests. `mise install` also installs the toolchain from `rust-toolchain.toml` (`idiomatic_version_file_enable_tools` in `mise.toml`), which is how the [devcontainer-claude-code](https://github.com/unhurried/devcontainer-claude-code) dev container gets it (README, Dev Container); the hook and CI install only Node.js and the OpenSpec CLI through mise.
 
 ## Structure
 

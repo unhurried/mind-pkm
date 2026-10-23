@@ -134,8 +134,8 @@ Press `F6` to open the search panel under the map: type keywords and press Enter
 
 ### Requirements
 
-- Rust (stable, edition 2024) - see [rustup.rs](https://rustup.rs/)
-- Building downloads the IPADIC dictionary once (it is embedded into the binary).
+- Rust, the version in `rust-toolchain.toml` (edition 2024) - see [rustup.rs](https://rustup.rs/); `mise install` installs it too
+- Building downloads the IPADIC dictionary once, into `.cache/lindera/` (it is embedded into the binary).
 
 ### Build and Test
 
@@ -147,6 +147,18 @@ cargo build --release            # target/release/mind-pkm(.exe)
 ```
 
 The application is developed for Windows but builds and runs on Linux too, which is handy for development; `cargo build --release --target x86_64-pc-windows-gnu` cross-compiles the Windows exe from Linux (with the MinGW toolchain installed).
+
+### Dev Container
+
+The [devcontainer-claude-code](https://github.com/unhurried/devcontainer-claude-code) dev container has everything else this repository needs. Clone this repository under its `repos/` and, with `PROXY_MODE=open` (crates.io, npm and the IPADIC dictionary are outside its allowlist), set it up once:
+
+```bash
+mise trust && mise install            # Rust (rust-toolchain.toml), Node.js, the OpenSpec CLI
+cargo fetch --locked                  # the crates
+cargo test --locked --no-run          # also downloads the IPADIC dictionary
+```
+
+Then switch back to the allowlist: building, testing and `openspec validate` need no network until the dependencies change (`Cargo.lock`, the OpenSpec CLI in `mise.toml`); a new toolchain in `rust-toolchain.toml` only needs `mise install`. To look at the UI, run the app under Xvfb and drive it with `xdotool` (that repository's README, GUI apps).
 
 ### Source Layout
 
@@ -162,7 +174,7 @@ The application is developed for Windows but builds and runs on Linux too, which
 The application's behavior is specified with [OpenSpec](https://github.com/Fission-AI/OpenSpec) in `openspec/specs/` - one `spec.md` per capability (`mindmap-file`, `mindmap-editing`, `application-shell`, `document-management`, `task-management`, `map-filter`, `document-search`), as requirements with scenarios. Behavior changes go through an OpenSpec change (`openspec/changes/`; in Claude Code: `/opsx:propose`, `/opsx:apply`, `/opsx:archive`).
 
 ```bash
-mise install                          # Node.js and the OpenSpec CLI (mise.toml)
+mise install                          # Node.js, the OpenSpec CLI and Rust (mise.toml)
 openspec list --specs                 # the capabilities
 openspec show document-search --type spec
 openspec validate --all --strict      # also run by CI
