@@ -39,7 +39,14 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy, rustfmt
 
+      # .cache/lindera (the IPADIC dictionary, .cargo/config.toml) lies outside
+      # target/: cached build script output without it leaves lindera-ipadic
+      # unable to find the dictionary. The key separates this cache from the
+      # earlier ones, which don't hold it.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: lindera-cache
+          cache-directories: .cache/lindera
 
       # A push to main releases the version in Cargo.toml as tag v<version>,
       # unless that tag already exists (a merge without a version bump).
