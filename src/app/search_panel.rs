@@ -13,7 +13,7 @@ use std::path::PathBuf;
 pub const UPDATING_INDEX_STATUS: &str = "Updating search index...";
 pub const SEARCH_INPUT_ID: &str = "search-input";
 pub const RESULTS_SCROLL_ID: &str = "search-results";
-pub const ROW_HEIGHT: f32 = 26.0;
+pub const ROW_HEIGHT: f32 = 22.0;
 
 /// The orders and scopes the panel offers.
 pub const SORTS: [SearchSort; 2] = [SearchSort::Modified, SearchSort::Relevance];
