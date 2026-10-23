@@ -1,0 +1,6 @@
+[env]
+# lindera-ipadic's build script downloads the IPADIC dictionary (13 MB). Kept here
+# instead of in each build's OUT_DIR, it is downloaded and built once and shared by
+# every profile, target and toolchain; outside target/, it survives `cargo clean`.
+# So only the first build needs the network.
+LINDERA_BUILD_DICTIONARY_CACHE_DIR = { value = ".cache/lindera", relative = true }

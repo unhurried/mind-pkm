@@ -1,3 +1,12 @@
 [tools]
 node = "22"
 "npm:@fission-ai/openspec" = "1.14.1"
+
+[settings]
+# `mise install` also installs Rust as pinned in rust-toolchain.toml (through
+# rustup). The cloud session hook and CI install only the tools above and get
+# Rust from rustup directly.
+idiomatic_version_file_enable_tools = ["rust"]
+
+[env]
+OPENSPEC_TELEMETRY = "0"
