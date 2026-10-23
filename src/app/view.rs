@@ -439,9 +439,9 @@ impl App {
         .align_y(Alignment::Center);
 
         let header = row![
-            text("File").size(11).color(MUTED).width(FILE_COLUMN),
-            text("Modified").size(11).color(MUTED).width(DATE_COLUMN),
-            text("Snippet").size(11).color(MUTED),
+            text("File").size(10).color(MUTED).width(FILE_COLUMN),
+            text("Modified").size(10).color(MUTED).width(DATE_COLUMN),
+            text("Snippet").size(10).color(MUTED),
         ]
         .spacing(8)
         .padding([0, 6]);
@@ -546,9 +546,9 @@ fn result_row(i: usize, hit: &SearchHit, selected: bool) -> Element<'_, Message>
         .unwrap_or_default();
     let spans = highlighted_spans(&search::single_line(&hit.snippet));
     let cells = row![
-        container(text(hit.relative_path.clone()).size(12).wrapping(Wrapping::None)).width(FILE_COLUMN).clip(true),
-        container(text(modified).size(12).wrapping(Wrapping::None)).width(DATE_COLUMN).clip(true),
-        container(rich_text(spans).size(12).wrapping(Wrapping::None)).width(Fill).clip(true),
+        container(text(hit.relative_path.clone()).size(11).wrapping(Wrapping::None)).width(FILE_COLUMN).clip(true),
+        container(text(modified).size(11).wrapping(Wrapping::None)).width(DATE_COLUMN).clip(true),
+        container(rich_text(spans).size(11).wrapping(Wrapping::None)).width(Fill).clip(true),
     ]
     .spacing(8)
     .align_y(Alignment::Center);
