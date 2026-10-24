@@ -2,6 +2,6 @@
 # workflow reads the channel from here), so that clippy and rustfmt agree
 # everywhere. Bump it deliberately, fixing any new lints in the same change.
 [toolchain]
-channel = "1.97.0"
+channel = "1.99.1"
 components = ["clippy", "rustfmt"]
 profile = "minimal"

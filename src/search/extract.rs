@@ -6,6 +6,7 @@
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use quick_xml::name::QName;
+use std::borrow::Cow;
 use std::io::Read;
 use std::path::Path;
 
@@ -71,7 +72,7 @@ fn read_pdf(path: &Path) -> String {
 fn read_ooxml(path: &Path, wanted: impl Fn(&str) -> bool, text_elements: &[&str], break_elements: &[&str]) -> String {
     let Ok(file) = std::fs::File::open(path) else { return String::new() };
     let Ok(mut archive) = zip::ZipArchive::new(file) else { return String::new() };
-    let mut names: Vec<String> = archive.file_names().filter(|n| wanted(n)).map(str::to_string).collect();
+    let mut names: Vec<String> = archive.file_names().flatten().filter(|n| wanted(n)).map(Cow::into_owned).collect();
     // slide2 before slide10.
     names.sort_by_key(|n| {
         let digits: String = n.chars().filter(char::is_ascii_digit).collect();
@@ -97,7 +98,7 @@ fn read_ooxml(path: &Path, wanted: impl Fn(&str) -> bool, text_elements: &[&str]
 fn collect_xml_text(xml: &str, text_elements: &[&str], break_elements: &[&str], out: &mut String) {
     let mut reader = Reader::from_str(xml);
     let mut depth_in_text = 0usize;
-    let is_one_of = |names: &[&str], name: QName| names.contains(&String::from_utf8_lossy(name.as_ref()).as_ref());
+    let is_one_of = |names: &[&str], name: QName| names.contains(&name.as_ref());
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) if is_one_of(text_elements, e.name()) => depth_in_text += 1,
@@ -114,10 +115,10 @@ fn collect_xml_text(xml: &str, text_elements: &[&str], break_elements: &[&str], 
             }
             Ok(Event::Empty(e)) if is_one_of(break_elements, e.name()) && !out.ends_with('\n') => out.push('\n'),
             Ok(Event::Text(t)) if depth_in_text > 0 => {
-                out.push_str(&crate::xml::unescape(&String::from_utf8_lossy(&t)));
+                out.push_str(&crate::xml::unescape(&t));
             }
             Ok(Event::GeneralRef(r)) if depth_in_text > 0 => {
-                out.push_str(&crate::xml::unescape(&format!("&{};", String::from_utf8_lossy(&r))));
+                out.push_str(&crate::xml::unescape(&format!("&{};", &*r)));
             }
             Ok(Event::Eof) | Err(_) => break,
             _ => {}

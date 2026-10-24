@@ -22,7 +22,7 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The toolchain pinned in rust-toolchain.toml, so that CI lints with the
       # same clippy as local builds and Claude Code sessions.
@@ -68,7 +68,7 @@ jobs:
       # Node.js and the OpenSpec CLI at the versions in mise.toml (the Rust
       # toolchain is set up above). No cache: a restored npm install loses its
       # links on Windows ("Cannot find package 'ora'"), and installing is quick.
-      - uses: jdx/mise-action@v3
+      - uses: jdx/mise-action@v5
         with:
           install_args: node npm:@fission-ai/openspec
           cache: false
@@ -122,7 +122,7 @@ jobs:
           if (-not $sig.SignerCertificate) { throw 'the exe has no signature' }
           Write-Output "Signed by $($sig.SignerCertificate.Subject) ($($sig.SignerCertificate.Thumbprint))"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mind-pkm-windows-x64
           path: target/release/mind-pkm.exe
@@ -130,7 +130,7 @@ jobs:
 
       - name: Release
         if: steps.release.outputs.tag != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           target_commitish: ${{ github.sha }}
