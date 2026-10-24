@@ -13,7 +13,7 @@ The application SHALL be a single Windows executable that needs no installer, ru
 - **THEN** it runs without installing anything else
 
 ### Requirement: Opening maps
-On start the application SHALL open the map given as the first command-line argument (so `.mm` files can be opened with it from Explorer), else the last opened map if it still exists, else show a welcome screen with Open and New. File → Open (Ctrl+O) SHALL pick a `.mm` file; File → New (Ctrl+N) SHALL create a map with `config > docDirPath > <path>` and `ToDo` nodes. The map opens with the archive-hiding filter and the root centered, unless its last view is restored (see Restoring the view).
+On start the application SHALL open the map given as the first command-line argument (so `.mm` files can be opened with it from Explorer), else the last opened map if it still exists, else show a welcome screen with Open and New. File → Open SHALL pick a `.mm` file; File → New SHALL create a map with `config > docDirPath > <path>` and `ToDo` nodes. The map opens with the archive-hiding filter and the root centered, unless its last view is restored (see Restoring the view).
 
 #### Scenario: Restart
 - **WHEN** the application is closed with a map open and started again without arguments
@@ -46,11 +46,26 @@ The map SHALL be written only when saved: Ctrl+S (Save As for a new map) or Ctrl
 - **THEN** the application stays open with the changes
 
 ### Requirement: Menus and shortcuts
-A menu bar SHALL offer File, Edit, View and PKM menus listing every command with its shortcut. The PKM commands SHALL keep the add-on's function-key assignments (F1 Open, F2 Edit, F3 Fold One Level, F4 Unfold One Level, F5 Filter, F6 Search, F7 Toggle Checkmark, F8 Add to ToDo, F9 New Page, F10 New Directory, F11 Delete, F12 Update Next Steps and Search Index). While the search keyword box has the keyboard, only the function keys SHALL reach the map.
+A menu bar SHALL offer File, Edit, View and PKM menus listing every command with its shortcut. The PKM commands SHALL keep the add-on's function-key assignments (F1 Open, F2 Edit, F3 Fold One Level, F4 Unfold One Level, F5 Filter, F6 Search, F7 Toggle Checkmark, F8 Add to ToDo, F9 New Page, F10 New Directory, F11 Delete, F12 Update Next Steps and Search Index). While the search keyword box has the keyboard, only the function keys and Ctrl+F SHALL reach the map.
 
 #### Scenario: Typing in the search box
 - **WHEN** Tab or Delete is pressed while typing a search keyword
 - **THEN** no node is created or deleted
+
+#### Scenario: Ctrl+N creates a page
+- **WHEN** Ctrl+N is pressed with a node selected
+- **THEN** the New Page command runs as with F9
+
+### Requirement: Ctrl shortcuts for PKM commands
+Some PKM commands SHALL also be reachable by Ctrl shortcuts: Ctrl+O (Open), Ctrl+Shift+F (Filter), Ctrl+F (Search), Ctrl+N (New Page) and Ctrl+Shift+N (New Directory). File → New and File → Open SHALL have no shortcut.
+
+#### Scenario: Ctrl+O opens the page
+- **WHEN** Ctrl+O is pressed with a page node selected
+- **THEN** the page is opened as with F1
+
+#### Scenario: Map commands have no Ctrl+N
+- **WHEN** the File menu is opened
+- **THEN** New and Open are listed without a shortcut
 
 ### Requirement: View menu and zoom level
 The View menu SHALL offer Zoom In (Ctrl+Plus), Zoom Out (Ctrl+Minus) and Reset Zoom (Ctrl+0), and the status bar SHALL show the zoom level.

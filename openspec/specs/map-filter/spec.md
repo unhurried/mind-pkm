@@ -6,7 +6,7 @@ Showing only part of the mind map by a condition (F5), so that archived material
 ## Requirements
 
 ### Requirement: Filter commands
-F5 SHALL ask for a filter command and apply it: `a` shows all nodes; `t` shows `root > ToDo` with its ancestors and descendants; `d` shows the nodes whose text starts with a `yy/MM/dd` date on or before today, with their ancestors and descendants; any other text shows the nodes containing it, case-insensitively, with their ancestors and descendants. The status bar SHALL show the active filter.
+F5 or Ctrl+Shift+F SHALL ask for a filter command and apply it: `a` shows all nodes; `t` shows `root > ToDo` with its ancestors and descendants; `d` shows the nodes whose text starts with a `yy/MM/dd` date on or before today, with their ancestors and descendants; any other text shows the nodes containing it, case-insensitively, with their ancestors and descendants. The status bar SHALL show the active filter.
 
 #### Scenario: Keyword filter
 - **WHEN** the filter command `stuff` is entered

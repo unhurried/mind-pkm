@@ -69,8 +69,8 @@ pub const MENUS: &[Menu] = &[
     (
         "File",
         &[
-            ("New", "Ctrl+N", Command::New),
-            ("Open...", "Ctrl+O", Command::Open),
+            ("New", "", Command::New),
+            ("Open...", "", Command::Open),
             ("Save", "Ctrl+S", Command::Save),
             ("Save As...", "Ctrl+Shift+S", Command::SaveAs),
             ("Exit", "Ctrl+Q", Command::Exit),
@@ -106,16 +106,16 @@ pub const MENUS: &[Menu] = &[
     (
         "PKM",
         &[
-            ("Open", "F1", Command::PkmOpen),
+            ("Open", "F1 / Ctrl+O", Command::PkmOpen),
             ("Edit", "F2", Command::PkmEdit),
             ("Fold One Level", "F3", Command::FoldOneLevel),
             ("Unfold One Level", "F4", Command::UnfoldOneLevel),
-            ("Filter", "F5", Command::Filter),
-            ("Search", "F6", Command::Search),
+            ("Filter", "F5 / Ctrl+Shift+F", Command::Filter),
+            ("Search", "F6 / Ctrl+F", Command::Search),
             ("Toggle Checkmark", "F7", Command::ToggleCheckmark),
             ("Add to ToDo", "F8", Command::AddToToDo),
-            ("New Page", "F9", Command::NewPage),
-            ("New Directory", "F10", Command::NewDirectory),
+            ("New Page", "F9 / Ctrl+N", Command::NewPage),
+            ("New Directory", "F10 / Ctrl+Shift+N", Command::NewDirectory),
             ("Delete", "F11", Command::PkmDelete),
             ("Update Next Steps and Search Index", "F12", Command::Update),
             ("Add Assets", "", Command::AddAssets),
