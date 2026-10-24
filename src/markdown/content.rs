@@ -51,6 +51,12 @@ pub struct SourceMap {
     len: usize,
 }
 
+/// A map of a text of `text_len` bytes taken one to one from `source`
+/// (where the lengths match; else to its ends).
+pub fn source_map(text_len: usize, source: Range<usize>) -> SourceMap {
+    SourceMap::new(text_len, source)
+}
+
 impl SourceMap {
     fn new(text_len: usize, source: Range<usize>) -> Self {
         SourceMap { pieces: vec![(0, source)], len: text_len }
@@ -64,7 +70,7 @@ impl SourceMap {
     }
 
     /// The map of the text `range` of this one.
-    fn slice(&self, range: Range<usize>) -> SourceMap {
+    pub fn slice(&self, range: Range<usize>) -> SourceMap {
         let start = self.source_of(range.start);
         let end = self.source_of(range.end);
         let mut pieces: Vec<(usize, Range<usize>)> = Vec::new();
@@ -484,7 +490,7 @@ pub fn inlines(doc: &Document, events: &Events) -> Vec<Inline> {
         }
         i += 1;
     }
-    highlight(b.out)
+    sub_sup(highlight(b.out))
 }
 
 /// The inside of a code span's source, without the backticks.
@@ -980,6 +986,68 @@ fn highlight(inlines: Vec<Inline>) -> Vec<Inline> {
     out
 }
 
+/// Typora's `~sub~` and `^sup^` inside words (`H~2~O`, `x^2^`), which the
+/// parser leaves as text: a delimiter, text without spaces, the delimiter.
+fn sub_sup(inlines: Vec<Inline>) -> Vec<Inline> {
+    let mut out = Vec::with_capacity(inlines.len());
+    for inline in inlines {
+        let Inline::Text { text, style, link, map } = inline else {
+            out.push(inline);
+            continue;
+        };
+        if style.code || style.dim || !text.contains(['~', '^']) {
+            out.push(Inline::Text { text, style, link, map });
+            continue;
+        }
+        let mut pos = 0;
+        let mut i = 0;
+        let bytes = text.as_bytes();
+        while i < bytes.len() {
+            let d = bytes[i];
+            let single = |at: usize| {
+                bytes.get(at) == Some(&d) && (at == 0 || bytes[at - 1] != d) && bytes.get(at + 1) != Some(&d)
+            };
+            if (d == b'~' || d == b'^') && single(i) {
+                let close = text[i + 1..].find(d as char).map(|e| i + 1 + e);
+                if let Some(close) = close
+                    && close > i + 1
+                    && single(close)
+                    && !text[i + 1..close].contains(char::is_whitespace)
+                {
+                    if i > pos {
+                        out.push(Inline::Text {
+                            text: text[pos..i].to_string(),
+                            style,
+                            link: link.clone(),
+                            map: map.slice(pos..i),
+                        });
+                    }
+                    let mut s = style;
+                    if d == b'~' {
+                        s.sub = true;
+                    } else {
+                        s.sup = true;
+                    }
+                    out.push(Inline::Text {
+                        text: text[i + 1..close].to_string(),
+                        style: s,
+                        link: link.clone(),
+                        map: map.slice(i + 1..close),
+                    });
+                    pos = close + 1;
+                    i = close + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        if pos < text.len() {
+            out.push(Inline::Text { text: text[pos..].to_string(), style, link, map: map.slice(pos..text.len()) });
+        }
+    }
+    out
+}
+
 /// The text of inlines as shown, for counting words and plain-text copies.
 pub fn shown_text(inlines: &[Inline]) -> String {
     let mut out = String::new();
@@ -1058,6 +1126,12 @@ mod tests {
                 ("sup", "^")
             ])
         );
+    }
+
+    #[test]
+    fn sub_and_superscript_inside_words() {
+        assert_eq!(texts("H~2~O and x^2^"), t(&[("H", ""), ("2", "_"), ("O and x", ""), ("2", "^")]));
+        assert_eq!(texts("a ~ b ~ c"), t(&[("a ~ b ~ c", "")]));
     }
 
     #[test]

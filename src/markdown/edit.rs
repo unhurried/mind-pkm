@@ -50,6 +50,24 @@ impl Pending {
         Pending { at, prefix: "\n\n".into(), suffix: "\n".repeat(suffix) }
     }
 
+    /// An empty paragraph at `at`, between blocks or in an empty page: blank
+    /// lines are added on the sides where a block is near.
+    pub fn gap(text: &str, at: usize) -> Pending {
+        // At the end of a page, before its last line break (which stays last).
+        let at = if at == text.len() && text.ends_with('\n') && !text.trim().is_empty() {
+            text.trim_end_matches('\n').len()
+        } else {
+            at
+        };
+        let before = &text[..at];
+        let after = &text[at..];
+        let newlines_before = before.len() - before.trim_end_matches('\n').len();
+        let newlines_after = after.len() - after.trim_start_matches('\n').len();
+        let prefix = if before.trim().is_empty() { 0 } else { 2usize.saturating_sub(newlines_before) };
+        let suffix = if after.trim().is_empty() { 0 } else { 2usize.saturating_sub(newlines_after) };
+        Pending { at, prefix: "\n".repeat(prefix), suffix: "\n".repeat(suffix) }
+    }
+
     fn before(at: usize) -> Pending {
         Pending { at, prefix: String::new(), suffix: "\n\n".into() }
     }
@@ -85,6 +103,20 @@ impl Edited {
         let at = pending.at;
         Edited { text, sel: Sel::caret(at), pending: Some(pending) }
     }
+}
+
+/// The text with the blank lines around `at` (left by a block whose text was
+/// all deleted) reduced to one blank line between blocks, or none at the
+/// start and end of the page; and where `at` went.
+pub fn collapse_blank_lines(text: &str, at: usize) -> (String, usize) {
+    let start = at - (text[..at].len() - text[..at].trim_end_matches(['\n', ' ', '\t']).len());
+    let end = at + (text[at..].len() - text[at..].trim_start_matches(['\n', ' ', '\t']).len());
+    let with = if start == 0 || end == text.len() {
+        if end == text.len() && start > 0 && text.ends_with('\n') { "\n" } else { "" }
+    } else {
+        "\n\n"
+    };
+    (splice(text, start..end, with), start)
 }
 
 /// `text` with `range` replaced by `with`.
@@ -763,6 +795,16 @@ mod tests {
         assert_eq!(line_marker("  - [x] t").map(|m| (m.indent, m.end, m.task)), Some((2, 8, Some(4..8))));
         assert_eq!(line_marker("10. x").map(|m| m.kind), Some(MarkerKind::Ordered(10, '.')));
         assert_eq!(line_marker("-x"), None);
+    }
+
+    #[test]
+    fn gaps_and_collapsing() {
+        assert_eq!(Pending::gap("", 0).materialize("", "x").0, "x");
+        assert_eq!(Pending::gap("a\n", 2).materialize("a\n", "x").0, "a\n\nx\n");
+        assert_eq!(Pending::gap("a\n\n\nb", 3).materialize("a\n\n\nb", "x").0, "a\n\nx\n\nb");
+        assert_eq!(collapse_blank_lines("a\n\n\n\nb", 3), ("a\n\nb".to_string(), 1));
+        assert_eq!(collapse_blank_lines("a\n\n\n", 3), ("a\n".to_string(), 1));
+        assert_eq!(collapse_blank_lines("\n\nb", 1), ("b".to_string(), 0));
     }
 
     #[test]

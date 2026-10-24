@@ -77,19 +77,23 @@ The PKM menu holds the commands of the former add-on, with the same function key
 | F12 | Update Next Steps and Search Index |
 | | Add Assets |
 | | Find Unlinked |
+| | Open Externally |
+| | Use Built-in Editor |
 
-- **Open**: opens the selected page nodes' `.md` files / directory nodes' directories with the default application.
+- **Open**: opens the selected page nodes' `.md` files in the built-in editor (see [Page Editor](#page-editor)) and directory nodes' directories in Explorer.
 - **Edit**: renames a page (its `.md` file, its `.assets` directory, the references inside the page and the ToDo items copied from it) or a directory along with the node; any other node just gets its text edited.
 - **Fold / Unfold One Level**: folds the deepest unfolded level / unfolds the shallowest folded level under the selected node.
 - **Filter**: `a` shows all nodes, `t` the ToDo list, `d` the items due today or overdue, any other text the nodes containing it (case-insensitive); an empty command hides archived nodes (the default). Cancel keeps the current filter.
 - **Toggle Checkmark**: toggles Freeplane's checkmark icon.
 - **Add to ToDo**: copies the selected items (children of page nodes) to the top of `root > ToDo` as `<item> (<page>)`, linked to the page.
-- **New Page**: creates `<docDir>/<text>.md` from the page template and the page's `.assets` directory, links the node to it and opens the page. The built-in template can be replaced by a `template.md` in `%APPDATA%\mind-pkm\` (`${page_assets_name}` and `${today}` are substituted). Settings left in `%APPDATA%\freeplane-pkm\` by versions under the former name are still read.
+- **New Page**: creates `<docDir>/<text>.md` from the page template and the page's `.assets` directory, links the node to it and opens the page in the editor. The built-in template can be replaced by a `template.md` in `%APPDATA%\mind-pkm\` (`${page_assets_name}` and `${today}` are substituted). Settings left in `%APPDATA%\freeplane-pkm\` by versions under the former name are still read.
 - **New Directory**: creates `<docDir>/<text>/`, links the node to it and opens it.
 - **Delete**: deletes the selected page and directory nodes, after one confirmation listing them all, and moves their files to the Recycle Bin (where they can be restored from). A page or directory whose files can't be moved there keeps its node. It never touches the document directory itself or anything outside it.
 - **Update Next Steps and Search Index**: syncs up to 3 list items under each page's `### Next Steps` heading into the page node's children, drops the ToDo items whose task is gone from their page, fills ToDo > Due Today / Past Due, and updates the search index. This also runs automatically every few minutes while the map is being changed.
 - **Add Assets**: creates the page's `.assets` directory and links it from the top of the page.
 - **Find Unlinked**: lists the pages, directories and orphaned `.assets` directories of the document directory that no node links, under `root > unlinked`.
+- **Open Externally**: opens the selected pages (and directories) with the application Windows associates with them, whatever editor Open uses.
+- **Use Built-in Editor**: checked by default; unchecked, Open, New Page, search results and link markers open pages with the default application (as versions before 0.12 did). The choice is remembered.
 
 Page and directory names can't be empty, `.` or `..`, contain control characters or `\ / : * ? " < > |`, or be Windows device names (`CON`, `AUX`, `NUL`, `COM1`, ...); directory names can't end with a dot or a space either.
 

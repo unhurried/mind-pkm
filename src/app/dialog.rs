@@ -13,9 +13,18 @@ use iced::widget::operation;
 #[derive(Debug, Clone)]
 pub enum Dialog {
     Message(String),
-    Confirm { text: String, action: ConfirmAction },
-    Input { prompt: String, value: String, action: InputAction },
+    Confirm {
+        text: String,
+        action: ConfirmAction,
+    },
+    Input {
+        prompt: String,
+        value: String,
+        action: InputAction,
+    },
     Unsaved(AfterUnsaved),
+    /// Ending the application with pages that have unsaved changes: their names.
+    UnsavedPages(Vec<String>),
 }
 
 /// What a confirmation dialog does on Yes.
@@ -78,12 +87,12 @@ impl App {
     }
 
     pub(super) fn dialog_ok(&mut self) -> Task<Message> {
-        // The unsaved changes question is answered only by its own buttons.
-        if matches!(self.dialogs.front(), Some(Dialog::Unsaved(_))) {
+        // The unsaved changes questions are answered only by their own buttons.
+        if matches!(self.dialogs.front(), Some(Dialog::Unsaved(_) | Dialog::UnsavedPages(_))) {
             return Task::none();
         }
         let task = match self.dialogs.pop_front() {
-            None | Some(Dialog::Message(_) | Dialog::Unsaved(_)) => Task::none(),
+            None | Some(Dialog::Message(_) | Dialog::Unsaved(_) | Dialog::UnsavedPages(_)) => Task::none(),
             Some(Dialog::Confirm { action: ConfirmAction::DeleteDocs(targets), .. }) => {
                 self.delete_docs(&targets);
                 Task::none()
@@ -106,12 +115,25 @@ impl App {
     /// Unsaved changes: save them (choosing a file first for a new map), then
     /// go on unless saving failed or was cancelled.
     pub(super) fn dialog_save(&mut self) -> Task<Message> {
+        if matches!(self.dialogs.front(), Some(Dialog::UnsavedPages(_))) {
+            self.dialogs.pop_front();
+            let errors = self.save_all_pages();
+            if errors.is_empty() {
+                return self.exit();
+            }
+            errors.into_iter().for_each(|e| self.message(e));
+            return Task::none();
+        }
         let Some(after) = self.take_unsaved_dialog() else { return Task::none() };
         self.save(Some(after))
     }
 
     /// Unsaved changes: discard them and go on.
     pub(super) fn dialog_discard(&mut self) -> Task<Message> {
+        if matches!(self.dialogs.front(), Some(Dialog::UnsavedPages(_))) {
+            self.dialogs.pop_front();
+            return self.exit();
+        }
         let Some(after) = self.take_unsaved_dialog() else { return Task::none() };
         if let Some(doc) = &mut self.doc {
             doc.dirty = false;

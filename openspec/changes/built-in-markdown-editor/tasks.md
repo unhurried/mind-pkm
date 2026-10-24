@@ -19,9 +19,9 @@
 
 ## 4. Multi-window application and opening pages
 
-- [ ] 4.1 Switch to `iced::daemon`: open the map window in `boot`, window ids in key/resize/move/close/file-drop messages, per-window title/view/theme; verify existing app tests pass and a test routes keys by window id
-- [ ] 4.2 `open_page` entry used by F1, New Page, search results and link markers: built-in editor for `.md` (focusing an already open window), default application otherwise or when the editor is turned off; PKM menu Open Externally and Use Built-in Editor (remembered); README PKM table and settings; verify with app tests and the menu/README key tests
-- [ ] 4.3 Exit with unsaved pages (`Dialog::UnsavedPages`: Save all / Don't Save / Cancel) after the map's question; verify with app tests
+- [x] 4.1 Switch to `iced::daemon`: open the map window in `boot`, window ids in key/resize/move/close/file-drop messages, per-window title/view/theme; verify existing app tests pass and a test routes keys by window id
+- [x] 4.2 `open_page` entry used by F1, New Page, search results and link markers: built-in editor for `.md` (focusing an already open window), default application otherwise or when the editor is turned off; PKM menu Open Externally and Use Built-in Editor (remembered); README PKM table and settings; verify with app tests and the menu/README key tests
+- [x] 4.3 Exit with unsaved pages (`Dialog::UnsavedPages`: Save all / Don't Save / Cancel) after the map's question; verify with app tests
 
 ## 5. Editor window core
 

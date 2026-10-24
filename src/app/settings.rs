@@ -1,9 +1,11 @@
 //! Per-user settings, kept in `<config dir>/mind-pkm/` (on Windows
-//! `%APPDATA%\mind-pkm\`): `settings.txt` remembers the last opened map
-//! and the window's size and position (`key=value` lines), `views.txt` how each map was last shown (zoom, scroll position,
-//! selection), and an optional `template.md` replaces the built-in New Page
-//! template. A file missing there is read from the directory used under the
-//! application's former name, `freeplane-pkm`. Tests never touch these files.
+//! `%APPDATA%\mind-pkm\`): `settings.txt` remembers the last opened map,
+//! the window's size and position and the page editor's settings (`key=value`
+//! lines), `views.txt` how each map was last shown (zoom, scroll position,
+//! selection), an optional `template.md` replaces the built-in New Page
+//! template and an optional `export.css` the style sheet of exported pages. A
+//! file missing there is read from the directory used under the application's
+//! former name, `freeplane-pkm`. Tests never touch these files.
 
 use crate::paths;
 use crate::pkm::commands::DEFAULT_TEMPLATE;
@@ -17,6 +19,17 @@ const TEMPLATE_FILE_NAME: &str = "template.md";
 const VIEWS_FILE_NAME: &str = "views.txt";
 const LAST_FILE_KEY: &str = "last_file=";
 const WINDOW_KEY: &str = "window=";
+const EXPORT_CSS_FILE_NAME: &str = "export.css";
+// The page editor's settings.
+const PAGE_EDITOR_KEY: &str = "page_editor=";
+const EDITOR_WINDOW_KEY: &str = "editor_window=";
+const EDITOR_ZOOM_KEY: &str = "editor_zoom=";
+const EDITOR_THEME_KEY: &str = "editor_theme=";
+const AUTO_PAIR_KEY: &str = "auto_pair=";
+const IMAGE_COPY_KEY: &str = "image_copy=";
+const IMAGE_FOLDER_KEY: &str = "image_folder=";
+const IMAGE_DOT_SLASH_KEY: &str = "image_dot_slash=";
+const IMAGE_ESCAPE_KEY: &str = "image_escape=";
 /// A remembered window smaller than this is not restored.
 const MIN_WINDOW_SIDE: f32 = 200.0;
 /// How many maps `views.txt` remembers, the most recently shown first.
@@ -167,6 +180,86 @@ fn format_views(views: &[(PathBuf, MapView)]) -> String {
             format!("{}\t{}\t{}\t{}\t{}\n", v.zoom, v.scroll.0, v.scroll.1, v.selection.join(","), path.display())
         })
         .collect()
+}
+
+/// Whether pages open in the built-in editor (`page_editor=external` turns it off).
+pub fn editor_builtin() -> bool {
+    value(PAGE_EDITOR_KEY).is_none_or(|v| v != "external")
+}
+
+pub fn set_editor_builtin(builtin: bool) {
+    set_value(PAGE_EDITOR_KEY, if builtin { "builtin" } else { "external" });
+}
+
+/// The size of the last editor window.
+pub fn editor_window() -> Option<Size> {
+    let v = value(EDITOR_WINDOW_KEY)?;
+    let (w, h) = v.split_once(',')?;
+    let size = Size::new(w.parse().ok()?, h.parse().ok()?);
+    (size.width >= MIN_WINDOW_SIDE && size.height >= MIN_WINDOW_SIDE).then_some(size)
+}
+
+pub fn set_editor_window(size: Size) {
+    set_value(EDITOR_WINDOW_KEY, &format!("{},{}", size.width, size.height));
+}
+
+pub fn editor_zoom() -> Option<f32> {
+    value(EDITOR_ZOOM_KEY)?.parse().ok().filter(|z: &f32| z.is_finite() && *z > 0.1)
+}
+
+pub fn set_editor_zoom(zoom: f32) {
+    set_value(EDITOR_ZOOM_KEY, &zoom.to_string());
+}
+
+pub fn editor_dark() -> bool {
+    value(EDITOR_THEME_KEY).is_some_and(|v| v == "dark")
+}
+
+pub fn set_editor_dark(dark: bool) {
+    set_value(EDITOR_THEME_KEY, if dark { "dark" } else { "light" });
+}
+
+/// Whether the editor pairs brackets (`auto_pair=0` turns it off).
+pub fn editor_auto_pair() -> bool {
+    value(AUTO_PAIR_KEY).is_none_or(|v| v != "0")
+}
+
+pub fn set_editor_auto_pair(on: bool) {
+    set_value(AUTO_PAIR_KEY, if on { "1" } else { "0" });
+}
+
+/// How inserted images are copied and referenced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageOptions {
+    /// Copy images into the folder (`image_copy=0` turns it off).
+    pub copy: bool,
+    /// The folder, `${filename}` standing for the page's name; relative to the page.
+    pub folder: String,
+    /// Write `./` before relative paths.
+    pub dot_slash: bool,
+    /// Escape spaces and other characters as `%XX`.
+    pub escape: bool,
+}
+
+impl Default for ImageOptions {
+    fn default() -> Self {
+        ImageOptions { copy: true, folder: "${filename}.assets".into(), dot_slash: false, escape: false }
+    }
+}
+
+pub fn image_options() -> ImageOptions {
+    let d = ImageOptions::default();
+    ImageOptions {
+        copy: value(IMAGE_COPY_KEY).is_none_or(|v| v != "0"),
+        folder: value(IMAGE_FOLDER_KEY).unwrap_or(d.folder),
+        dot_slash: value(IMAGE_DOT_SLASH_KEY).is_some_and(|v| v == "1"),
+        escape: value(IMAGE_ESCAPE_KEY).is_some_and(|v| v == "1"),
+    }
+}
+
+/// The user's style sheet for exported pages, if any.
+pub fn export_css() -> Option<String> {
+    read_text(EXPORT_CSS_FILE_NAME)
 }
 
 /// The New Page template: the user's `template.md` if there is one, else the built-in one.

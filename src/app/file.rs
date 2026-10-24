@@ -83,8 +83,18 @@ impl App {
         }
     }
 
+    /// Quits the application, after asking about pages with unsaved changes.
+    fn exit_checking_pages(&mut self) -> Task<Message> {
+        let pages = self.unsaved_pages();
+        if pages.is_empty() {
+            return self.exit();
+        }
+        self.dialogs.push_back(Dialog::UnsavedPages(pages));
+        Task::none()
+    }
+
     /// Quits the application, remembering how the map and the window are shown.
-    fn exit(&self) -> Task<Message> {
+    pub(super) fn exit(&self) -> Task<Message> {
         self.remember_view();
         settings::set_window(&self.window);
         iced::exit()
@@ -160,7 +170,7 @@ impl App {
         match after {
             AfterUnsaved::New => self.set_doc(pkm::new_map(NEW_MAP_ROOT_TEXT, NEW_MAP_DOC_DIR), None),
             AfterUnsaved::Open => self.choose_file(FileAction::Open),
-            AfterUnsaved::Exit => self.exit(),
+            AfterUnsaved::Exit => self.exit_checking_pages(),
         }
     }
 }

@@ -156,12 +156,12 @@ impl App {
     pub(super) fn window_resized(&mut self, size: Size) -> Task<Message> {
         self.window_size = size;
         self.viewport_size = None;
-        ask_window_state()
+        ask_window_state(self.main_window)
     }
 
     pub(super) fn window_moved(&mut self, position: Point) -> Task<Message> {
         self.window_position = Some(position);
-        ask_window_state()
+        ask_window_state(self.main_window)
     }
 
     /// Takes the window's size and position as the ones to restore, unless it
@@ -202,13 +202,11 @@ impl App {
     }
 }
 
-/// Asks whether the window is maximized or minimized now.
-fn ask_window_state() -> Task<Message> {
-    window::latest().and_then(|id| {
-        window::is_maximized(id).then(move |maximized| {
-            window::is_minimized(id)
-                .map(move |minimized| Message::WindowState { maximized, minimized: minimized.unwrap_or(false) })
-        })
+/// Asks whether the map window is maximized or minimized now.
+fn ask_window_state(id: window::Id) -> Task<Message> {
+    window::is_maximized(id).then(move |maximized| {
+        window::is_minimized(id)
+            .map(move |minimized| Message::WindowState { maximized, minimized: minimized.unwrap_or(false) })
     })
 }
 

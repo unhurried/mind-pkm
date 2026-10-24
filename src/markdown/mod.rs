@@ -9,8 +9,10 @@ pub mod edit;
 pub mod find;
 pub mod format;
 pub mod history;
+pub mod images;
 pub mod page;
 pub mod parse;
+pub mod render;
 pub mod table;
 
 pub use parse::{Block, BlockKind, Document, ListItem};

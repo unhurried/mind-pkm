@@ -310,6 +310,56 @@ impl Table {
     }
 }
 
+/// The cell (row, column) at a byte offset of a table's source; the
+/// delimiter row counts as the first body row.
+pub fn cell_at_offset(source: &str, offset: usize) -> (usize, usize) {
+    let offset = offset.min(source.len());
+    let line_index = source[..offset].matches('\n').count();
+    let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let row = if line_index == 0 { 0 } else { line_index.max(2) - 1 };
+    // Unescaped pipes before the offset on the line, the leading one not counting.
+    let line = &source[line_start..offset];
+    let mut pipes: usize = 0;
+    let mut escaped = false;
+    for c in line.chars() {
+        match c {
+            '\\' if !escaped => escaped = true,
+            '|' if !escaped => pipes += 1,
+            _ => escaped = false,
+        }
+    }
+    let leading = line.trim_start().starts_with('|');
+    (row, pipes.saturating_sub(usize::from(leading)))
+}
+
+/// Where a cell's text starts in the source `Table::to_markdown` writes.
+pub fn cell_offset(source: &str, cell: (usize, usize)) -> usize {
+    let line_index = if cell.0 == 0 { 0 } else { cell.0 + 1 };
+    let mut pos = 0;
+    for (i, line) in source.split('\n').enumerate() {
+        if i == line_index {
+            let mut pipes = 0;
+            let mut escaped = false;
+            for (j, c) in line.char_indices() {
+                match c {
+                    '\\' if !escaped => escaped = true,
+                    '|' if !escaped => {
+                        if pipes == cell.1 {
+                            let rest = &line[j + 1..];
+                            return pos + j + 1 + (rest.len() - rest.trim_start().len()).min(1);
+                        }
+                        pipes += 1;
+                    }
+                    _ => escaped = false,
+                }
+            }
+            return pos + line.len();
+        }
+        pos += line.len() + 1;
+    }
+    source.len()
+}
+
 /// A cell's source as it is edited: `<br>` as a line break, `\|` as `|`.
 pub fn cell_to_text(cell: &str) -> String {
     let mut out = String::with_capacity(cell.len());
@@ -555,6 +605,19 @@ mod tests {
             t.range_html(all, |c| c.to_string()),
             "<table><tr><th>a</th><th>b</th></tr><tr><td>1</td><td>2<br>3</td></tr></table>"
         );
+    }
+
+    #[test]
+    fn cells_and_offsets() {
+        let t = Table::parse("| a | bb |\n|---|---|\n| 1 | 2 |").unwrap();
+        let src = t.to_markdown();
+        for cell in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            let o = cell_offset(&src, cell);
+            assert_eq!(cell_at_offset(&src, o), cell, "{cell:?} at {o} in {src}");
+        }
+        assert_eq!(&src[cell_offset(&src, (1, 1))..cell_offset(&src, (1, 1)) + 1], "2");
+        // The delimiter row counts as the first body row.
+        assert_eq!(cell_at_offset(&src, src.find("---").unwrap()).0, 1);
     }
 
     #[test]
