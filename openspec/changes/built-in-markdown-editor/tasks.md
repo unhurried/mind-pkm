@@ -2,20 +2,20 @@
 
 ## 1. Dependencies and module skeleton
 
-- [ ] 1.1 Add `pulldown-cmark`, `latex-rust`, `mermaid-rs-renderer` (no default features), `syntect` + `two-face` (fancy-regex), `arboard`, `emojis`, `htmd`, `image` (selected codecs), `unicode-width`, `unicode-segmentation`, and iced's `image-without-codecs` and `svg` features; create `src/markdown/` and `src/app/editor/`; verify `cargo build` and `cargo build --release --target x86_64-pc-windows-gnu` succeed
+- [x] 1.1 Add `pulldown-cmark`, `latex-rust`, `mermaid-rs-renderer` (no default features), `syntect` + `two-face` (fancy-regex), `arboard`, `emojis`, `htmd`, `image` (selected codecs), `unicode-width`, `unicode-segmentation`, and iced's `image-without-codecs` and `svg` features; create `src/markdown/` and `src/app/editor/`; verify `cargo build` and `cargo build --release --target x86_64-pc-windows-gnu` succeed
 
 ## 2. Markdown core (`src/markdown/`)
 
-- [ ] 2.1 Block segmentation with byte ranges (flattened list items, continuation and `Other` blocks, front matter, `[toc]`, footnote definitions) and lenient link destinations with offset mapping; verify with unit tests and a property test that every non-blank byte is in exactly one block
-- [ ] 2.2 Inline model: styled runs with source ranges, links (inline, reference, heading anchors, autolinks, bare URLs), highlight, emoji shortcodes, sub/superscript, math, images, footnote references, breaks, supported inline HTML and placeholders; verify with unit tests per element
-- [ ] 2.3 Page text I/O: BOM and line-ending detection and restoration, UTF-8 check with `failed to open <path>: <reason>`; verify a CRLF+BOM page round-trips byte for byte with one word changed
-- [ ] 2.4 Edit rules as pure functions: Enter/Shift+Enter (paragraph, heading, list continuation and exit, quote, code indentation, fence/`$$`/front matter/table-header conversion), Backspace/Delete at markers and block edges, Tab/Shift+Tab on list items; verify each scenario of page-editor's editing requirements in unit tests, plus a property test that an edit inside a block leaves the text outside it unchanged
-- [ ] 2.5 Format and paragraph operations: bold/italic/underline/code/strikethrough toggles (word at cursor), link insertion, heading level set/raise/lower, quote/ordered/bullet toggles over blocks, clear formatting, auto-pair rules, task toggle, selection helpers (word, line, styled span); verify with unit tests
-- [ ] 2.6 Undo history with typing coalescing, find/replace (case option, replace all), word/character counts (CJK as words, markers excluded), heading outline and anchors; verify with unit tests
+- [x] 2.1 Block segmentation with byte ranges (flattened list items, continuation and `Other` blocks, front matter, `[toc]`, footnote definitions) and lenient link destinations with offset mapping; verify with unit tests and a property test that every non-blank byte is in exactly one block
+- [x] 2.2 Inline model: styled runs with source ranges, links (inline, reference, heading anchors, autolinks, bare URLs), highlight, emoji shortcodes, sub/superscript, math, images, footnote references, breaks, supported inline HTML and placeholders; verify with unit tests per element
+- [x] 2.3 Page text I/O: BOM and line-ending detection and restoration, UTF-8 check with `failed to open <path>: <reason>`; verify a CRLF+BOM page round-trips byte for byte with one word changed
+- [x] 2.4 Edit rules as pure functions: Enter/Shift+Enter (paragraph, heading, list continuation and exit, quote, code indentation, fence/`$$`/front matter/table-header conversion), Backspace/Delete at markers and block edges, Tab/Shift+Tab on list items; verify each scenario of page-editor's editing requirements in unit tests, plus a property test that an edit inside a block leaves the text outside it unchanged
+- [x] 2.5 Format and paragraph operations: bold/italic/underline/code/strikethrough toggles (word at cursor), link insertion, heading level set/raise/lower, quote/ordered/bullet toggles over blocks, clear formatting, auto-pair rules, task toggle, selection helpers (word, line, styled span); verify with unit tests
+- [x] 2.6 Undo history with typing coalescing, find/replace (case option, replace all), word/character counts (CJK as words, markers excluded), heading outline and anchors; verify with unit tests
 
 ## 3. Tables model
 
-- [ ] 3.1 Table parse/serialize (alignment, escaped pipes, `<br>`, padded columns by display width) and operations (insert/delete/move rows and columns, align, resize, clear range, paste TSV/HTML grid with growth, copy as TSV/HTML/Markdown); verify with unit tests and a parse∘serialize property test
+- [x] 3.1 Table parse/serialize (alignment, escaped pipes, `<br>`, padded columns by display width) and operations (insert/delete/move rows and columns, align, resize, clear range, paste TSV/HTML grid with growth, copy as TSV/HTML/Markdown); verify with unit tests and a parse∘serialize property test
 
 ## 4. Multi-window application and opening pages
 
