@@ -101,13 +101,13 @@ pub fn parse(text: &str) -> Result<Document, String> {
                     tree.push(XNode::Element(el));
                 }
             }
-            Event::Text(t) => tree.push_raw_text(&utf8(&t.into_inner())?),
-            Event::GeneralRef(r) => tree.push_raw_text(&format!("&{};", utf8(&r.into_inner())?)),
-            Event::CData(t) => tree.push(XNode::CData(utf8(&t.into_inner())?)),
-            Event::Comment(t) => tree.push(XNode::Comment(utf8(&t.into_inner())?)),
-            Event::Decl(d) => tree.push(XNode::Raw(format!("?{}?", utf8(&d)?))),
-            Event::PI(p) => tree.push(XNode::Raw(format!("?{}?", utf8(&p.into_inner())?))),
-            Event::DocType(d) => tree.push(XNode::Raw(format!("!DOCTYPE {}", utf8(&d.into_inner())?))),
+            Event::Text(t) => tree.push_raw_text(&t),
+            Event::GeneralRef(r) => tree.push_raw_text(&format!("&{};", &*r)),
+            Event::CData(t) => tree.push(XNode::CData(t.into_inner().into_owned())),
+            Event::Comment(t) => tree.push(XNode::Comment(t.into_inner().into_owned())),
+            Event::Decl(d) => tree.push(XNode::Raw(format!("?{}?", &*d))),
+            Event::PI(p) => tree.push(XNode::Raw(format!("?{}?", &*p))),
+            Event::DocType(d) => tree.push(XNode::Raw(format!("!DOCTYPE {}", &*d))),
             Event::Eof => break,
         }
     }
@@ -164,16 +164,12 @@ impl TreeBuilder {
     }
 }
 
-fn utf8(bytes: &[u8]) -> Result<String, String> {
-    String::from_utf8(bytes.to_vec()).map_err(|e| e.to_string())
-}
-
 fn start_element(e: &quick_xml::events::BytesStart) -> Result<Element, String> {
-    let name = utf8(e.name().as_ref())?;
+    let name = e.name().as_ref().to_string();
     let mut attrs = Vec::new();
     for a in e.attributes().with_checks(false) {
         let a = a.map_err(|e| e.to_string())?;
-        attrs.push((utf8(a.key.as_ref())?, unescape(&utf8(&a.value)?)));
+        attrs.push((a.key.as_ref().to_string(), unescape(&a.value)));
     }
     Ok(Element { name, attrs, children: Vec::new() })
 }
