@@ -188,6 +188,43 @@ fn typing_in_the_search_box_reaches_the_map_only_through_function_keys() {
     assert!(map(&app).has_icon(root, crate::mindmap::ICON_CHECKMARK));
 }
 
+fn press_char(app: &mut App, c: &str, modifiers: Modifiers) {
+    send(
+        app,
+        Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Character(c.into()),
+            modified_key: Key::Character(c.into()),
+            physical_key: Physical::Unidentified(NativeCode::Unidentified),
+            location: Location::Standard,
+            modifiers,
+            text: None,
+            repeat: false,
+        }),
+    );
+}
+
+#[test]
+fn ctrl_shift_f_asks_for_a_filter_like_f5() {
+    let mut app = app_with(MindMap::new("root"));
+    press_char(&mut app, "f", Modifiers::CTRL | Modifiers::SHIFT);
+    send(&mut app, Message::DialogInput("t".into()));
+    send(&mut app, Message::DialogOk);
+    assert_eq!(app.doc.as_ref().unwrap().filter, Filter::ToDo);
+}
+
+#[test]
+fn in_the_search_box_ctrl_f_reaches_the_map_but_other_ctrl_keys_do_not() {
+    let mut app = app_with(MindMap::new("root"));
+    app.search.open = true;
+    app.search.focus = super::search_panel::PanelFocus::Input;
+    press_char(&mut app, "n", Modifiers::CTRL);
+    press_char(&mut app, "o", Modifiers::CTRL);
+    assert!(app.dialogs.is_empty());
+    // The map has no document directory, so the search command reports it.
+    press_char(&mut app, "f", Modifiers::CTRL);
+    assert!(!app.dialogs.is_empty());
+}
+
 #[test]
 fn folding_by_click_is_one_undo_step() {
     let mut m = MindMap::new("root");

@@ -40,11 +40,13 @@ impl App {
                 _ => {}
             }
         }
-        // While typing in the search box only the function keys reach the map.
-        if self.search.focus == PanelFocus::Input && !is_function_key(&key) {
+        let command = command_for_key(&key, modifiers);
+        // While typing in the search box only the function keys (and Ctrl+F,
+        // which focuses the box again) reach the map.
+        if self.search.focus == PanelFocus::Input && !is_function_key(&key) && command != Some(Command::Search) {
             return Task::none();
         }
-        match command_for_key(&key, modifiers) {
+        match command {
             Some(cmd) => self.run_command(cmd),
             None => {
                 self.navigate(&key);
@@ -157,8 +159,12 @@ pub fn command_for_key(key: &Key, m: Modifiers) -> Option<Command> {
             _ => return None,
         },
         Key::Character(c) if ctrl => match (c.to_lowercase().as_str(), m.shift()) {
-            ("n", _) => New,
-            ("o", _) => Open,
+            // Ctrl aliases of the PKM function keys.
+            ("o", _) => PkmOpen,
+            ("f", false) => Search,
+            ("f", true) => Filter,
+            ("n", false) => NewPage,
+            ("n", true) => NewDirectory,
             ("s", false) => Save,
             ("s", true) => SaveAs,
             ("z", false) => Undo,
@@ -273,6 +279,18 @@ mod tests {
             let row = format!("|{shortcut}|{label}|");
             assert!(rows.contains(&row), "README has no row {row}");
         }
+    }
+
+    #[test]
+    fn ctrl_aliases_of_the_pkm_function_keys() {
+        let key = |c: &str, m: Modifiers| command_for_key(&Key::Character(c.into()), m);
+        let (ctrl, shifted) = (Modifiers::CTRL, Modifiers::CTRL | Modifiers::SHIFT);
+        assert_eq!(key("o", ctrl), Some(Command::PkmOpen));
+        assert_eq!(key("f", ctrl), Some(Command::Search));
+        assert_eq!(key("f", shifted), Some(Command::Filter));
+        assert_eq!(key("n", ctrl), Some(Command::NewPage));
+        assert_eq!(key("n", shifted), Some(Command::NewDirectory));
+        assert_eq!(key("f", Modifiers::empty()), None);
     }
 
     #[test]

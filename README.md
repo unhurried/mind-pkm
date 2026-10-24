@@ -15,7 +15,7 @@ It reads and writes the same files as the add-on: your Freeplane `.mm` map and t
 ## Installation
 
 1. Download `mind-pkm.exe` from the [releases page](../../releases) and put it anywhere.
-2. Run it, and open your map with File → Open (`Ctrl+O`). The last opened map is reopened on the next start, with the zoom level, scroll position and selected nodes it was last shown with (remembered per map in `%APPDATA%\mind-pkm\views.txt`), in a window of the size and position it last had (`window=` in `%APPDATA%\mind-pkm\settings.txt`; remove that line if the window ends up off-screen); a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence.
+2. Run it, and open your map with File → Open. The last opened map is reopened on the next start, with the zoom level, scroll position and selected nodes it was last shown with (remembered per map in `%APPDATA%\mind-pkm\views.txt`), in a window of the size and position it last had (`window=` in `%APPDATA%\mind-pkm\settings.txt`; remove that line if the window ends up off-screen); a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence.
 
 The UI uses the Meiryo UI font; where it is missing, the system's fallback fonts are used.
 
@@ -59,20 +59,20 @@ File → New creates a map skeleton with `config > docDirPath` (edit its child t
 
 ## PKM Commands
 
-The PKM menu holds the commands of the former add-on, with the same keyboard shortcuts:
+The PKM menu holds the commands of the former add-on, with the same function keys (and Ctrl shortcuts as aliases for some):
 
 | Shortcut | Menu entry |
 | --- | --- |
-| F1 | Open |
+| F1 / Ctrl+O | Open |
 | F2 | Edit |
 | F3 | Fold One Level |
 | F4 | Unfold One Level |
-| F5 | Filter |
-| F6 | Search |
+| F5 / Ctrl+Shift+F | Filter |
+| F6 / Ctrl+F | Search |
 | F7 | Toggle Checkmark |
 | F8 | Add to ToDo |
-| F9 | New Page |
-| F10 | New Directory |
+| F9 / Ctrl+N | New Page |
+| F10 / Ctrl+Shift+N | New Directory |
 | F11 | Delete |
 | F12 | Update Next Steps and Search Index |
 | | Add Assets |
@@ -115,13 +115,13 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Esc | Center the selected node (or close the search panel / a dialog) |
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+mouse wheel | Zoom in / zoom out / reset to 100% (View menu); the wheel zooms around the pointer |
-| Ctrl+N / Ctrl+O / Ctrl+S / Ctrl+Shift+S | New / open / save / save as |
+| Ctrl+S / Ctrl+Shift+S | Save / save as |
 
 Clicking a node's link marker opens the linked file, directory or URL, or jumps to the linked node; clicking the point where the lines to a node's children branch folds the node, and clicking the number next to a folded node unfolds it. The map is only written when you save; closing the window with unsaved changes asks first.
 
 ## Full-Text Document Search
 
-Press `F6` to open the search panel under the map: type keywords and press Enter, and matching files show up in a result list with a short content snippet, the matched keywords highlighted. Double-click a result (or select it and press Enter) to open it with its default application.
+Press `F6` (or `Ctrl+F`) to open the search panel under the map: type keywords and press Enter, and matching files show up in a result list with a short content snippet, the matched keywords highlighted. Double-click a result (or select it and press Enter) to open it with its default application.
 
 - **Formats**: Markdown/plain text, PDF, and current-format Office documents (`.docx`, `.xlsx`, `.pptx`). Any other file type is still searchable by file name.
 - **Matching**: multiple space-separated keywords (a full-width space works too) are combined with AND, matched case-insensitively against both file content and file name. Japanese is analyzed morphologically (with the IPADIC dictionary), so `京都` doesn't match `東京都` and `読む` matches `読んだ`.
