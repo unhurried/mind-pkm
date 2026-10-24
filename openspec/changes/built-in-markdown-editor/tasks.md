@@ -25,11 +25,11 @@
 
 ## 5. Editor window core
 
-- [ ] 5.1 `Editor` state and messages: load, active block as `text_editor`, splice-back and re-segmentation, cursor placement by byte offset, block navigation with arrows, Enter/Backspace/Tab rules wired through `key_binding`, undo/redo, Ctrl+S save, title with `*`, close with unsaved changes; verify with editor app tests (typing, Enter, undo, save BOM/CRLF, unsaved close)
-- [ ] 5.2 Markdown source highlighter (markers, emphasis fonts, code, links, fenced code with syntect) for the active block and source mode; verify highlight ranges in unit tests
-- [ ] 5.3 Block rendering: paragraphs, headings, lists with bullets/numbers/checkboxes, quotes, code blocks with syntax highlighting, thematic breaks, front matter, TOC, footnotes, link reference definitions, HTML blocks and placeholders, soft breaks; click-to-cursor mapping; verify mapping in unit tests and the look under Xvfb
-- [ ] 5.4 Scroll the document to keep the cursor visible and to jump to headings/matches; verify under Xvfb by typing at the bottom of a long page
-- [ ] 5.5 Editor menus (File, Edit, Paragraph, Format, Table, View) and the key map with US/Japanese layout characters; verify a test that every menu shortcut maps to its command
+- [x] 5.1 `Editor` state and messages: load, active block as `text_editor`, splice-back and re-segmentation, cursor placement by byte offset, block navigation with arrows, Enter/Backspace/Tab rules wired through `key_binding`, undo/redo, Ctrl+S save, title with `*`, close with unsaved changes; verify with editor app tests (typing, Enter, undo, save BOM/CRLF, unsaved close)
+- [x] 5.2 Markdown source highlighter (markers, emphasis fonts, code, links, fenced code with syntect) for the active block and source mode; verify highlight ranges in unit tests
+- [x] 5.3 Block rendering: paragraphs, headings, lists with bullets/numbers/checkboxes, quotes, code blocks with syntax highlighting, thematic breaks, front matter, TOC, footnotes, link reference definitions, HTML blocks and placeholders, soft breaks; click-to-cursor mapping; verify mapping in unit tests and the look under Xvfb
+- [x] 5.4 Scroll the document to keep the cursor visible and to jump to headings/matches; verify under Xvfb by typing at the bottom of a long page
+- [x] 5.5 Editor menus (File, Edit, Paragraph, Format, Table, View) and the key map with US/Japanese layout characters; verify a test that every menu shortcut maps to its command
 
 ## 6. Rendering of math, diagrams and images
 

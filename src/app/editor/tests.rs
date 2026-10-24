@@ -196,3 +196,52 @@ fn a_page_that_is_not_utf8_is_reported() {
     assert!(app.editors.is_empty());
     assert!(matches!(app.dialogs.front(), Some(Dialog::Message(m)) if m.starts_with("failed to open")));
 }
+
+#[test]
+fn an_empty_template_item_is_typed_into() {
+    let (mut app, _f, _, _) = app_with_page("### Next Steps\r\n\r\n* \r\n");
+    let id = open_with_f1(&mut app);
+    // A click beside the item's (missing) text, on its bullet.
+    let item = app.editors[&id].page.doc.blocks.len() - 1;
+    editor(&mut app, id, EditorMsg::BlockPressed(item));
+    typing(&mut app, id, "step");
+    assert_eq!(page_text(&app, id), "### Next Steps\n\n* step\n");
+}
+
+#[test]
+fn arrows_cross_into_the_next_and_previous_blocks() {
+    let (mut app, _f, _, _) = app_with_page("first line\n\nsecond\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "first");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Down));
+    let page = &app.editors[&id].page;
+    assert_eq!(page.region_text(), Some("second"));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Up));
+    assert_eq!(app.editors[&id].page.region_text(), Some("first line"));
+    // Right at the end and Left at the start cross too.
+    click_after(&mut app, id, "first line");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Right));
+    assert_eq!(app.editors[&id].page.region_text(), Some("second"));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Left));
+    assert_eq!(app.editors[&id].page.region_text(), Some("first line"));
+}
+
+#[test]
+fn backspace_at_the_start_joins_paragraphs() {
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::PressedAt(5));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "onetwo\n");
+    assert_eq!(app.editors[&id].page.sel.head, 3);
+}
+
+#[test]
+fn a_task_box_is_checked_by_a_click() {
+    let (mut app, _f, _, _) = app_with_page("- [ ] call\n");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::TaskToggled(0));
+    assert_eq!(page_text(&app, id), "- [x] call\n");
+    editor(&mut app, id, EditorMsg::Command(super::EditorCommand::Undo));
+    assert_eq!(page_text(&app, id), "- [ ] call\n");
+}

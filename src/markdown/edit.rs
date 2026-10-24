@@ -235,15 +235,20 @@ fn region_kind(doc: &Document, text: &str, region: &Range<usize>) -> BlockKind {
     own.blocks.first().map_or(BlockKind::Paragraph, |b| b.kind.clone())
 }
 
-/// The region of the block holding `offset`: its range, extended to `offset`
-/// when only spaces follow the block on its line (`- ` of a new item).
+/// The region of the block holding `offset`: its range with the spaces
+/// that follow it on its last line (`- ` of an empty item keeps its space).
 pub fn region_at(doc: &Document, offset: usize) -> Option<Range<usize>> {
+    let with_spaces = |r: Range<usize>| {
+        let rest = &doc.text[r.end..];
+        let spaces = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        r.start..r.end + spaces
+    };
     if let Some(b) = doc.block_at(offset) {
-        return Some(doc.blocks[b].range.clone());
+        return Some(with_spaces(doc.blocks[b].range.clone()));
     }
     let b = doc.blocks.iter().rev().find(|b| b.range.end <= offset)?;
-    let between = &doc.text[b.range.end..offset];
-    (between.chars().all(|c| c == ' ' || c == '\t')).then_some(b.range.start..offset)
+    let r = with_spaces(b.range.clone());
+    (offset <= r.end).then_some(r)
 }
 
 /// A line consisting of a code fence opening: its fence characters.
@@ -277,7 +282,7 @@ fn neighbors(doc: &Document, region: &Range<usize>) -> (Option<usize>, Option<us
 }
 
 /// Where the content of a block's source starts (after its first line's marker).
-fn content_start(text: &str, block_start: usize) -> usize {
+pub fn content_start(text: &str, block_start: usize) -> usize {
     let line = line_range(text, block_start);
     match line_marker(&text[line.clone()]) {
         Some(m) => line.start + m.end,

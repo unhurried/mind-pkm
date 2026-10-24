@@ -77,6 +77,8 @@ pub struct ListItem {
     pub continuation: bool,
     /// The end of the item with all its nested lists.
     pub subtree_end: usize,
+    /// Where its top-level list starts: items of one list share it.
+    pub list: usize,
 }
 
 impl BlockKind {
@@ -352,7 +354,8 @@ fn segment(text: &str, events: &[(Event<'static>, Range<usize>)]) -> Vec<Block> 
             Event::Start(tag) => {
                 let end = matching_end(events, i);
                 if let Tag::List(start) = tag {
-                    flatten_list(text, events, i, end, *start, 0, &mut blocks);
+                    let list = List { text, events, top: range.start };
+                    list.flatten(i, end, *start, 0, &mut blocks);
                 } else {
                     let kind = block_kind(tag, &events[i + 1..end], text, range);
                     let range = trim_end(text, line_start_if_indented(text, range.start)..range.end);
@@ -416,83 +419,86 @@ pub fn heading_level(level: HeadingLevel) -> u8 {
     }
 }
 
-/// Adds a block for every item of the list starting at event `start` (and
-/// ending at `end`), and recursively for its nested lists.
-fn flatten_list(
-    text: &str,
-    events: &[(Event<'static>, Range<usize>)],
-    start: usize,
-    end: usize,
-    first_number: Option<u64>,
-    depth: usize,
-    blocks: &mut Vec<Block>,
-) {
-    // A loose list has paragraphs in its items.
-    let loose = {
-        let mut level = 0;
-        let mut loose = false;
-        for (event, _) in &events[start + 1..end] {
-            match event {
-                Event::Start(Tag::Item) => level += 1,
-                Event::End(TagEnd::Item) => level -= 1,
-                Event::Start(Tag::Paragraph) if level == 1 => loose = true,
-                Event::Start(Tag::List(_)) => level += 10,
-                Event::End(TagEnd::List(_)) => level -= 10,
-                _ => {}
+/// A top-level list being flattened into item blocks.
+struct List<'a> {
+    text: &'a str,
+    events: &'a [(Event<'static>, Range<usize>)],
+    /// Where the top-level list starts.
+    top: usize,
+}
+
+impl List<'_> {
+    /// Adds a block for every item of the list starting at event `start` (and
+    /// ending at `end`), and recursively for its nested lists.
+    fn flatten(&self, start: usize, end: usize, first_number: Option<u64>, depth: usize, blocks: &mut Vec<Block>) {
+        let (text, events, list) = (self.text, self.events, self.top);
+        // A loose list has paragraphs in its items.
+        let loose = {
+            let mut level = 0;
+            let mut loose = false;
+            for (event, _) in &events[start + 1..end] {
+                match event {
+                    Event::Start(Tag::Item) => level += 1,
+                    Event::End(TagEnd::Item) => level -= 1,
+                    Event::Start(Tag::Paragraph) if level == 1 => loose = true,
+                    Event::Start(Tag::List(_)) => level += 10,
+                    Event::End(TagEnd::List(_)) => level -= 10,
+                    _ => {}
+                }
             }
-        }
-        loose
-    };
-    let mut index = 0;
-    let mut i = start + 1;
-    while i < end {
-        if !matches!(events[i].0, Event::Start(Tag::Item)) {
-            i += 1;
-            continue;
-        }
-        let item_end = matching_end(events, i);
-        let item_range = events[i].1.clone();
-        let number = first_number.map(|n| n + index);
-        index += 1;
-        let task = events[i + 1..item_end].iter().take(3).find_map(|(e, _)| match e {
-            Event::TaskListMarker(checked) => Some(*checked),
-            _ => None,
-        });
-        // The item's own segments around its nested lists.
-        let mut segment_start = line_start_if_indented(text, item_range.start);
-        let mut segment_events = i + 1;
-        let mut continuation = false;
-        let mut j = i + 1;
-        let push = |range: Range<usize>, evs: Range<usize>, continuation: bool, blocks: &mut Vec<Block>| {
-            // A continuation starts at its first non-blank line.
-            let start = if continuation {
-                let skipped = text[range.clone()].len() - text[range.clone()].trim_start().len();
-                line_start_if_indented(text, range.start + skipped)
-            } else {
-                range.start
-            };
-            let range = trim_end(text, start.min(range.end)..range.end);
-            if !continuation || !text[range.clone()].trim().is_empty() {
-                let item = ListItem { depth, number, task, loose, continuation, subtree_end: item_range.end };
-                blocks.push(Block { range, kind: BlockKind::ListItem(item), events: evs });
-            }
+            loose
         };
-        while j < item_end {
-            if let Event::Start(Tag::List(n)) = &events[j].0 {
-                let list_end = matching_end(events, j);
-                let list_start = line_start_if_indented(text, events[j].1.start);
-                push(segment_start..list_start, segment_events..j, continuation, blocks);
-                flatten_list(text, events, j, list_end, *n, depth + 1, blocks);
-                continuation = true;
-                segment_start = events[j].1.end;
-                segment_events = list_end + 1;
-                j = list_end + 1;
-            } else {
-                j += 1;
+        let mut index = 0;
+        let mut i = start + 1;
+        while i < end {
+            if !matches!(events[i].0, Event::Start(Tag::Item)) {
+                i += 1;
+                continue;
             }
+            let item_end = matching_end(events, i);
+            let item_range = events[i].1.clone();
+            let number = first_number.map(|n| n + index);
+            index += 1;
+            let task = events[i + 1..item_end].iter().take(3).find_map(|(e, _)| match e {
+                Event::TaskListMarker(checked) => Some(*checked),
+                _ => None,
+            });
+            // The item's own segments around its nested lists.
+            let mut segment_start = line_start_if_indented(text, item_range.start);
+            let mut segment_events = i + 1;
+            let mut continuation = false;
+            let mut j = i + 1;
+            let push = |range: Range<usize>, evs: Range<usize>, continuation: bool, blocks: &mut Vec<Block>| {
+                // A continuation starts at its first non-blank line.
+                let start = if continuation {
+                    let skipped = text[range.clone()].len() - text[range.clone()].trim_start().len();
+                    line_start_if_indented(text, range.start + skipped)
+                } else {
+                    range.start
+                };
+                let range = trim_end(text, start.min(range.end)..range.end);
+                if !continuation || !text[range.clone()].trim().is_empty() {
+                    let item = ListItem { depth, number, task, loose, continuation, subtree_end: item_range.end, list };
+                    blocks.push(Block { range, kind: BlockKind::ListItem(item), events: evs });
+                }
+            };
+            while j < item_end {
+                if let Event::Start(Tag::List(n)) = &events[j].0 {
+                    let list_end = matching_end(events, j);
+                    let list_start = line_start_if_indented(text, events[j].1.start);
+                    push(segment_start..list_start, segment_events..j, continuation, blocks);
+                    self.flatten(j, list_end, *n, depth + 1, blocks);
+                    continuation = true;
+                    segment_start = events[j].1.end;
+                    segment_events = list_end + 1;
+                    j = list_end + 1;
+                } else {
+                    j += 1;
+                }
+            }
+            push(segment_start..item_range.end, segment_events..item_end, continuation, blocks);
+            i = item_end + 1;
         }
-        push(segment_start..item_range.end, segment_events..item_end, continuation, blocks);
-        i = item_end + 1;
     }
 }
 

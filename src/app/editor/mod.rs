@@ -9,6 +9,7 @@ mod highlight;
 mod keys;
 mod page;
 mod render;
+mod scroll;
 mod view;
 
 #[cfg(test)]
@@ -179,7 +180,7 @@ impl Editor {
         format!("{name}{} - Mind PKM", if self.page.is_dirty() { " *" } else { "" })
     }
 
-    fn id(&self, part: &str) -> iced::widget::Id {
+    pub(super) fn id(&self, part: &str) -> iced::widget::Id {
         iced::widget::Id::from(format!("editor-{}-{part}", self.uid))
     }
 
@@ -193,6 +194,33 @@ impl Editor {
     }
 
     pub fn update(&mut self, msg: EditorMsg, prefs: &EditorPrefs, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
+        // After typing and moving with keys, the cursor stays in view.
+        let reveals =
+            matches!(msg, EditorMsg::Action(_) | EditorMsg::Bind(_) | EditorMsg::Command(_) | EditorMsg::Key(_));
+        let task = self.handle(msg, prefs, effects);
+        if reveals { Task::batch([task, self.reveal(prefs)]) } else { task }
+    }
+
+    /// Scrolls the page to show the cursor.
+    fn reveal(&self, prefs: &EditorPrefs) -> Task<EditorMsg> {
+        let (before, kind) = match (&self.source, &self.page.active) {
+            (Some(_), _) => (
+                self.page.text[..self.page.sel.head.min(self.page.text.len())].to_string(),
+                crate::markdown::BlockKind::Paragraph,
+            ),
+            (None, Some(a)) if a.table.is_none() => {
+                let text = &self.page.text[a.region.clone()];
+                let at = self.page.sel.head.clamp(a.region.start, a.region.end) - a.region.start;
+                (text[..at].to_string(), a.kind.clone())
+            }
+            _ => return Task::none(),
+        };
+        let (size, font, padding) = view::region_text_style(&kind, prefs.zoom);
+        let caret = scroll::CaretText { before, size, font, line_height: view::TEXT_LINE_HEIGHT, padding };
+        scroll::reveal_caret(self.id("active-box"), self.id("doc"), caret)
+    }
+
+    fn handle(&mut self, msg: EditorMsg, prefs: &EditorPrefs, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         match msg {
             EditorMsg::Key(event) => self.on_key(event, prefs, effects),
             EditorMsg::Escape => self.on_escape(),
@@ -541,7 +569,15 @@ impl Editor {
             return Task::none();
         }
         if let Some(b) = self.page.doc.blocks.get(block) {
-            self.page.place(Sel::caret(b.range.start));
+            // Beside a list item's text (on its bullet): where its text starts.
+            let at = match b.kind {
+                crate::markdown::BlockKind::ListItem(_) => {
+                    let region = edit::region_at(&self.page.doc, b.range.start).unwrap_or(b.range.clone());
+                    edit::content_start(&self.page.text, b.range.start).min(region.end)
+                }
+                _ => b.range.start,
+            };
+            self.page.place(Sel::caret(at));
         }
         self.focus()
     }
@@ -649,7 +685,7 @@ impl Editor {
             C::Strikethrough => self.toggle(InlineStyle::Strike),
             C::Highlight => self.toggle(InlineStyle::Highlight),
             C::InlineMath => self.toggle(InlineStyle::Math),
-            C::Link => self.edit_selection(|text, sel| format::insert_link(text, sel)),
+            C::Link => self.edit_selection(format::insert_link),
             C::SourceMode => self.toggle_source_mode(),
             C::Outline => {
                 self.outline = !self.outline;
@@ -1009,11 +1045,7 @@ impl Editor {
     // --- Scrolling ---
 
     fn scroll_to_block(&self, block: usize) -> Task<EditorMsg> {
-        // Estimated by the share of the text before the block.
-        let Some(b) = self.page.doc.blocks.get(block) else { return Task::none() };
-        let total = self.page.text.len().max(1) as f32;
-        let y = b.range.start as f32 / total;
-        operation::snap_to(self.id("doc"), scrollable::RelativeOffset { x: 0.0, y })
+        scroll::to_top(self.id(&format!("block-{block}")), self.id("doc"))
     }
 
     /// Words and characters for the status bar.

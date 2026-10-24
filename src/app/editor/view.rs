@@ -161,9 +161,7 @@ pub fn hit_test(info: &HitInfo, p: Point) -> Option<usize> {
         shaping: Shaping::Advanced,
         wrapping: Wrapping::WordOrGlyph,
     });
-    let index = match paragraph.hit_test(p)? {
-        iced::advanced::text::Hit::CharOffset(i) => i,
-    };
+    let iced::advanced::text::Hit::CharOffset(index) = paragraph.hit_test(p)?;
     let mut start = 0;
     let mut last = None;
     for run in &info.runs {
@@ -187,6 +185,7 @@ struct SpanLink {
 }
 
 /// What rendering needs besides the editor.
+#[derive(Clone, Copy)]
 struct Ctx<'a> {
     editor: &'a Editor,
     p: Palette,
@@ -369,7 +368,7 @@ impl Editor {
         let width = self.column_width(ctx.zoom);
         let p = ctx.p;
         let content: Element<EditorMsg> = match &self.source {
-            Some(source) => self.source_view(source, ctx, prefs).into(),
+            Some(source) => self.source_view(source, ctx, prefs),
             None => {
                 let mut col = Column::new().width(width);
                 let page = &self.page;
@@ -379,7 +378,9 @@ impl Editor {
                     let unit = BLOCK_GAP * ctx.zoom;
                     match (prev, kind) {
                         (None, _) => 0.0,
-                        (Some(BlockKind::ListItem(_)), BlockKind::ListItem(item)) if !item.loose => 2.0 * ctx.zoom,
+                        (Some(BlockKind::ListItem(a)), BlockKind::ListItem(b)) if !b.loose && a.list == b.list => {
+                            2.0 * ctx.zoom
+                        }
                         (_, BlockKind::Heading(_)) => unit * 1.6,
                         _ => unit,
                     }
@@ -413,7 +414,8 @@ impl Editor {
                     } else {
                         rendered
                     };
-                    col = col.push(mouse_area(rendered).on_press(EditorMsg::BlockPressed(i)));
+                    let boxed = container(rendered).id(self.id(&format!("block-{i}")));
+                    col = col.push(mouse_area(boxed).on_press(EditorMsg::BlockPressed(i)));
                 }
                 if let Some(a) = active
                     && !active_shown
@@ -441,7 +443,7 @@ impl Editor {
         let p = ctx.p;
         let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: true };
         let settings = highlight::Settings { dark: prefs.dark, page_start: true, find: None };
-        text_editor(source)
+        let editor = text_editor(source)
             .id(self.id("active"))
             .on_action(EditorMsg::Action)
             .key_binding(move |k| keys::binding(k, bind))
@@ -451,8 +453,8 @@ impl Editor {
             .font(APP_FONT)
             .padding(0)
             .wrapping(Wrapping::WordOrGlyph)
-            .style(move |_, _| editor_style(p, Color::TRANSPARENT))
-            .into()
+            .style(move |_, _| editor_style(p, Color::TRANSPARENT));
+        container(editor).id(self.id("active-box")).into()
     }
 
     /// The active region: its source in a text editor (or the table editor).
@@ -465,12 +467,9 @@ impl Editor {
     ) -> Element<'a, EditorMsg> {
         let p = ctx.p;
         if let Some(state) = &a.table {
-            return self.table_editor(a, state, ctx, prefs, width);
+            return container(self.table_editor(a, state, ctx, prefs, width)).id(self.id("active-box")).into();
         }
-        let (size, font) = match a.kind {
-            BlockKind::Heading(level) => (ctx.size(HEADING_SCALE[usize::from(level.clamp(1, 6)) - 1]), bold(APP_FONT)),
-            _ => (ctx.size(1.0), APP_FONT),
-        };
+        let (size, font, padding) = region_text_style(&a.kind, ctx.zoom);
         let code = a.kind.is_code();
         let bind = BindContext { auto_pair: prefs.auto_pair, code, source_mode: false };
         let settings = highlight::Settings { dark: prefs.dark, page_start: a.region.start == 0, find: None };
@@ -483,7 +482,7 @@ impl Editor {
             .size(size)
             .line_height(LINE_HEIGHT)
             .font(font)
-            .padding(if code { CODE_PADDING } else { 0.0 })
+            .padding(padding)
             .wrapping(Wrapping::WordOrGlyph)
             .style(move |_, _| editor_style(p, background));
         // Math and diagrams show what they become below their source.
@@ -502,10 +501,11 @@ impl Editor {
             }
             _ => None,
         };
-        match preview {
+        let shown: Element<EditorMsg> = match preview {
             Some(preview) => column![editor, preview].spacing(8).into(),
             None => editor.into(),
-        }
+        };
+        container(shown).id(self.id("active-box")).into()
     }
 
     /// The table with the cursor, as a grid of cells; the cursor's cell is a text editor.
@@ -688,7 +688,10 @@ impl Editor {
         let indent = LIST_INDENT * ctx.zoom * item.depth as f32;
         let marker_w = LIST_INDENT * ctx.zoom;
         let nodes = content::nodes(doc, doc.block_events(i));
-        let body = nodes_view(&nodes, ctx, width - indent - marker_w, i);
+        // A checked task's text is muted.
+        let done = Ctx { p: Palette { text: p.muted, link: p.muted, heading: p.muted, ..p }, ..*ctx };
+        let body_ctx = if item.task == Some(true) { &done } else { ctx };
+        let body = nodes_view(&nodes, body_ctx, width - indent - marker_w, i);
         let marker: Element<EditorMsg> = if item.continuation {
             space().width(marker_w).into()
         } else if let Some(checked) = item.task {
@@ -705,15 +708,22 @@ impl Editor {
             };
             text(glyph).size(ctx.size(1.0)).line_height(LINE_HEIGHT).color(p.text).width(marker_w).into()
         };
-        let content: Element<EditorMsg> = if item.task == Some(true) {
-            // A checked task is shown muted.
-            container(body).style(move |_| container::Style { text_color: Some(p.muted), ..Default::default() }).into()
-        } else {
-            body
-        };
-        row![space().width(indent), marker, content].into()
+        row![space().width(indent), marker, body].into()
     }
 }
+
+/// The size, font and padding of the active region's source for a kind of block.
+pub fn region_text_style(kind: &BlockKind, zoom: f32) -> (f32, Font, f32) {
+    match kind {
+        BlockKind::Heading(level) => {
+            (BODY_SIZE * zoom * HEADING_SCALE[usize::from((*level).clamp(1, 6)) - 1], bold(APP_FONT), 0.0)
+        }
+        k if k.is_code() => (BODY_SIZE * zoom, APP_FONT, CODE_PADDING),
+        _ => (BODY_SIZE * zoom, APP_FONT, 0.0),
+    }
+}
+
+pub const TEXT_LINE_HEIGHT: f32 = LINE_HEIGHT;
 
 fn editor_style(p: Palette, background: Color) -> text_editor::Style {
     text_editor::Style {
@@ -1215,4 +1225,39 @@ fn dialog_view(dialog: &EditorDialog, p: Palette) -> Element<'_, EditorMsg> {
             })
         });
     opaque(center(card).style(|_| container::background(Color::from_rgba(0.0, 0.0, 0.0, 0.25))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run(text: &str, source: std::ops::Range<usize>) -> HitRun {
+        HitRun {
+            text: text.into(),
+            size: BODY_SIZE,
+            font: APP_FONT,
+            map: Some(content::source_map(text.len(), source)),
+        }
+    }
+
+    #[test]
+    fn a_click_maps_to_the_source_of_the_text_under_it() {
+        // "hello world" rendered from `hello **world**`: "world" comes from 8..13.
+        let info = HitInfo { block: 0, runs: vec![run("hello ", 0..6), run("world", 8..13)], width: 1000.0 };
+        assert_eq!(hit_test(&info, Point::new(0.0, 5.0)), Some(0));
+        assert_eq!(hit_test(&info, Point::new(999.0, 5.0)), Some(13));
+        // Somewhere inside "world".
+        let inside = hit_test(&info, Point::new(70.0, 5.0)).unwrap();
+        assert!((8..=13).contains(&inside), "{inside}");
+    }
+
+    #[test]
+    fn wrapped_lines_are_hit_by_their_height() {
+        let text = "word ".repeat(30);
+        let info = HitInfo { block: 0, runs: vec![run(&text, 100..100 + text.len())], width: 120.0 };
+        let first = hit_test(&info, Point::new(1.0, 5.0)).unwrap();
+        let third = hit_test(&info, Point::new(1.0, 2.5 * BODY_SIZE * LINE_HEIGHT)).unwrap();
+        assert_eq!(first, 100);
+        assert!(third > 110, "{third}");
+    }
 }
