@@ -3,6 +3,7 @@
 
 use mind_pkm::markdown::Document;
 use mind_pkm::markdown::edit::{self, Sel};
+use mind_pkm::markdown::live;
 use mind_pkm::markdown::table::{self, Align, Table};
 use proptest::prelude::*;
 
@@ -125,5 +126,69 @@ proptest! {
         let doc = Document::parse(&written);
         prop_assert_eq!(doc.blocks.len(), 1);
         prop_assert_eq!(&doc.blocks[0].kind, &mind_pkm::markdown::BlockKind::Table);
+    }
+}
+
+/// Pieces of inline Markdown, stray or paired.
+const PIECES: &[&str] = &[
+    "a",
+    "b",
+    " ",
+    "  ",
+    "**",
+    "*",
+    "_",
+    "`",
+    "[",
+    "](x.md)",
+    "==",
+    "~",
+    "^",
+    "\\",
+    "\\*",
+    "&amp;",
+    ":smile:",
+    "<u>",
+    "</u>",
+    "$",
+    "![i](p.png)",
+    "日",
+    "本",
+    "\n",
+    "# ",
+    "- ",
+    "> ",
+    "1. ",
+    "- [ ] ",
+];
+
+fn inline_source() -> impl Strategy<Value = String> {
+    prop::collection::vec(prop::sample::select(PIECES), 0..16).prop_map(|p| p.concat())
+}
+
+proptest! {
+    /// Every shown position of the block being edited maps into the block and
+    /// back to itself, wherever the cursor is.
+    #[test]
+    fn shown_positions_map_back(text in inline_source(), cursor in 0usize..200) {
+        let doc = Document::parse(&text);
+        let cursor = (0..=cursor.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+        if let Some(region) = edit::region_at(&doc, cursor)
+            && let Some(block) = doc.block_at(cursor)
+            && live::editable(&doc, block)
+        {
+            let d = live::Display::new(&doc, doc.block_events(block), region.clone(), cursor);
+            for (i, _) in d.text.char_indices().chain([(d.text.len(), ' ')]).filter(|(i, _)| d.is_stop(*i)) {
+                let s = d.to_source(i);
+                prop_assert!(region.start <= s && s <= region.end, "{text:?} shown {:?}: {i} -> {s}", d.text);
+                prop_assert_eq!(d.to_shown(s), i, "{:?} {:?} at {}", text, d.text, i);
+            }
+            // Deleting any shown range removes source inside the block only.
+            for (i, _) in d.text.char_indices() {
+                for r in d.deletion(i..d.text.len()) {
+                    prop_assert!(region.start <= r.start && r.end <= region.end, "{text:?}: {r:?}");
+                }
+            }
+        }
     }
 }

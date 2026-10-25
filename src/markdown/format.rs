@@ -82,14 +82,14 @@ fn enclosed(text: &str, range: &Range<usize>, style: InlineStyle) -> bool {
 /// The kind of character words are made of: a word is a run of one kind
 /// (so that Japanese splits between kanji, hiragana and katakana).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WordClass {
+pub(crate) enum WordClass {
     Han,
     Hiragana,
     Katakana,
     Other,
 }
 
-fn word_class(c: char) -> Option<WordClass> {
+pub(crate) fn word_class(c: char) -> Option<WordClass> {
     match c {
         '\u{3040}'..='\u{309f}' => Some(WordClass::Hiragana),
         '\u{30a0}'..='\u{30ff}' | '\u{ff66}'..='\u{ff9f}' => Some(WordClass::Katakana),

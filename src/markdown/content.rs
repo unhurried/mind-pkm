@@ -107,6 +107,14 @@ impl SourceMap {
         }
     }
 
+    /// The pieces as (text range, source range), in order.
+    pub fn pieces(&self) -> impl Iterator<Item = (Range<usize>, Range<usize>)> + '_ {
+        self.pieces.iter().enumerate().map(|(i, (start, source))| {
+            let end = self.pieces.get(i + 1).map_or(self.len, |p| p.0);
+            (*start..end, source.clone())
+        })
+    }
+
     /// The source bytes the whole text came from.
     pub fn source_range(&self) -> Range<usize> {
         let start = self.pieces.first().map_or(0, |p| p.1.start);
@@ -413,7 +421,16 @@ enum Frame {
 
 /// Inline events turned into runs.
 pub fn inlines(doc: &Document, events: &Events) -> Vec<Inline> {
-    let mut b = InlineBuilder { out: Vec::new(), stack: Vec::new() };
+    inlines_and_elements(doc, events).0
+}
+
+/// Inline events turned into runs, with the source ranges of the inline
+/// elements they came from: what the parser tags (emphasis, links, images,
+/// code spans, math, footnote references...), pairs of inline HTML tags,
+/// `==`, `~` and `^` pairs, and every piece of text shown differently from
+/// its source (an escape, an entity, an emoji shortcode).
+pub fn inlines_and_elements(doc: &Document, events: &Events) -> (Vec<Inline>, Vec<Range<usize>>) {
+    let mut b = InlineBuilder { out: Vec::new(), stack: Vec::new(), elements: Vec::new(), open_html: Vec::new() };
     let mut i = 0;
     while i < events.len() {
         let (event, range) = &events[i];
@@ -430,30 +447,50 @@ pub fn inlines(doc: &Document, events: &Events) -> Vec<Inline> {
                 b.text(text, map);
             }
             Event::Code(t) => {
+                b.elements.push(range.clone());
                 let mut style = b.style();
                 style.code = true;
                 b.push_text(t.to_string(), style, SourceMap::new(t.len(), code_inner(&doc.text, range)));
             }
-            Event::InlineMath(t) | Event::DisplayMath(t) => b.out.push(Inline::Math {
-                tex: t.trim().to_string(),
-                display: matches!(event, Event::DisplayMath(_)),
-                link: b.link(),
-                source: range.clone(),
-            }),
+            Event::InlineMath(t) | Event::DisplayMath(t) => {
+                b.elements.push(range.clone());
+                b.out.push(Inline::Math {
+                    tex: t.trim().to_string(),
+                    display: matches!(event, Event::DisplayMath(_)),
+                    link: b.link(),
+                    source: range.clone(),
+                })
+            }
             Event::SoftBreak | Event::HardBreak => b.out.push(Inline::Break { source: range.clone() }),
-            Event::FootnoteReference(label) => b.out.push(Inline::FootnoteRef {
-                label: label.to_string(),
-                number: doc.footnotes.get(label.as_ref()).copied().unwrap_or(0),
-                source: range.clone(),
-            }),
+            Event::FootnoteReference(label) => {
+                b.elements.push(range.clone());
+                b.out.push(Inline::FootnoteRef {
+                    label: label.to_string(),
+                    number: doc.footnotes.get(label.as_ref()).copied().unwrap_or(0),
+                    source: range.clone(),
+                })
+            }
             Event::InlineHtml(html) | Event::Html(html) => b.html(html, range.clone()),
-            Event::Start(Tag::Emphasis) => b.stack.push(Frame::Emphasis),
-            Event::Start(Tag::Strong) => b.stack.push(Frame::Strong),
-            Event::Start(Tag::Strikethrough) => b.stack.push(Frame::Strike),
-            Event::Start(Tag::Subscript) => b.stack.push(Frame::Sub),
-            Event::Start(Tag::Superscript) => b.stack.push(Frame::Sup),
-            Event::Start(Tag::Link { dest_url, title, .. }) => {
-                b.stack.push(Frame::Link(Link { dest: dest_url.to_string(), title: title.to_string() }))
+            Event::Start(
+                tag @ (Tag::Emphasis
+                | Tag::Strong
+                | Tag::Strikethrough
+                | Tag::Subscript
+                | Tag::Superscript
+                | Tag::Link { .. }),
+            ) => {
+                b.elements.push(range.clone());
+                b.stack.push(match tag {
+                    Tag::Emphasis => Frame::Emphasis,
+                    Tag::Strong => Frame::Strong,
+                    Tag::Strikethrough => Frame::Strike,
+                    Tag::Subscript => Frame::Sub,
+                    Tag::Superscript => Frame::Sup,
+                    Tag::Link { dest_url, title, .. } => {
+                        Frame::Link(Link { dest: dest_url.to_string(), title: title.to_string() })
+                    }
+                    _ => unreachable!(),
+                })
             }
             Event::End(
                 TagEnd::Emphasis
@@ -469,6 +506,7 @@ pub fn inlines(doc: &Document, events: &Events) -> Vec<Inline> {
                 }
             }
             Event::Start(Tag::Image { dest_url, title, .. }) => {
+                b.elements.push(range.clone());
                 let end = matching_end(events, i);
                 let alt = super::parse::plain_text(&events[i + 1..end]);
                 b.out.push(Inline::Image {
@@ -483,14 +521,41 @@ pub fn inlines(doc: &Document, events: &Events) -> Vec<Inline> {
             }
             // Paragraphs of a loose list item, one after the other.
             Event::End(TagEnd::Paragraph) if events[i + 1..].iter().any(|(e, _)| !matches!(e, Event::End(_))) => {
-                b.out.push(Inline::Break { source: range.end..range.end });
-                b.out.push(Inline::Break { source: range.end..range.end });
+                // The source between the paragraphs stands for the break.
+                let next =
+                    events[i + 1..].iter().find(|(e, _)| !matches!(e, Event::End(_))).map_or(range.end, |e| e.1.start);
+                b.out.push(Inline::Break { source: range.end..next.max(range.end) });
+                b.out.push(Inline::Break { source: next.max(range.end)..next.max(range.end) });
             }
             _ => {}
         }
         i += 1;
     }
-    sub_sup(highlight(b.out))
+    let mut elements = b.elements;
+    // Escapes: the parser drops the backslash and starts a text at the escaped character.
+    for (event, range) in events {
+        if let Event::Text(t) = event
+            && range.start > 0
+            && doc.text.as_bytes()[range.start - 1] == b'\\'
+            && t.chars().next().is_some_and(|c| c.is_ascii_punctuation() && doc.text[range.start..].starts_with(c))
+        {
+            elements.push(range.start - 1..range.start + 1);
+        }
+    }
+    let out = sub_sup(highlight(b.out, &mut elements), &mut elements);
+    // Pieces shown differently from their source (escapes, entities, emoji).
+    for inline in &out {
+        if let Inline::Text { map, .. } = inline {
+            for (text, source) in map.pieces() {
+                if text.len() != source.len() && !source.is_empty() {
+                    elements.push(source);
+                }
+            }
+        }
+    }
+    elements.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
+    elements.dedup();
+    (out, elements)
 }
 
 /// The inside of a code span's source, without the backticks.
@@ -510,6 +575,9 @@ fn code_inner(text: &str, range: &Range<usize>) -> Range<usize> {
 struct InlineBuilder {
     out: Vec<Inline>,
     stack: Vec<Frame>,
+    elements: Vec<Range<usize>>,
+    /// Open HTML elements: their name and where their opening tag starts.
+    open_html: Vec<(String, usize)>,
 }
 
 impl InlineBuilder {
@@ -597,10 +665,12 @@ impl InlineBuilder {
                 return;
             }
             ("br", _) => {
+                self.elements.push(source.clone());
                 self.out.push(Inline::Break { source });
                 return;
             }
             ("img", TagKind::Open | TagKind::SelfClosing) => {
+                self.elements.push(source.clone());
                 self.out.push(Inline::Image {
                     src: token.attr("src").unwrap_or_default(),
                     alt: token.attr("alt").unwrap_or_default(),
@@ -613,6 +683,11 @@ impl InlineBuilder {
             }
             ("iframe" | "video" | "audio" | "embed" | "object", TagKind::Open | TagKind::SelfClosing) => {
                 let src = token.attr("src").or_else(|| token.attr("data"));
+                if token.kind == TagKind::Open {
+                    self.open_html.push((name.to_string(), source.start));
+                } else {
+                    self.elements.push(source.clone());
+                }
                 self.out.push(Inline::Embed { tag: name.to_string(), src, source });
                 return;
             }
@@ -622,6 +697,9 @@ impl InlineBuilder {
                     && let Some(Inline::Embed { src: src @ None, .. }) = self.out.last_mut()
                 {
                     *src = token.attr("src");
+                }
+                if token.kind == TagKind::Close {
+                    self.close_html(name, source.end);
                 }
                 return;
             }
@@ -649,14 +727,26 @@ impl InlineBuilder {
             }
         }
         match token.kind {
-            TagKind::Open => self.stack.push(Frame::Html { name: name.to_string(), style, link }),
+            TagKind::Open => {
+                self.stack.push(Frame::Html { name: name.to_string(), style, link });
+                self.open_html.push((name.to_string(), source.start));
+            }
             TagKind::Close => {
                 if let Some(p) = self.stack.iter().rposition(|f| matches!(f, Frame::Html { name: n, .. } if n == name))
                 {
                     self.stack.remove(p);
                 }
+                self.close_html(name, source.end);
             }
             TagKind::SelfClosing | TagKind::Comment => {}
+        }
+    }
+
+    /// A closing tag ends the element its innermost opening tag of that name started.
+    fn close_html(&mut self, name: &str, end: usize) {
+        if let Some(p) = self.open_html.iter().rposition(|(n, _)| n == name) {
+            let (_, start) = self.open_html.remove(p);
+            self.elements.push(start..end);
         }
     }
 
@@ -708,7 +798,7 @@ pub fn recognize(inlines: Vec<Inline>) -> Vec<Inline> {
             other => out.push(other),
         }
     }
-    sub_sup(out)
+    sub_sup(out, &mut Vec::new())
 }
 
 /// A map for a replacement text of `len` bytes standing for the whole source of `map`.
@@ -719,7 +809,7 @@ fn collapse(map: SourceMap, len: usize) -> SourceMap {
 
 /// The inlines of an HTML block's events.
 fn html_inlines(doc: &Document, events: &Events) -> Vec<Inline> {
-    let mut b = InlineBuilder { out: Vec::new(), stack: Vec::new() };
+    let mut b = InlineBuilder { out: Vec::new(), stack: Vec::new(), elements: Vec::new(), open_html: Vec::new() };
     // One HTML text over the whole block, so that elements spanning lines work.
     let Some(first) = events.first() else { return Vec::new() };
     let start = first.1.start;
@@ -951,7 +1041,7 @@ fn url_length(s: &str) -> usize {
 
 /// Applies `==highlight==`: pairs of `==` in the text runs (not in code)
 /// highlight what is between them and disappear.
-fn highlight(inlines: Vec<Inline>) -> Vec<Inline> {
+fn highlight(inlines: Vec<Inline>, elements: &mut Vec<Range<usize>>) -> Vec<Inline> {
     // The positions of `==` as (run, offset).
     let mut marks: Vec<(usize, usize)> = Vec::new();
     for (i, inline) in inlines.iter().enumerate() {
@@ -971,6 +1061,13 @@ fn highlight(inlines: Vec<Inline>) -> Vec<Inline> {
     }
     let pairs = marks.len() / 2;
     let marks = &marks[..pairs * 2];
+    let source_of = |(run, p): (usize, usize)| match &inlines[run] {
+        Inline::Text { map, .. } => map.source_of(p)..map.source_of(p + 2),
+        _ => 0..0,
+    };
+    for pair in marks.chunks(2) {
+        elements.push(source_of(pair[0]).start..source_of(pair[1]).end);
+    }
     let mut out = Vec::new();
     let mut on = false;
     let mut next = 0;
@@ -1007,7 +1104,7 @@ fn highlight(inlines: Vec<Inline>) -> Vec<Inline> {
 
 /// Typora's `~sub~` and `^sup^` inside words (`H~2~O`, `x^2^`), which the
 /// parser leaves as text: a delimiter, text without spaces, the delimiter.
-fn sub_sup(inlines: Vec<Inline>) -> Vec<Inline> {
+fn sub_sup(inlines: Vec<Inline>, elements: &mut Vec<Range<usize>>) -> Vec<Inline> {
     let mut out = Vec::with_capacity(inlines.len());
     for inline in inlines {
         let Inline::Text { text, style, link, map } = inline else {
@@ -1041,6 +1138,7 @@ fn sub_sup(inlines: Vec<Inline>) -> Vec<Inline> {
                             map: map.slice(pos..i),
                         });
                     }
+                    elements.push(map.source_of(i)..map.source_of(close + 1));
                     let mut s = style;
                     if d == b'~' {
                         s.sub = true;

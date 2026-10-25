@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc e1011df038e4e740492488aee007b2f67196da5f6fda2dc044d78ac7e92b48b1 # shrinks to cells = [["\\\\|"], [""]], aligns = [0, 0, 0, 0, 0]
+cc 16560e387cbb24f6b9de7658acc2e71a5b49387a1f231f2e7ac40e519808e528 # shrinks to text = " <u>\n**", cursor = 0
+cc d2613f2b69d854ca693abc754ef9320e9ccf03414670279ae9e894557204d61e # shrinks to text = "\n<u>\n", cursor = 1
