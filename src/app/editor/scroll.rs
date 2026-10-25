@@ -129,6 +129,60 @@ pub fn reveal_caret(region_box: Id, page: Id, caret: CaretText) -> Task<EditorMs
     })
 }
 
+/// Where the caret of the live widget `target` is, and the scrollable.
+struct FindCaret {
+    target: Id,
+    scroll: Id,
+    caret: Option<Rectangle>,
+    scroll_state: Option<(Rectangle, Vector)>,
+}
+
+impl Operation<Option<Found>> for FindCaret {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Option<Found>>)) {
+        operate(self)
+    }
+
+    fn custom(&mut self, id: Option<&Id>, _bounds: Rectangle, state: &mut dyn std::any::Any) {
+        if id == Some(&self.target)
+            && let Some(c) = state.downcast_ref::<super::live_text::CaretRect>()
+        {
+            self.caret = Some(c.0);
+        }
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        _content_bounds: Rectangle,
+        translation: Vector,
+        _state: &mut dyn Scrollable,
+    ) {
+        if id == Some(&self.scroll) {
+            self.scroll_state = Some((bounds, translation));
+        }
+    }
+
+    fn finish(&self) -> Outcome<Option<Found>> {
+        Outcome::Some(match (self.caret, self.scroll_state) {
+            (Some(target), Some((viewport, offset))) => Some(Found { target, viewport, offset }),
+            _ => None,
+        })
+    }
+}
+
+/// Scrolls the page so that the caret of the live widget `live` is visible.
+pub fn reveal_live(live: Id, page: Id) -> Task<EditorMsg> {
+    let page_id = page.clone();
+    widget::operate(FindCaret { target: live, scroll: page, caret: None, scroll_state: None }).then(move |found| {
+        let Some(f) = found else { return Task::none() };
+        match offset_to_show(f.target.y, f.target.y + f.target.height, f.viewport, f.offset) {
+            Some(y) => operation::scroll_to(page_id.clone(), scrollable::AbsoluteOffset { x: 0.0, y }),
+            None => Task::none(),
+        }
+    })
+}
+
 /// Scrolls the page so that the box `target` (a table's cell) is visible.
 pub fn reveal_box(target: Id, page: Id) -> Task<EditorMsg> {
     let page_id = page.clone();

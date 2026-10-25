@@ -7,8 +7,10 @@
 
 pub mod clipboard;
 mod find;
+mod flow;
 mod highlight;
 mod keys;
+mod live_text;
 mod page;
 mod render;
 mod scroll;
@@ -32,6 +34,7 @@ use iced::widget::text_editor::{Action, Content, Edit, Motion};
 use iced::widget::{operation, scrollable};
 use iced::{Point, Size, Subscription, Task, window};
 pub use keys::{Bind, EditorCommand};
+pub use live_text::LiveMsg;
 use page::Page;
 pub use render::{RenderCache, RenderKey};
 use std::collections::{BTreeMap, VecDeque};
@@ -124,6 +127,8 @@ pub enum EditorMsg {
     Inserted(Result<Vec<String>, String>),
     Find(FindMsg),
     Table(TableMsg),
+    /// From the widget editing a block in its rendered form.
+    Live(LiveMsg),
     /// Where to export to (as PDF when `true`), as chosen in the save dialog.
     ExportTo(bool, Option<PathBuf>),
     /// The file exported, or why not.
@@ -256,7 +261,12 @@ impl Editor {
         // After typing and moving with keys, the cursor stays in view.
         let reveals = matches!(
             msg,
-            EditorMsg::Action(_) | EditorMsg::Bind(_) | EditorMsg::Command(_) | EditorMsg::Key(_) | EditorMsg::Find(_)
+            EditorMsg::Action(_)
+                | EditorMsg::Bind(_)
+                | EditorMsg::Command(_)
+                | EditorMsg::Key(_)
+                | EditorMsg::Find(_)
+                | EditorMsg::Live(_)
         );
         let task = self.handle(msg, prefs, effects);
         self.refresh_find();
@@ -268,6 +278,9 @@ impl Editor {
 
     /// Scrolls the page to show the cursor.
     fn reveal(&self, prefs: &EditorPrefs) -> Task<EditorMsg> {
+        if self.source.is_none() && self.page.active.as_ref().is_some_and(|a| a.live.is_some()) {
+            return scroll::reveal_live(self.id("active"), self.id("doc"));
+        }
         let (before, kind) = match (&self.source, &self.page.active) {
             (Some(_), _) => (
                 self.page.text[..self.page.sel.head.min(self.page.text.len())].to_string(),
@@ -358,6 +371,7 @@ impl Editor {
             }
             EditorMsg::Dialog(answer) => self.dialog_answered(answer, effects),
             EditorMsg::Find(msg) => self.find_message(msg),
+            EditorMsg::Live(msg) => self.live_message(msg),
             EditorMsg::Table(msg) => self.table_message(msg, effects),
             EditorMsg::ExportTo(pdf, out) => self.export_to(pdf, out),
             EditorMsg::Exported(result) => {
@@ -521,7 +535,9 @@ impl Editor {
             return self.table_bind(bind);
         }
         let text = self.page.text.clone();
-        let sel = self.page.sel;
+        // The rules work on the source: at the start / end of what a block
+        // shows, that is its content's start / end.
+        let sel = self.page.rule_sel();
         let doc = &self.page.doc;
         let pending = self.page.pending.is_some();
         match bind {
@@ -603,11 +619,11 @@ impl Editor {
     /// Up / Down: within the region, or into the block before / after it.
     fn vertical(&mut self, down: bool) -> Task<EditorMsg> {
         let motion = if down { Motion::Down } else { Motion::Up };
-        let before = self.page.active.as_ref().map(|a| a.content.cursor());
+        let before = self.page.cursor_token();
         if self.page.pending.is_none() {
             self.page.perform(Action::Move(motion));
         }
-        let after = self.page.active.as_ref().map(|a| a.content.cursor());
+        let after = self.page.cursor_token();
         if self.page.pending.is_some() || before == after {
             let column = self.page.column();
             if let Some(b) = self.page.neighbor(down) {
@@ -620,11 +636,11 @@ impl Editor {
     /// Shift+Up / Shift+Down: selects within the region, then whole blocks.
     fn extend_vertically(&mut self, down: bool) -> Task<EditorMsg> {
         let motion = if down { Motion::Down } else { Motion::Up };
-        let before = self.page.active.as_ref().map(|a| a.content.cursor());
+        let before = self.page.cursor_token();
         if self.page.pending.is_none() {
             self.page.perform(Action::Select(motion));
         }
-        let after = self.page.active.as_ref().map(|a| a.content.cursor());
+        let after = self.page.cursor_token();
         if self.page.pending.is_some() || before == after {
             let anchor = self.page.active_block().or_else(|| self.page.neighbor(down));
             if let Some(anchor) = anchor {
@@ -637,10 +653,10 @@ impl Editor {
 
     /// Left at the start / Right at the end of the region move into the block before / after.
     fn horizontal(&mut self, right: bool) -> Task<EditorMsg> {
-        let Some(a) = &self.page.active else { return Task::none() };
-        let sel = self.page.sel;
-        let at_edge = sel.is_empty() && if right { sel.head >= a.region.end } else { sel.head <= a.region.start };
-        if at_edge || self.page.pending.is_some() {
+        if self.page.active.is_none() {
+            return Task::none();
+        }
+        if self.page.at_edge(right) || self.page.pending.is_some() {
             if let Some(b) = self.page.neighbor(right) {
                 self.page.enter_block(b, right, None);
             }
@@ -1321,6 +1337,29 @@ impl Editor {
     }
 
     // --- Table keys (filled in by the table editing) ---
+
+    /// A message of the widget editing the active block in its rendered form.
+    fn live_message(&mut self, msg: LiveMsg) -> Task<EditorMsg> {
+        self.menu = None;
+        self.select_all_again = false;
+        let page = &mut self.page;
+        match msg {
+            LiveMsg::Click { at, extend } => page.live_move_to(at, extend),
+            LiveMsg::Drag(at) => page.live_move_to(at, true),
+            LiveMsg::MoveTo { at, select } => page.live_move_to(at, select),
+            LiveMsg::SelectWord(at) => page.live_select_word(at),
+            LiveMsg::SelectAll => page.live_select_shown(None),
+            LiveMsg::Motion { motion, select } => {
+                page.perform(if select { Action::Select(motion) } else { Action::Move(motion) })
+            }
+            LiveMsg::Insert(text) => {
+                let mut chars = text.chars();
+                let typed = chars.next().filter(|_| chars.next().is_none());
+                page.live_insert(&text, typed);
+            }
+        }
+        Task::none()
+    }
 
     // --- Scrolling ---
 

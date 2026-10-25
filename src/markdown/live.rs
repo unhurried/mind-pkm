@@ -252,6 +252,11 @@ impl Display {
         }
     }
 
+    /// Nothing shown, at the source offset `at` (a new empty paragraph).
+    pub fn empty(at: usize) -> Display {
+        Display { content: at..at, ..Display::default() }
+    }
+
     /// Text shown as it is.
     fn plain(text: &str) -> Display {
         let mut d = Display { content: 0..text.len(), ..Display::default() };

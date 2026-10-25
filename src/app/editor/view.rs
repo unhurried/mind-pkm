@@ -9,12 +9,14 @@
 use super::find::FindBar;
 use super::highlight::{self, MarkdownHighlighter};
 use super::keys::{self, BindContext, EditorCommand, MENUS, TABLE_MENU};
-use super::page::{Active, TableState};
+use super::live_text::{LiveText, Run, RunKind, TextLook};
+use super::page::{Active, Live, TableState};
 use super::render::{RenderCache, RenderKey, Rendered};
 use super::{DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
 use crate::app::arrow_cursor::arrow_cursor;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Link, Node, SourceMap, Style, TableNode};
+use crate::markdown::live::{Display, Look, Object};
 use crate::markdown::{BlockKind, ListItem, images, table};
 use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
 use iced::widget::text::{LineHeight, Span};
@@ -562,6 +564,9 @@ impl Editor {
         if let Some(state) = &a.table {
             return container(self.table_editor(a, state, ctx, prefs, width)).id(self.id("active-box")).into();
         }
+        if let Some(live) = &a.live {
+            return container(self.live_view(a, live, ctx, prefs, width)).id(self.id("active-box")).into();
+        }
         let (size, font, padding) = region_text_style(&a.kind, ctx.zoom);
         let code = a.kind.is_code();
         let bind = BindContext { auto_pair: prefs.auto_pair, code, source_mode: false, table: false };
@@ -602,6 +607,110 @@ impl Editor {
         container(shown).id(self.id("active-box")).into()
     }
 
+    /// The block with the cursor in its rendered form, around the editing widget.
+    fn live_view<'a>(
+        &'a self,
+        a: &'a Active,
+        live: &'a Live,
+        ctx: &Ctx<'a>,
+        prefs: &EditorPrefs,
+        width: f32,
+    ) -> Element<'a, EditorMsg> {
+        let p = ctx.p;
+        let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: false, table: false };
+        let marks = {
+            let region = a.region.clone();
+            let in_region: Vec<std::ops::Range<usize>> =
+                ctx.matches.iter().filter(|m| m.start >= region.start && m.end <= region.end).cloned().collect();
+            let current = ctx.current.map(|(s, e)| s..e);
+            live.display
+                .shown_ranges(&in_region)
+                .into_iter()
+                .zip(in_region)
+                .map(|(shown, source)| (shown, if Some(source) == current { p.find } else { p.find_bg }))
+                .collect()
+        };
+        let body = |base: TextBase, w: f32, marks: Vec<(std::ops::Range<usize>, Color)>| -> Element<'a, EditorMsg> {
+            self.live_text(live, base, ctx, w, marks).key_binding(move |k| keys::binding(k, bind)).into()
+        };
+        let base = TextBase { size: ctx.size(1.0), font: APP_FONT, color: p.text };
+        match &a.kind {
+            BlockKind::Heading(level) => {
+                let scale = HEADING_SCALE[usize::from((*level).clamp(1, 6)) - 1];
+                let heading =
+                    body(TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: p.heading }, width, marks);
+                if *level <= 2 {
+                    column![
+                        heading,
+                        rule::horizontal(1).style(move |_| rule::Style {
+                            color: p.border,
+                            radius: 0.0.into(),
+                            fill_mode: rule::FillMode::Full,
+                            snap: true,
+                        })
+                    ]
+                    .spacing(4)
+                    .into()
+                } else {
+                    heading
+                }
+            }
+            BlockKind::ListItem(item) => {
+                let indent = LIST_INDENT * ctx.zoom * item.depth as f32;
+                let marker_w = LIST_INDENT * ctx.zoom;
+                let block = self.page.active_block().unwrap_or(0);
+                let marker: Element<EditorMsg> = if item.continuation {
+                    space().width(marker_w).into()
+                } else if let Some(checked) = item.task {
+                    container(
+                        iced::widget::checkbox(checked)
+                            .size(ctx.size(0.95))
+                            .on_toggle(move |_| EditorMsg::TaskToggled(block)),
+                    )
+                    .padding(iced::Padding { top: ctx.size(0.25), ..Default::default() })
+                    .width(marker_w)
+                    .into()
+                } else {
+                    let glyph = match item.number {
+                        Some(n) => format!("{n}."),
+                        None => ["•", "◦", "▪"][item.depth.min(2)].to_string(),
+                    };
+                    text(glyph).size(ctx.size(1.0)).line_height(LINE_HEIGHT).color(p.text).width(marker_w).into()
+                };
+                let base = if item.task == Some(true) { TextBase { color: p.muted, ..base } } else { base };
+                row![space().width(indent), marker, body(base, width - indent - marker_w, marks)].into()
+            }
+            BlockKind::Quote => quote_view(body(base, width - QUOTE_PADDING - QUOTE_BAR, marks), p),
+            BlockKind::Footnote(label) => {
+                let number = self.page.doc.footnotes.get(label).copied().unwrap_or(0);
+                let label_w = 32.0 * ctx.zoom;
+                row![
+                    text(format!("[{number}]")).size(ctx.size(0.85)).color(p.muted).width(label_w),
+                    body(base, width - label_w, marks),
+                ]
+                .into()
+            }
+            _ => body(base, width, marks),
+        }
+    }
+
+    /// The editing widget for what a live region shows.
+    fn live_text<'a>(
+        &'a self,
+        live: &'a Live,
+        base: TextBase,
+        ctx: &Ctx<'a>,
+        width: f32,
+        marks: Vec<(std::ops::Range<usize>, Color)>,
+    ) -> LiveText<'a> {
+        let p = ctx.p;
+        let runs = live_runs(&live.display, base, ctx, &self.page, width);
+        LiveText::new(self.id("active"), runs, live.display.text.len(), (live.sel.anchor, live.sel.head))
+            .base(base.font, base.size, LINE_HEIGHT)
+            .colors(p.selection, base.color)
+            .marks(marks)
+    }
+
     /// The table with the cursor, as a grid of cells; the cursor's cell is a text editor.
     fn table_editor<'a>(
         &'a self,
@@ -622,16 +731,17 @@ impl Editor {
             for (c, cell) in cells.iter().enumerate() {
                 let align = t.align.get(c).copied().unwrap_or_default();
                 let selected = state.range.is_some_and(|range| range.contains((r, c)));
-                let content: Element<EditorMsg> = if (r, c) == state.cell {
-                    let editor = text_editor(&a.content)
-                        .id(self.id("active"))
-                        .on_action(EditorMsg::Action)
-                        .key_binding(move |k| keys::binding(k, bind))
-                        .size(ctx.size(1.0))
-                        .line_height(LINE_HEIGHT)
-                        .font(if r == 0 { bold(APP_FONT) } else { APP_FONT })
-                        .padding(0)
-                        .style(move |_, _| editor_style(p, Color::TRANSPARENT));
+                let content: Element<EditorMsg> = if (r, c) == state.cell
+                    && let Some(live) = &a.live
+                {
+                    let base = TextBase {
+                        size: ctx.size(1.0),
+                        font: if r == 0 { bold(APP_FONT) } else { APP_FONT },
+                        color: p.text,
+                    };
+                    let editor = self
+                        .live_text(live, base, ctx, cell_width - 16.0, Vec::new())
+                        .key_binding(move |k| keys::binding(k, bind));
                     mouse_area(editor)
                         .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
                         .on_release(EditorMsg::Table(TableMsg::Released))
@@ -1158,6 +1268,145 @@ fn match_pieces(t: &str, map: &SourceMap, ctx: &Ctx) -> Vec<(std::ops::Range<usi
         pieces[k].0.end = pieces.get(k + 1).map_or(t.len(), |p| p.0.start);
     }
     pieces
+}
+
+/// The runs the editing widget draws for what a live region shows: styled
+/// like the rendered blocks, with the Markdown at the cursor dimmed.
+fn live_runs(display: &Display, base: TextBase, ctx: &Ctx, page: &super::page::Page, width: f32) -> Vec<Run> {
+    let p = ctx.p;
+    let mut runs = Vec::new();
+    // Text with its line breaks as runs of their own.
+    let push_text = |runs: &mut Vec<Run>, shown: std::ops::Range<usize>, look: TextLook| {
+        let mut start = shown.start;
+        for (i, _) in display.text[shown.clone()].match_indices('\n') {
+            let at = shown.start + i;
+            if at > start {
+                runs.push(Run {
+                    shown: start..at,
+                    kind: RunKind::Text { text: display.text[start..at].to_string(), look: look.clone() },
+                });
+            }
+            runs.push(Run { shown: at..at + 1, kind: RunKind::Newline });
+            start = at + 1;
+        }
+        if start < shown.end {
+            runs.push(Run {
+                shown: start..shown.end,
+                kind: RunKind::Text { text: display.text[start..shown.end].to_string(), look },
+            });
+        }
+    };
+    let plain = |size: f32, font: Font, color: Color| TextLook {
+        font,
+        size,
+        color,
+        underline: false,
+        strike: false,
+        background: None,
+        link: None,
+    };
+    for u in &display.units {
+        match &u.look {
+            Look::Text { style, link } => {
+                let (size, font) = run_font(*style, base);
+                let mut color = if link.is_some() { p.link } else { base.color };
+                if let Some(c) = style.color {
+                    color = Color::from_rgb8(c.0, c.1, c.2);
+                }
+                if style.dim {
+                    color = p.muted;
+                }
+                if style.code {
+                    color = p.code;
+                }
+                let background = if style.highlight {
+                    Some(p.mark_bg)
+                } else if style.code || style.kbd {
+                    Some(p.code_bg)
+                } else {
+                    None
+                };
+                let look = TextLook {
+                    font,
+                    size,
+                    color,
+                    underline: style.underline || link.is_some(),
+                    strike: style.strike,
+                    background,
+                    link: link.as_ref().map(|l| (l.dest.clone(), u.source.start)),
+                };
+                push_text(&mut runs, u.shown.clone(), look);
+            }
+            Look::Marker => push_text(&mut runs, u.shown.clone(), plain(base.size, base.font, p.muted)),
+            Look::Break => {
+                for i in u.shown.clone() {
+                    runs.push(Run { shown: i..i + 1, kind: RunKind::Newline });
+                }
+            }
+            Look::Object(o) | Look::Preview(o) => {
+                let kind = match o {
+                    Object::Image { src, alt, width: w, link, .. } => {
+                        let path = images::image_path(&page.path, &page.text, src);
+                        let max_width = w.map(|w| w * ctx.zoom);
+                        match path {
+                            Some(path) if path.is_file() => {
+                                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+                                    RunKind::SvgFile { handle: svg::Handle::from_path(&path), max_width }
+                                } else {
+                                    RunKind::Image { handle: image::Handle::from_path(&path), max_width }
+                                }
+                            }
+                            Some(_) => RunKind::Label {
+                                text: format!("🖼 {alt} (missing: {src})"),
+                                look: plain(base.size * 0.9, base.font, p.error),
+                            },
+                            None => RunKind::Label {
+                                text: format!("🖼 {} {src}", if alt.is_empty() { "image" } else { alt }),
+                                look: TextLook {
+                                    underline: true,
+                                    link: Some((link.as_ref().map_or(src.clone(), |l| l.dest.clone()), u.source.start)),
+                                    ..plain(base.size * 0.9, base.font, p.link)
+                                },
+                            },
+                        }
+                    }
+                    Object::Math { tex, display: block } => {
+                        let key = RenderKey::Math { tex: tex.trim().to_string(), display: *block, dark: p.dark };
+                        match ctx.renders.get(&key) {
+                            Some(Rendered::Done(Ok(s))) => {
+                                let scale = ctx.size(1.0) / 16.0 * if *block { 1.15 } else { 1.0 };
+                                RunKind::Svg {
+                                    handle: s.handle.clone(),
+                                    width: s.width * scale,
+                                    height: s.height * scale,
+                                    center: true,
+                                }
+                            }
+                            Some(Rendered::Done(Err(_))) => RunKind::Label {
+                                text: format!("${tex}$"),
+                                look: plain(base.size * 0.9, CODE_FONT, p.error),
+                            },
+                            _ => RunKind::Label { text: tex.clone(), look: plain(base.size * 0.9, CODE_FONT, p.muted) },
+                        }
+                    }
+                    Object::Footnote { label, number } => RunKind::Label {
+                        text: format!("[{number}]"),
+                        look: TextLook {
+                            link: Some((format!("^{label}"), u.source.start)),
+                            ..plain(base.size * 0.75, base.font, p.link)
+                        },
+                    },
+                    Object::Embed { tag, src } => RunKind::Label {
+                        text: format!("▶ {tag}{}", src.as_ref().map(|s| format!(" {s}")).unwrap_or_default()),
+                        look: plain(base.size * 0.9, base.font, p.muted),
+                    },
+                };
+                runs.push(Run { shown: u.shown.clone(), kind });
+            }
+        }
+    }
+    let _ = width;
+    runs
 }
 
 fn run_font(style: Style, base: TextBase) -> (f32, Font) {

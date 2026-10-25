@@ -235,17 +235,17 @@ impl Editor {
 
     /// Moves the cursor in the cell's text; whether it moved.
     fn cell_moves(&mut self, motion: Motion) -> bool {
-        let before = self.page.active.as_ref().map(|a| a.content.cursor());
-        let had_selection = self.page.active.as_ref().is_some_and(|a| a.content.selection().is_some());
+        let before = self.page.cursor_token();
+        let had_selection = !self.page.live_sel().is_empty();
         self.page.perform(Action::Move(motion));
-        had_selection || before != self.page.active.as_ref().map(|a| a.content.cursor())
+        had_selection || before != self.page.cursor_token()
     }
 
     /// Extends the selection in the cell's text; whether it changed.
     fn cell_selects(&mut self, motion: Motion) -> bool {
-        let before = self.page.active.as_ref().map(|a| a.content.cursor());
+        let before = self.page.cursor_token();
         self.page.perform(Action::Select(motion));
-        before != self.page.active.as_ref().map(|a| a.content.cursor())
+        before != self.page.cursor_token()
     }
 
     /// A press on a cell that is not being edited (Shift: a range from the cursor's cell).
