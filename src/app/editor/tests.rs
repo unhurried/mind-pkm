@@ -740,3 +740,75 @@ fn typing_in_cells() {
     let text = page_text(&app, id);
     assert_eq!(text.lines().next(), Some("| ax\\|y<br>z | b   |"));
 }
+
+#[test]
+fn renaming_an_open_page_saves_it_and_the_editor_follows() {
+    let (mut app, f, _, page) = app_with_page("[assets](Plan.assets)\n\nold\n");
+    std::fs::create_dir(f.doc_dir.join("Plan.assets")).unwrap();
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "old");
+    typing(&mut app, id, " new");
+    assert!(app.editors[&id].page.is_dirty());
+    send(&mut app, Message::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
+    send(&mut app, Message::DialogInput("Done".into()));
+    send(&mut app, Message::DialogOk);
+    let renamed = f.doc_dir.join("Done.md");
+    assert!(!page.exists());
+    assert_eq!(crate::pkm::read_page(&renamed).unwrap(), "[assets](Done.assets)\n\nold new\n");
+    let editor = &app.editors[&id];
+    assert_eq!(editor.page.path, renamed);
+    assert_eq!(editor.page.text, "[assets](Done.assets)\n\nold new\n");
+    assert!(!editor.page.is_dirty());
+    assert_eq!(app.title(id), "Done.md - Mind PKM");
+}
+
+#[test]
+fn pages_in_a_renamed_directory_follow_it() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    let dir = f.add_dir_node(root, "Area");
+    std::fs::create_dir(f.doc_dir.join("Area")).unwrap();
+    let page = f.doc_dir.join("Area").join("Note.md");
+    crate::pkm::write_page(&page, "note\n").unwrap();
+    let mut app = App::new();
+    let _ = app.set_doc(f.map.clone(), None);
+    app.doc.as_mut().unwrap().select(vec![dir]);
+    let _ = app.open_page(&page);
+    let id = *app.editors.keys().last().unwrap();
+    click_after(&mut app, id, "note");
+    typing(&mut app, id, "!");
+    send(&mut app, Message::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
+    send(&mut app, Message::DialogInput("Areas".into()));
+    send(&mut app, Message::DialogOk);
+    let moved = f.doc_dir.join("Areas").join("Note.md");
+    assert_eq!(app.editors[&id].page.path, moved);
+    assert_eq!(crate::pkm::read_page(&moved).unwrap(), "note!\n");
+}
+
+#[test]
+fn add_assets_saves_the_open_page_and_reloads_it() {
+    let (mut app, f, _, page) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    typing(&mut app, id, "y");
+    send(&mut app, Message::Command(Command::AddAssets));
+    assert!(f.doc_dir.join("Plan.assets").is_dir());
+    assert_eq!(crate::pkm::read_page(&page).unwrap(), "[assets](Plan.assets)\n\nxy\n");
+    assert_eq!(page_text(&app, id), "[assets](Plan.assets)\n\nxy\n");
+    assert!(!app.editors[&id].page.is_dirty());
+}
+
+#[test]
+fn the_editors_of_deleted_pages_close() {
+    // The deletion itself moves files to the Recycle Bin; here the file is
+    // removed in the temporary directory, around the editor's part.
+    let (mut app, _f, _, page) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    typing(&mut app, id, "y");
+    app.save_editors_of(std::slice::from_ref(&page)).unwrap();
+    assert_eq!(crate::pkm::read_page(&page).unwrap(), "xy\n");
+    std::fs::remove_file(&page).unwrap();
+    let _ = app.close_deleted_editors(std::slice::from_ref(&page));
+    assert!(app.editors.is_empty());
+}

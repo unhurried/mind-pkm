@@ -24,6 +24,7 @@ use crate::markdown::edit::{self, Sel};
 use crate::markdown::format::{self, InlineStyle};
 use crate::markdown::images::{self, ImageOptions};
 use crate::markdown::{export, html, table};
+use crate::pkm;
 use clipboard::ClipboardContent;
 pub use find::FindMsg;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
@@ -1528,6 +1529,66 @@ impl App {
     }
 
     /// The editors of files at or under `path` (a page, or a renamed directory).
+    /// The page file or directory of a page or directory node.
+    pub(super) fn doc_path_of(&self, id: crate::mindmap::NodeId) -> Option<PathBuf> {
+        let map = &self.doc.as_ref()?.map;
+        let doc_dir = pkm::load_doc_dir(map).ok()?;
+        let name = map.text(id);
+        Some(match pkm::doc_type(map, id, &doc_dir)? {
+            pkm::DocType::Page => pkm::page_file(&doc_dir, &name),
+            pkm::DocType::Directory => pkm::directory_dir(&doc_dir, &name),
+        })
+    }
+
+    /// Before a PKM command moves, changes or deletes `paths` (files, or
+    /// directories with everything in them): their editors' unsaved changes
+    /// are saved. The error of the first that can't be.
+    pub(super) fn save_editors_of(&mut self, paths: &[PathBuf]) -> Result<(), String> {
+        let ids: Vec<window::Id> = paths.iter().flat_map(|p| self.editors_of(p)).collect();
+        for id in ids {
+            if let Some(editor) = self.editors.get_mut(&id)
+                && editor.page.is_dirty()
+            {
+                editor.page.save()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// After `old` (a page file or a directory) was renamed to `new`: its
+    /// editors show the files at their new place, with their new text.
+    pub(super) fn editors_renamed(&mut self, old: &Path, new: &Path) {
+        let depth = old.components().count();
+        for id in self.editors_of(old) {
+            let Some(editor) = self.editors.get_mut(&id) else { continue };
+            let rest: PathBuf = editor.page.path.components().skip(depth).collect();
+            let path = if rest.as_os_str().is_empty() { new.to_path_buf() } else { new.join(rest) };
+            if let Err(e) = editor.page.moved_to(path) {
+                editor.dialogs.push_back(EditorDialog::Message(e));
+            }
+            editor.refresh_source();
+        }
+    }
+
+    /// After a PKM command changed `path`: its editors read it again.
+    pub(super) fn editors_reload(&mut self, path: &Path) {
+        for id in self.editors_of(path) {
+            let Some(editor) = self.editors.get_mut(&id) else { continue };
+            if let Err(e) = editor.page.reload() {
+                editor.dialogs.push_back(EditorDialog::Message(e));
+            }
+            editor.refresh_source();
+        }
+    }
+
+    /// After a deletion: the editors of `paths` whose files are gone close.
+    pub(super) fn close_deleted_editors(&mut self, paths: &[PathBuf]) -> Task<Message> {
+        let ids: Vec<window::Id> = paths.iter().flat_map(|p| self.editors_of(p)).collect();
+        let gone: Vec<window::Id> =
+            ids.into_iter().filter(|id| self.editors.get(id).is_some_and(|e| !e.page.path.exists())).collect();
+        Task::batch(gone.into_iter().map(|id| self.close_editor(id)))
+    }
+
     pub(super) fn editors_of(&self, path: &Path) -> Vec<window::Id> {
         let key = crate::paths::key(path);
         self.editors

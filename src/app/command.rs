@@ -195,7 +195,17 @@ impl App {
             }
             Command::Update => self.start_update(true),
             Command::AddAssets => {
+                // The page gets a link to its assets: saved first, read again after.
+                let page = self.doc_path_of(focus);
+                if let Err(e) = self.save_editors_of(page.as_slice()) {
+                    self.message(e);
+                    return Task::none();
+                }
+                let Some(doc) = &self.doc else { return Task::none() };
                 let result = commands::add_assets(&doc.map, &doc.sorted_selection(), focus);
+                if let (Ok(()), Some(page)) = (&result, &page) {
+                    self.editors_reload(page);
+                }
                 self.report(result);
                 Task::none()
             }
