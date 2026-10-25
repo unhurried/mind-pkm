@@ -5,6 +5,7 @@
 //! `page` holds the page and its editing state, `keys` the commands and key
 //! bindings, `highlight` the styling of the source, `view` the rendering.
 
+pub mod clipboard;
 mod highlight;
 mod keys;
 mod page;
@@ -15,10 +16,13 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-use super::{App, Message, settings};
+use super::{App, Message, blocking, settings};
 use crate::markdown::count;
 use crate::markdown::edit::{self, Sel};
 use crate::markdown::format::{self, InlineStyle};
+use crate::markdown::images::{self, ImageOptions};
+use crate::markdown::{html, table};
+use clipboard::ClipboardContent;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::text_editor::{Action, Content, Edit, Motion};
 use iced::widget::{operation, scrollable};
@@ -47,6 +51,7 @@ pub struct EditorPrefs {
     pub zoom: f32,
     pub auto_pair: bool,
     pub window: Size,
+    pub images: ImageOptions,
 }
 
 impl EditorPrefs {
@@ -57,13 +62,21 @@ impl EditorPrefs {
             zoom: settings::editor_zoom().unwrap_or(1.0),
             auto_pair: settings::editor_auto_pair(),
             window: settings::editor_window().unwrap_or(DEFAULT_WINDOW),
+            images: settings::image_options(),
         }
     }
 }
 
 impl Default for EditorPrefs {
     fn default() -> Self {
-        EditorPrefs { builtin: true, dark: false, zoom: 1.0, auto_pair: true, window: DEFAULT_WINDOW }
+        EditorPrefs {
+            builtin: true,
+            dark: false,
+            zoom: 1.0,
+            auto_pair: true,
+            window: DEFAULT_WINDOW,
+            images: ImageOptions::default(),
+        }
     }
 }
 
@@ -98,6 +111,12 @@ pub enum EditorMsg {
     HeadingClicked(usize),
     Scrolled(scrollable::Viewport),
     Dialog(DialogAnswer),
+    /// The clipboard was read for pasting (as plain text when `true`).
+    Pasted(ClipboardContent, bool),
+    /// Image files picked with Format → Image.
+    ImagesChosen(Option<Vec<PathBuf>>),
+    /// The Markdown of inserted files (copied into the image folder), or why not.
+    Inserted(Result<Vec<String>, String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +146,13 @@ pub enum Effect {
     OpenExternal(String),
     Close,
     SetPrefs(EditorPrefs),
+    /// Put text (and its HTML) on the clipboard.
+    Copy {
+        text: String,
+        html: Option<String>,
+    },
+    /// Read the clipboard to paste (as plain text when `true`).
+    ReadClipboard(bool),
 }
 
 pub struct Editor {
@@ -149,6 +175,12 @@ pub struct Editor {
     viewport: Option<scrollable::Viewport>,
     /// Ctrl+A pressed again selects all blocks.
     select_all_again: bool,
+    /// The page revision and theme its math and diagrams were last requested for.
+    pub rendered: Option<(u64, bool)>,
+    /// The text this editor last put on the clipboard (pasted back as it is).
+    copied: Option<String>,
+    /// When and where the last inserted files went (files dropped together go on separate lines).
+    last_insert: Option<(std::time::Instant, usize)>,
 }
 
 impl Editor {
@@ -172,6 +204,9 @@ impl Editor {
             window_size: DEFAULT_WINDOW,
             viewport: None,
             select_all_again: false,
+            rendered: None,
+            copied: None,
+            last_insert: None,
         }
     }
 
@@ -232,7 +267,25 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::CloseRequested => self.close_requested(effects),
-            EditorMsg::FileDropped(_) | EditorMsg::Focused => Task::none(),
+            EditorMsg::FileDropped(path) => self.insert_files(vec![path], prefs),
+            EditorMsg::Focused => Task::none(),
+            EditorMsg::Pasted(content, plain) => self.pasted(content, plain, prefs),
+            EditorMsg::ImagesChosen(files) => self.insert_files(files.unwrap_or_default(), prefs),
+            EditorMsg::Inserted(result) => {
+                match result {
+                    Ok(pieces) if !pieces.is_empty() => {
+                        let recent = self
+                            .last_insert
+                            .is_some_and(|(t, at)| t.elapsed().as_secs() < 2 && at == self.page.sel.head);
+                        let text = format!("{}{}", if recent { "\n" } else { "" }, pieces.join("\n"));
+                        self.insert_text(&text);
+                        self.last_insert = Some((std::time::Instant::now(), self.page.sel.head));
+                    }
+                    Ok(_) => {}
+                    Err(e) => self.dialogs.push_back(EditorDialog::Message(e)),
+                }
+                self.focus()
+            }
             EditorMsg::Action(action) => self.on_action(action),
             EditorMsg::Bind(b) => self.on_bind(b, prefs),
             EditorMsg::Command(cmd) => {
@@ -593,6 +646,19 @@ impl Editor {
     }
 
     fn link_clicked(&mut self, dest: &str, at: usize, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
+        // A footnote reference goes to its definition.
+        if let Some(label) = dest.strip_prefix('^') {
+            let block = self
+                .page
+                .doc
+                .blocks
+                .iter()
+                .position(|b| b.kind == crate::markdown::BlockKind::Footnote(label.to_string()));
+            return block.map_or(Task::none(), |b| {
+                self.page.deactivate();
+                self.scroll_to_block(b)
+            });
+        }
         if !(self.modifiers.control() || self.modifiers.command()) {
             self.page.place(Sel::caret(at));
             return self.focus();
@@ -686,6 +752,33 @@ impl Editor {
             C::Highlight => self.toggle(InlineStyle::Highlight),
             C::InlineMath => self.toggle(InlineStyle::Math),
             C::Link => self.edit_selection(format::insert_link),
+            C::Copy | C::CopyMarkdown => {
+                self.copy(cmd == C::CopyMarkdown, effects);
+                Task::none()
+            }
+            C::Cut => {
+                if self.copy(false, effects) {
+                    self.delete_selection();
+                }
+                self.focus()
+            }
+            C::Paste | C::PastePlain => {
+                effects.push(Effect::ReadClipboard(cmd == C::PastePlain));
+                Task::none()
+            }
+            C::Image => {
+                let dir = self.page.path.parent().map(Path::to_path_buf);
+                Task::perform(
+                    async move {
+                        let mut dialog = rfd::AsyncFileDialog::new().add_filter("Images", images::IMAGE_EXTENSIONS);
+                        if let Some(dir) = dir {
+                            dialog = dialog.set_directory(dir);
+                        }
+                        dialog.pick_files().await.map(|files| files.iter().map(|f| f.path().to_path_buf()).collect())
+                    },
+                    EditorMsg::ImagesChosen,
+                )
+            }
             C::SourceMode => self.toggle_source_mode(),
             C::Outline => {
                 self.outline = !self.outline;
@@ -909,6 +1002,153 @@ impl Editor {
         self.focus()
     }
 
+    // --- Clipboard and inserting files ---
+
+    /// Copies the selection (Markdown, and HTML unless `markdown_only`).
+    /// Returns whether there was something to copy.
+    fn copy(&mut self, markdown_only: bool, effects: &mut Vec<Effect>) -> bool {
+        // A range of table cells: tab-separated text and an HTML table, or a Markdown table.
+        if let Some(a) = &self.page.active
+            && let Some(state) = &a.table
+            && let Some(range) = state.range
+        {
+            let t = &state.table;
+            let (text, html) = if markdown_only {
+                (t.range_markdown(range), None)
+            } else {
+                (t.range_tsv(range), Some(t.range_html(range, cell_html)))
+            };
+            self.copied = Some(text.clone());
+            effects.push(Effect::Copy { text, html });
+            return true;
+        }
+        let text = match &self.source {
+            Some(source) => source.selection().unwrap_or_default(),
+            None => self.page.selected_source(),
+        };
+        if text.is_empty() {
+            return false;
+        }
+        let html = (!markdown_only).then(|| html::fragment(&text));
+        self.copied = Some(text.clone());
+        effects.push(Effect::Copy { text, html });
+        true
+    }
+
+    /// Removes what is selected (after a cut).
+    fn delete_selection(&mut self) {
+        if self.page.blocks.is_some() {
+            self.delete_blocks(None);
+        } else if let Some(source) = &mut self.source {
+            source.perform(Action::Edit(Edit::Delete));
+            let text = source.text();
+            let sel = source_sel(source, &text);
+            self.page.set_source_text(text, sel);
+        } else if let Some(range) = self.page.active.as_ref().and_then(|a| a.table.as_ref()).and_then(|t| t.range) {
+            self.page.change_table(|t, cell| {
+                t.clear(range);
+                cell
+            });
+        } else {
+            self.page.perform(Action::Edit(Edit::Delete));
+        }
+    }
+
+    /// Pastes what the clipboard held: files and images inserted, HTML
+    /// converted to Markdown (a table as a table), text as it is.
+    fn pasted(&mut self, content: ClipboardContent, plain: bool, prefs: &EditorPrefs) -> Task<EditorMsg> {
+        let text = content.text.clone().unwrap_or_default().replace("\r\n", "\n");
+        let in_table = self.page.active.as_ref().is_some_and(|a| a.table.is_some());
+        if !plain {
+            if !content.files.is_empty() {
+                return self.insert_files(content.files, prefs);
+            }
+            if let Some(image) = content.image.filter(|_| text.trim().is_empty()) {
+                return self.insert_image_data(image, prefs);
+            }
+            if self.copied.as_deref() != Some(text.as_str()) || text.is_empty() {
+                // A table (from a spreadsheet or a web page).
+                let grid = content
+                    .html
+                    .as_deref()
+                    .and_then(|h| table::parse_html_table(h, |cell| htmd::convert(cell).unwrap_or_default()))
+                    .or_else(|| table::parse_tsv(&text))
+                    .filter(|g| g.len() > 1 || g.first().is_some_and(|r| r.len() > 1));
+                if let Some(grid) = grid {
+                    if in_table {
+                        self.page.change_table(|t, cell| {
+                            t.paste(cell, &grid);
+                            cell
+                        });
+                    } else {
+                        let mut t = table::Table::new(
+                            grid.len().saturating_sub(1),
+                            grid.iter().map(Vec::len).max().unwrap_or(1),
+                        );
+                        t.paste((0, 0), &grid);
+                        return self.insert_block(&t.to_markdown(), "");
+                    }
+                    return self.focus();
+                }
+                if let Some(html) = &content.html
+                    && let Ok(markdown) = htmd::convert(html)
+                    && !markdown.trim().is_empty()
+                {
+                    self.insert_text(markdown.trim());
+                    return self.focus();
+                }
+            }
+        }
+        if !text.is_empty() {
+            self.insert_text(&text);
+        }
+        self.focus()
+    }
+
+    /// Inserts text at the cursor (in place of the selected blocks).
+    fn insert_text(&mut self, text: &str) {
+        if self.page.blocks.is_some() {
+            let Some(range) = self.page.blocks_range() else { return };
+            let new = edit::splice(&self.page.text, range.clone(), text);
+            self.page.blocks = None;
+            self.page.set_text(new, Sel::caret(range.start + text.len()));
+            return;
+        }
+        if let Some(source) = &mut self.source {
+            source.perform(Action::Edit(Edit::Paste(Arc::new(text.to_string()))));
+            let t = source.text();
+            let sel = source_sel(source, &t);
+            self.page.set_source_text(t, sel);
+            return;
+        }
+        if self.page.active.is_none() {
+            self.page.place(self.page.sel);
+        }
+        self.page.perform(Action::Edit(Edit::Paste(Arc::new(text.to_string()))));
+    }
+
+    /// Copies files into the image folder in the background and inserts them.
+    fn insert_files(&mut self, files: Vec<PathBuf>, prefs: &EditorPrefs) -> Task<EditorMsg> {
+        if files.is_empty() {
+            return Task::none();
+        }
+        let (page, text, opts) = (self.page.path.clone(), self.page.text.clone(), prefs.images.clone());
+        Task::perform(blocking(move || files_markdown(&page, &text, &files, &opts)), EditorMsg::Inserted)
+    }
+
+    /// Saves pasted image data as a PNG in the image folder and inserts it.
+    fn insert_image_data(&mut self, image: clipboard::PastedImage, prefs: &EditorPrefs) -> Task<EditorMsg> {
+        let (page, text, opts) = (self.page.path.clone(), self.page.text.clone(), prefs.images.clone());
+        let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+        Task::perform(
+            blocking(move || {
+                let file = images::save_png(&page, &text, &image.rgba, image.width, image.height, &stamp, &opts)?;
+                Ok(vec![images::markdown_for(&page, &file, &opts)])
+            }),
+            EditorMsg::Inserted,
+        )
+    }
+
     // --- Source mode ---
 
     fn toggle_source_mode(&mut self) -> Task<EditorMsg> {
@@ -1057,6 +1297,24 @@ impl Editor {
     }
 }
 
+/// The Markdown inserting files into the page at `page`: images copied into
+/// its image folder, other files linked where they are.
+pub fn files_markdown(page: &Path, text: &str, files: &[PathBuf], opts: &ImageOptions) -> Result<Vec<String>, String> {
+    files
+        .iter()
+        .map(|f| {
+            let target = if images::is_image(f) { images::copy_image(page, text, f, opts)? } else { f.clone() };
+            Ok(images::markdown_for(page, &target, opts))
+        })
+        .collect()
+}
+
+/// A table cell's Markdown as HTML, for copying cells.
+fn cell_html(cell: &str) -> String {
+    let html = html::fragment(&table::cell_to_text(cell).replace('\n', "  \n"));
+    html.trim().trim_start_matches("<p>").trim_end_matches("</p>").to_string()
+}
+
 /// The selection of the source mode's text editor, as page offsets.
 fn source_sel(content: &Content, text: &str) -> Sel {
     let c = content.cursor();
@@ -1150,6 +1408,19 @@ impl App {
             Effect::SetPrefs(prefs) => {
                 self.set_editor_prefs(prefs);
                 Task::none()
+            }
+            Effect::Copy { text, html } => {
+                if let Ok(mut c) = self.system_clipboard.lock() {
+                    c.write(&text, html.as_deref());
+                }
+                Task::none()
+            }
+            Effect::ReadClipboard(plain) => {
+                let clipboard = self.system_clipboard.clone();
+                Task::perform(
+                    blocking(move || clipboard.lock().map(|mut c| c.read()).unwrap_or_default()),
+                    move |content| Message::Editor(id, EditorMsg::Pasted(content, plain)),
+                )
             }
         }
     }

@@ -76,6 +76,10 @@ fn content_sel(content: &Content, text: &str) -> Sel {
 }
 
 fn move_content(content: &mut Content, text: &str, sel: Sel) {
+    if sel.is_empty() && content.selection().is_some() {
+        // `move_to` keeps a selection; a new content has none.
+        *content = Content::with_text(text);
+    }
     let position = position_of(text, sel.head);
     let selection = (!sel.is_empty()).then(|| position_of(text, sel.anchor));
     content.move_to(Cursor { position, selection });
@@ -98,6 +102,8 @@ pub struct Page {
     /// Whole blocks selected (anchor, head), while no region is active.
     pub blocks: Option<(usize, usize)>,
     history: History,
+    /// Counts the changes of the text.
+    pub revision: u64,
 }
 
 fn modified_time(path: &Path) -> Option<SystemTime> {
@@ -126,6 +132,7 @@ impl Page {
             pending: None,
             blocks: None,
             history: History::default(),
+            revision: 0,
         }
     }
 
@@ -169,6 +176,7 @@ impl Page {
 
     fn reparse(&mut self) {
         self.doc = Document::parse(&self.text);
+        self.revision += 1;
     }
 
     /// The source of the active region.

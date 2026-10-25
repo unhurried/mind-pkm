@@ -191,6 +191,8 @@ pub struct App {
     editor_prefs: EditorPrefs,
     /// The math and diagrams of open pages, rendered.
     renders: RenderCache,
+    /// The clipboard with rich text, images and files, for the editors.
+    system_clipboard: std::sync::Arc<std::sync::Mutex<Box<dyn editor::clipboard::ClipboardBackend>>>,
     doc: Option<Doc>,
     /// The generation given to the last opened document.
     next_generation: u64,
@@ -249,6 +251,7 @@ impl App {
             editors: BTreeMap::new(),
             editor_prefs: EditorPrefs::default(),
             renders: RenderCache::default(),
+            system_clipboard: std::sync::Arc::new(std::sync::Mutex::new(editor::clipboard::default_backend())),
             doc: None,
             next_generation: 0,
             dialogs: VecDeque::new(),

@@ -33,8 +33,8 @@
 
 ## 6. Rendering of math, diagrams and images
 
-- [ ] 6.1 Background SVG rendering with a cache for inline math, math blocks and Mermaid, errors shown below the source; verify with unit tests of the renderer wrapper and a page under Xvfb
-- [ ] 6.2 Image display with path resolution (relative, percent-decoded, `typora-root-url`, `file:`, absolute), missing and remote images as alt text with a link, scaling to the column; verify path resolution in unit tests and images under Xvfb
+- [x] 6.1 Background SVG rendering with a cache for inline math, math blocks and Mermaid, errors shown below the source; verify with unit tests of the renderer wrapper and a page under Xvfb
+- [x] 6.2 Image display with path resolution (relative, percent-decoded, `typora-root-url`, `file:`, absolute), missing and remote images as alt text with a link, scaling to the column; verify path resolution in unit tests and images under Xvfb
 
 ## 7. Editing features
 

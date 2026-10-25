@@ -128,8 +128,12 @@ impl App {
     pub(in crate::app) fn request_renders(&mut self) -> Task<Message> {
         let dark = self.editor_prefs.dark;
         let mut keys = HashSet::new();
-        for editor in self.editors.values() {
-            keys.extend(keys_of(&editor.page.doc, dark));
+        for editor in self.editors.values_mut() {
+            let state = (editor.page.revision, dark);
+            if editor.rendered != Some(state) {
+                editor.rendered = Some(state);
+                keys.extend(keys_of(&editor.page.doc, dark));
+            }
         }
         let missing = self.renders.take_missing(keys);
         Task::batch(missing.into_iter().map(|key| {

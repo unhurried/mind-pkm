@@ -560,33 +560,8 @@ impl InlineBuilder {
     /// Text with emoji shortcodes and bare URLs recognized.
     fn text(&mut self, text: String, map: SourceMap) {
         let style = self.style();
-        let in_link = self.link().is_some();
-        let mut pos = 0;
-        for (range, kind) in specials(&text, !in_link) {
-            if range.start > pos {
-                self.push_text(text[pos..range.start].to_string(), style, map.slice(pos..range.start));
-            }
-            let piece = map.slice(range.clone());
-            match kind {
-                Special::Emoji(e) => {
-                    let link = self.link();
-                    self.out.push(Inline::Text { text: e.to_string(), style, link, map: collapse(piece, e.len()) })
-                }
-                Special::Url(dest) => {
-                    let t = text[range.clone()].to_string();
-                    self.out.push(Inline::Text {
-                        text: t,
-                        style,
-                        link: Some(Link { dest, title: String::new() }),
-                        map: piece,
-                    });
-                }
-            }
-            pos = range.end;
-        }
-        if pos < text.len() {
-            self.push_text(text[pos..].to_string(), style, map.slice(pos..text.len()));
-        }
+        let link = self.link();
+        self.out.extend(split_specials(&text, &map, style, link));
     }
 
     /// An HTML tag (or several, for an HTML block): supported ones change the
@@ -690,6 +665,50 @@ impl InlineBuilder {
         style.dim = true;
         self.push_text(raw.to_string(), style, SourceMap::new(raw.len(), source));
     }
+}
+
+/// A text run split at emoji shortcodes (replaced by the emoji) and, outside
+/// links, bare URLs (made links).
+fn split_specials(text: &str, map: &SourceMap, style: Style, link: Option<Link>) -> Vec<Inline> {
+    let mut out = Vec::new();
+    let push = |text: &str, map: SourceMap, link: Option<Link>, out: &mut Vec<Inline>| {
+        if !text.is_empty() {
+            out.push(Inline::Text { text: text.to_string(), style, link, map });
+        }
+    };
+    let mut pos = 0;
+    for (range, kind) in specials(text, link.is_none()) {
+        if range.start > pos {
+            push(&text[pos..range.start], map.slice(pos..range.start), link.clone(), &mut out);
+        }
+        let piece = map.slice(range.clone());
+        match kind {
+            Special::Emoji(e) => push(e, collapse(piece, e.len()), link.clone(), &mut out),
+            Special::Url(dest) => {
+                push(&text[range.clone()], piece, Some(Link { dest, title: String::new() }), &mut out)
+            }
+        }
+        pos = range.end;
+    }
+    if pos < text.len() {
+        push(&text[pos..], map.slice(pos..text.len()), link, &mut out);
+    }
+    out
+}
+
+/// Text runs with what the editor recognizes in text: emoji shortcodes,
+/// bare URLs (outside links) and intraword sub/superscript.
+pub fn recognize(inlines: Vec<Inline>) -> Vec<Inline> {
+    let mut out = Vec::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text { text, style, link, map } if !style.code && !style.dim => {
+                out.extend(split_specials(&text, &map, style, link))
+            }
+            other => out.push(other),
+        }
+    }
+    sub_sup(out)
 }
 
 /// A map for a replacement text of `len` bytes standing for the whole source of `map`.

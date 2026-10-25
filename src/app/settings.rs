@@ -228,24 +228,7 @@ pub fn set_editor_auto_pair(on: bool) {
     set_value(AUTO_PAIR_KEY, if on { "1" } else { "0" });
 }
 
-/// How inserted images are copied and referenced.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImageOptions {
-    /// Copy images into the folder (`image_copy=0` turns it off).
-    pub copy: bool,
-    /// The folder, `${filename}` standing for the page's name; relative to the page.
-    pub folder: String,
-    /// Write `./` before relative paths.
-    pub dot_slash: bool,
-    /// Escape spaces and other characters as `%XX`.
-    pub escape: bool,
-}
-
-impl Default for ImageOptions {
-    fn default() -> Self {
-        ImageOptions { copy: true, folder: "${filename}.assets".into(), dot_slash: false, escape: false }
-    }
-}
+pub use crate::markdown::images::ImageOptions;
 
 pub fn image_options() -> ImageOptions {
     let d = ImageOptions::default();

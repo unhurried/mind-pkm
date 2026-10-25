@@ -245,3 +245,231 @@ fn a_task_box_is_checked_by_a_click() {
     editor(&mut app, id, EditorMsg::Command(super::EditorCommand::Undo));
     assert_eq!(page_text(&app, id), "- [ ] call\n");
 }
+
+fn press(app: &mut App, id: window::Id, key: &str, modifiers: Modifiers) {
+    send(app, Message::KeyIn(id, key_event(Key::Character(key.into()), modifiers)));
+}
+
+/// Selects `what` in the page (activating its block).
+fn select(app: &mut App, id: window::Id, what: &str) {
+    let text = page_text(app, id);
+    let start = text.find(what).unwrap();
+    editor(app, id, EditorMsg::PressedAt(start));
+    let page = &mut app.editors.get_mut(&id).unwrap().page;
+    page.place(crate::markdown::edit::Sel { anchor: start, head: start + what.len() });
+}
+
+#[test]
+fn paragraph_shortcuts() {
+    let (mut app, _f, _, _) = app_with_page("Plan\n\none\n\ntwo\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "Pl");
+    press(&mut app, id, "2", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "## Plan\n\none\n\ntwo\n");
+    press(&mut app, id, "=", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "# Plan\n\none\n\ntwo\n");
+    press(&mut app, id, "0", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "Plan\n\none\n\ntwo\n");
+    // Two blocks selected become a bullet list.
+    click_after(&mut app, id, "one");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    assert_eq!(app.editors[&id].page.blocks, Some((1, 2)));
+    press(&mut app, id, "]", Modifiers::CTRL | Modifiers::SHIFT);
+    assert_eq!(page_text(&app, id), "Plan\n\n- one\n- two\n");
+    click_after(&mut app, id, "two");
+    press(&mut app, id, "q", Modifiers::CTRL | Modifiers::SHIFT);
+    assert_eq!(page_text(&app, id), "Plan\n\n- one\n> - two\n");
+}
+
+#[test]
+fn format_shortcuts_and_clearing() {
+    let (mut app, _f, _, _) = app_with_page("a word here\n");
+    let id = open_with_f1(&mut app);
+    select(&mut app, id, "word");
+    press(&mut app, id, "b", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "a **word** here\n");
+    press(&mut app, id, "b", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "a word here\n");
+    // The word at the cursor.
+    click_after(&mut app, id, "he");
+    press(&mut app, id, "i", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "a word *here*\n");
+    select(&mut app, id, "word");
+    press(&mut app, id, "k", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "a [word]() *here*\n");
+    // Ctrl+\ clears the formatting of the block.
+    click_after(&mut app, id, "a ");
+    press(&mut app, id, "\\", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "a [word]() here\n");
+}
+
+#[test]
+fn auto_pairing_can_be_turned_off() {
+    let (mut app, _f, _, _) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Type(' ')));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Type('(')));
+    assert_eq!(page_text(&app, id), "x ()\n");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Type(')')));
+    assert_eq!(page_text(&app, id), "x ()\n");
+    editor(&mut app, id, EditorMsg::Command(super::EditorCommand::ToggleAutoPair));
+    assert!(!app.editor_prefs.auto_pair);
+    editor(&mut app, id, EditorMsg::Bind(Bind::Type('[')));
+    assert_eq!(page_text(&app, id), "x ()[\n");
+}
+
+#[test]
+fn selection_helpers() {
+    let (mut app, _f, _, _) = app_with_page("some **bold text** and more\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "bo");
+    press(&mut app, id, "e", Modifiers::CTRL);
+    assert_eq!(app.editors[&id].page.selected_source(), "bold text");
+    click_after(&mut app, id, "mo");
+    press(&mut app, id, "d", Modifiers::CTRL);
+    assert_eq!(app.editors[&id].page.selected_source(), "more");
+    press(&mut app, id, "l", Modifiers::CTRL);
+    assert_eq!(app.editors[&id].page.selected_source(), "some **bold text** and more");
+}
+
+#[test]
+fn ctrl_click_on_an_anchor_goes_to_the_heading() {
+    let (mut app, _f, _, _) = app_with_page("[to b](#part-b)\n\n# Part A\n\n# Part B\n");
+    let id = open_with_f1(&mut app);
+    send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::CTRL)));
+    editor(&mut app, id, EditorMsg::Link("#part-b".into(), 1));
+    let page = &app.editors[&id].page;
+    assert!(page.active.is_none());
+    assert_eq!(page.sel.head, page.text.find("# Part B").unwrap());
+}
+
+fn clipboard(app: &App) -> super::clipboard::ClipboardContent {
+    app.system_clipboard.lock().unwrap().read()
+}
+
+fn pasted(app: &mut App, id: window::Id, text: &str, html: Option<&str>, plain: bool) {
+    let content = super::clipboard::ClipboardContent {
+        text: Some(text.into()),
+        html: html.map(str::to_string),
+        ..Default::default()
+    };
+    editor(app, id, EditorMsg::Pasted(content, plain));
+}
+
+#[test]
+fn copy_puts_markdown_and_html_on_the_clipboard() {
+    let (mut app, _f, _, _) = app_with_page("a **bold** word\n");
+    let id = open_with_f1(&mut app);
+    select(&mut app, id, "**bold** word");
+    press(&mut app, id, "c", Modifiers::CTRL);
+    let c = clipboard(&app);
+    assert_eq!(c.text.as_deref(), Some("**bold** word"));
+    assert!(c.html.as_deref().is_some_and(|h| h.contains("<strong>bold</strong>")), "{c:?}");
+    // Copy as Markdown: no HTML.
+    press(&mut app, id, "c", Modifiers::CTRL | Modifiers::SHIFT);
+    assert_eq!(clipboard(&app).html, None);
+    // Pasted back here: exactly the Markdown.
+    click_after(&mut app, id, "word");
+    pasted(&mut app, id, "**bold** word", Some("<strong>bold</strong> word"), false);
+    assert_eq!(page_text(&app, id), "a **bold** word**bold** word\n");
+}
+
+#[test]
+fn html_from_other_applications_is_pasted_as_markdown() {
+    let (mut app, _f, _, _) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    pasted(&mut app, id, "bold and link", Some("<b>bold</b> and <a href=\"https://x.org\">link</a>"), false);
+    assert_eq!(page_text(&app, id), "x**bold** and [link](https://x.org)\n");
+    // Paste as plain text keeps the text.
+    pasted(&mut app, id, " plain", Some("<b>plain</b>"), true);
+    assert_eq!(page_text(&app, id), "x**bold** and [link](https://x.org) plain\n");
+}
+
+#[test]
+fn a_spreadsheet_range_pasted_outside_a_table_becomes_a_table() {
+    let (mut app, _f, _, _) = app_with_page("before\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "before");
+    pasted(&mut app, id, "a\tb\n1\t2\n", None, false);
+    assert_eq!(page_text(&app, id), "before\n\n| a   | b   |\n| --- | --- |\n| 1   | 2   |\n");
+}
+
+#[test]
+fn cutting_whole_blocks() {
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    assert_eq!(app.editors[&id].page.blocks, Some((0, 1)));
+    press(&mut app, id, "x", Modifiers::CTRL);
+    assert_eq!(clipboard(&app).text.as_deref(), Some("one\n\ntwo"));
+    assert_eq!(page_text(&app, id), "three\n");
+}
+
+#[test]
+fn whole_blocks_are_selected_and_replaced() {
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "two");
+    // Ctrl+A selects the block's text, a second time all blocks.
+    press(&mut app, id, "a", Modifiers::CTRL);
+    assert_eq!(app.editors[&id].page.selected_source(), "two");
+    press(&mut app, id, "a", Modifiers::CTRL);
+    assert_eq!(app.editors[&id].page.blocks, Some((0, 2)));
+    // Shift+click from the active block.
+    click_after(&mut app, id, "one");
+    send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::SHIFT)));
+    editor(&mut app, id, EditorMsg::BlockPressed(1));
+    assert_eq!(app.editors[&id].page.blocks, Some((0, 1)));
+    send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::empty())));
+    // Typing replaces them.
+    send(
+        &mut app,
+        Message::KeyIn(
+            id,
+            keyboard::Event::KeyPressed {
+                key: Key::Character("z".into()),
+                modified_key: Key::Character("z".into()),
+                physical_key: Physical::Unidentified(NativeCode::Unidentified),
+                location: Location::Standard,
+                modifiers: Modifiers::empty(),
+                text: Some("z".into()),
+                repeat: false,
+            },
+        ),
+    );
+    assert_eq!(page_text(&app, id), "z\n\nthree\n");
+}
+
+#[test]
+fn inserted_images_go_one_per_line() {
+    let (mut app, _f, _, _) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    editor(
+        &mut app,
+        id,
+        EditorMsg::Inserted(Ok(vec!["![](Plan.assets/a.png)".into(), "![](Plan.assets/b.jpg)".into()])),
+    );
+    assert_eq!(page_text(&app, id), "x\n\n![](Plan.assets/a.png)\n![](Plan.assets/b.jpg)\n");
+    // Errors are shown.
+    editor(&mut app, id, EditorMsg::Inserted(Err("failed to copy x".into())));
+    assert_eq!(app.editors[&id].dialogs.front(), Some(&EditorDialog::Message("failed to copy x".into())));
+}
+
+#[test]
+fn dropped_files_are_copied_into_the_assets_folder() {
+    let (_app, f, _, page) = app_with_page("x\n");
+    let picture = f.dir.path().join("photo.png");
+    std::fs::write(&picture, b"png").unwrap();
+    let pdf = f.dir.path().join("doc.pdf");
+    std::fs::write(&pdf, b"pdf").unwrap();
+    let opts = crate::markdown::images::ImageOptions::default();
+    let md = super::files_markdown(&page, "x\n", &[picture, pdf], &opts).unwrap();
+    assert_eq!(md, vec!["![](Plan.assets/photo.png)".to_string(), "[doc.pdf](../doc.pdf)".to_string()]);
+    assert!(f.doc_dir.join("Plan.assets").join("photo.png").is_file());
+}
