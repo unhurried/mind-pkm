@@ -23,7 +23,7 @@ use crate::markdown::count;
 use crate::markdown::edit::{self, Sel};
 use crate::markdown::format::{self, InlineStyle};
 use crate::markdown::images::{self, ImageOptions};
-use crate::markdown::{html, table};
+use crate::markdown::{export, html, table};
 use clipboard::ClipboardContent;
 pub use find::FindMsg;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
@@ -123,6 +123,10 @@ pub enum EditorMsg {
     Inserted(Result<Vec<String>, String>),
     Find(FindMsg),
     Table(TableMsg),
+    /// Where to export to (as PDF when `true`), as chosen in the save dialog.
+    ExportTo(bool, Option<PathBuf>),
+    /// The file exported, or why not.
+    Exported(Result<PathBuf, String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,6 +357,14 @@ impl Editor {
             EditorMsg::Dialog(answer) => self.dialog_answered(answer, effects),
             EditorMsg::Find(msg) => self.find_message(msg),
             EditorMsg::Table(msg) => self.table_message(msg, effects),
+            EditorMsg::ExportTo(pdf, out) => self.export_to(pdf, out),
+            EditorMsg::Exported(result) => {
+                match result {
+                    Ok(out) => self.status = format!("exported {}", out.display()),
+                    Err(e) => self.dialogs.push_back(EditorDialog::Message(e)),
+                }
+                Task::none()
+            }
         }
     }
 
@@ -730,6 +742,14 @@ impl Editor {
         }
         match cmd {
             C::Save => self.save(),
+            C::ExportHtml => self.ask_export_file(false),
+            C::ExportPdf => {
+                if export::find_browser().is_none() {
+                    self.dialogs.push_back(EditorDialog::Message(export::NO_BROWSER.to_string()));
+                    return Task::none();
+                }
+                self.ask_export_file(true)
+            }
             C::Close => self.close_requested(effects),
             C::Undo => {
                 self.leave_source_for_history();
@@ -847,6 +867,44 @@ impl Editor {
             }
             _ => Task::none(),
         }
+    }
+
+    /// The save dialog for an export: the page's name with `.html` / `.pdf`, next to it.
+    fn ask_export_file(&self, pdf: bool) -> Task<EditorMsg> {
+        let (ext, filter) = if pdf { ("pdf", "PDF") } else { ("html", "HTML") };
+        let stem = self.page.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = self.page.path.parent().map(Path::to_path_buf);
+        Task::perform(
+            async move {
+                let mut dialog =
+                    rfd::AsyncFileDialog::new().add_filter(filter, &[ext]).set_file_name(format!("{stem}.{ext}"));
+                if let Some(dir) = dir {
+                    dialog = dialog.set_directory(dir);
+                }
+                dialog.save_file().await.map(|f| f.path().to_path_buf())
+            },
+            move |out| EditorMsg::ExportTo(pdf, out),
+        )
+    }
+
+    /// Exports the page in the background.
+    fn export_to(&mut self, pdf: bool, out: Option<PathBuf>) -> Task<EditorMsg> {
+        let Some(out) = out else { return Task::none() };
+        let (page, text) = (self.page.path.clone(), self.page.text.clone());
+        self.status = format!("exporting {}", out.display());
+        Task::perform(
+            blocking(move || {
+                let css = settings::export_css().unwrap_or_else(|| html::DEFAULT_CSS.to_string());
+                if pdf {
+                    let browser = export::find_browser().ok_or_else(|| export::NO_BROWSER.to_string())?;
+                    export::export_pdf(&browser, &page, &text, &out, &css)?;
+                } else {
+                    export::export_html(&page, &text, &out, &css)?;
+                }
+                Ok(out)
+            }),
+            EditorMsg::Exported,
+        )
     }
 
     pub fn save(&mut self) -> Task<EditorMsg> {

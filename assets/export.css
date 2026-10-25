@@ -25,7 +25,8 @@ mark { background: #fff1a8; }
 hr { border: 0; border-top: 2px solid #d8dee4; margin: 1.5em 0; }
 .math { text-align: center; } span.math { text-align: inherit; }
 div.mermaid { text-align: center; }
-li > input[type="checkbox"] { margin-right: 0.4em; }
+li > input[type="checkbox"] { margin: 0 0.4em 0 -1.4em; }
+li:has(> input[type="checkbox"]) { list-style: none; }
 .toc ul { list-style: none; padding-left: 0; }
 .toc-h2 { padding-left: 1em; } .toc-h3 { padding-left: 2em; } .toc-h4 { padding-left: 3em; }
 @media print { .markdown-body { max-width: none; padding: 0; } }

@@ -6,6 +6,7 @@
 pub mod content;
 pub mod count;
 pub mod edit;
+pub mod export;
 pub mod find;
 pub mod format;
 pub mod history;
