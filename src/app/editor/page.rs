@@ -75,7 +75,8 @@ fn content_sel(content: &Content, text: &str) -> Sel {
     Sel { anchor, head }
 }
 
-fn move_content(content: &mut Content, text: &str, sel: Sel) {
+/// Puts the cursor (and selection) of a text editor at `sel` in its `text`.
+pub fn move_content(content: &mut Content, text: &str, sel: Sel) {
     if sel.is_empty() && content.selection().is_some() {
         // `move_to` keeps a selection; a new content has none.
         *content = Content::with_text(text);
@@ -180,6 +181,7 @@ impl Page {
     }
 
     /// The source of the active region.
+    #[cfg(test)]
     pub fn region_text(&self) -> Option<&str> {
         self.active.as_ref().map(|a| &self.text[a.region.clone()])
     }
@@ -222,7 +224,16 @@ impl Page {
                 {
                     let cell = table::cell_at_offset(source, head - region.start);
                     let cell = (cell.0.min(t.rows.len() - 1), cell.1.min(t.columns() - 1));
-                    active.content = Content::with_text(&table::cell_to_text(&t.rows[cell.0][cell.1]));
+                    let text = table::cell_to_text(&t.rows[cell.0][cell.1]);
+                    active.content = Content::with_text(&text);
+                    // The cursor where the cell's text was clicked.
+                    let start = table::cell_offset(source, cell);
+                    if let Some(before) = source.get(start..head - region.start) {
+                        let at = table::cell_to_text(before).len().min(text.len());
+                        if text.is_char_boundary(at) {
+                            move_content(&mut active.content, &text, Sel::caret(at));
+                        }
+                    }
                     active.table = Some(TableState { table: t, cell, range: None });
                     self.sel = Sel::caret(head);
                 } else {
@@ -356,6 +367,16 @@ impl Page {
         self.history.break_typing();
     }
 
+    /// Moves to another cell with the cursor at the start (or end) of its text.
+    pub fn go_to_cell_at(&mut self, cell: (usize, usize), at_end: bool) {
+        self.go_to_cell(cell);
+        if let Some(a) = &mut self.active {
+            let text = a.content.text();
+            let end = text.trim_end_matches('\n').len();
+            move_content(&mut a.content, &text, Sel::caret(if at_end { end } else { 0 }));
+        }
+    }
+
     /// Applies the outcome of an editing rule as one undoable change.
     pub fn apply(&mut self, edited: Edited) {
         let before = self.snapshot();
@@ -472,22 +493,6 @@ impl Page {
         self.deactivate();
         let last = self.doc.blocks.len().saturating_sub(1);
         self.blocks = (!self.doc.blocks.is_empty()).then_some((anchor.min(last), head.min(last)));
-    }
-
-    /// The last change could be part of typing; a move ends it.
-    pub fn break_typing(&mut self) {
-        self.history.break_typing();
-    }
-
-    /// The selection within the active region's content, as page offsets.
-    pub fn sync_selection(&mut self) {
-        if let Some(a) = &self.active
-            && a.table.is_none()
-        {
-            let text = &self.text[a.region.clone()];
-            let local = content_sel(&a.content, text);
-            self.sel = Sel { anchor: local.anchor + a.region.start, head: local.head + a.region.start };
-        }
     }
 }
 

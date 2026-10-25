@@ -6,11 +6,13 @@
 //! bindings, `highlight` the styling of the source, `view` the rendering.
 
 pub mod clipboard;
+mod find;
 mod highlight;
 mod keys;
 mod page;
 mod render;
 mod scroll;
+mod tables;
 mod view;
 
 #[cfg(test)]
@@ -23,6 +25,7 @@ use crate::markdown::format::{self, InlineStyle};
 use crate::markdown::images::{self, ImageOptions};
 use crate::markdown::{html, table};
 use clipboard::ClipboardContent;
+pub use find::FindMsg;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::text_editor::{Action, Content, Edit, Motion};
 use iced::widget::{operation, scrollable};
@@ -34,6 +37,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+pub use tables::TableMsg;
 use view::HitInfo;
 
 /// The size of the first editor window, when none was remembered.
@@ -117,6 +121,8 @@ pub enum EditorMsg {
     ImagesChosen(Option<Vec<PathBuf>>),
     /// The Markdown of inserted files (copied into the image folder), or why not.
     Inserted(Result<Vec<String>, String>),
+    Find(FindMsg),
+    Table(TableMsg),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +187,17 @@ pub struct Editor {
     copied: Option<String>,
     /// When and where the last inserted files went (files dropped together go on separate lines).
     last_insert: Option<(std::time::Instant, usize)>,
+    pub find: Option<find::FindBar>,
+    /// A press on a cell started dragging over cells.
+    cell_drag: bool,
+    /// Where the cells' range ends (the cursor's cell is where it starts).
+    range_head: Option<(usize, usize)>,
+    /// Where a cell's right-click menu is open.
+    cell_menu: Option<Point>,
+    /// The pointer in the window, while a table is edited.
+    pointer_at: Point,
+    /// The table toolbar's body rows and columns as typed.
+    resize_fields: (Option<String>, Option<String>),
 }
 
 impl Editor {
@@ -207,6 +224,12 @@ impl Editor {
             rendered: None,
             copied: None,
             last_insert: None,
+            find: None,
+            cell_drag: false,
+            range_head: None,
+            cell_menu: None,
+            pointer_at: Point::ORIGIN,
+            resize_fields: (None, None),
         }
     }
 
@@ -224,15 +247,17 @@ impl Editor {
         operation::focus(self.id("active"))
     }
 
-    pub fn is_source_mode(&self) -> bool {
-        self.source.is_some()
-    }
-
     pub fn update(&mut self, msg: EditorMsg, prefs: &EditorPrefs, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         // After typing and moving with keys, the cursor stays in view.
-        let reveals =
-            matches!(msg, EditorMsg::Action(_) | EditorMsg::Bind(_) | EditorMsg::Command(_) | EditorMsg::Key(_));
+        let reveals = matches!(
+            msg,
+            EditorMsg::Action(_) | EditorMsg::Bind(_) | EditorMsg::Command(_) | EditorMsg::Key(_) | EditorMsg::Find(_)
+        );
         let task = self.handle(msg, prefs, effects);
+        self.refresh_find();
+        if !self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
+            (self.cell_drag, self.range_head, self.cell_menu, self.resize_fields) = (false, None, None, (None, None));
+        }
         if reveals { Task::batch([task, self.reveal(prefs)]) } else { task }
     }
 
@@ -294,6 +319,7 @@ impl Editor {
             }
             EditorMsg::Menu(m) => {
                 self.menu = m;
+                self.cell_menu = None;
                 Task::none()
             }
             EditorMsg::PointerOver(info, p) => {
@@ -302,10 +328,7 @@ impl Editor {
             }
             EditorMsg::TextPressed => self.text_pressed(),
             EditorMsg::BlockPressed(block) => self.block_pressed(block),
-            EditorMsg::CellPressed(r, c) => {
-                self.page.go_to_cell((r, c));
-                self.focus()
-            }
+            EditorMsg::CellPressed(r, c) => self.cell_pressed((r, c)),
             EditorMsg::PressedAt(offset) => {
                 self.menu = None;
                 self.page.place(Sel::caret(offset));
@@ -328,6 +351,8 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::Dialog(answer) => self.dialog_answered(answer, effects),
+            EditorMsg::Find(msg) => self.find_message(msg),
+            EditorMsg::Table(msg) => self.table_message(msg, effects),
         }
     }
 
@@ -373,8 +398,11 @@ impl Editor {
     fn on_escape(&mut self) -> Task<EditorMsg> {
         if !self.dialogs.is_empty() {
             self.dialogs.pop_front();
-        } else if self.menu.is_some() {
+        } else if self.menu.is_some() || self.cell_menu.is_some() {
             self.menu = None;
+            self.cell_menu = None;
+        } else if self.find.is_some() {
+            return self.close_find();
         } else if self.page.blocks.is_some() {
             self.page.blocks = None;
         } else if self.fullscreen {
@@ -428,15 +456,18 @@ impl Editor {
         let Some(range) = self.page.blocks_range() else { return };
         let text = &self.page.text;
         let insert = with.map(String::from).unwrap_or_default();
-        // Without a replacement, the blank lines after the blocks go too.
-        let end = if insert.is_empty() {
-            range.end + (text.len() - range.end - text[range.end..].trim_start().len())
+        let (new, at) = if !insert.is_empty() {
+            (edit::splice(text, range.clone(), &insert), range.start + insert.len())
+        } else if text[range.end..].trim().is_empty() {
+            // The last blocks: the blank lines before them go too.
+            let before = text[..range.start].trim_end().len();
+            let end = if before == 0 { "" } else { "\n" };
+            (format!("{}{end}", &text[..before]), before)
         } else {
-            range.end
+            // The blank lines after the blocks go with them.
+            let end = range.end + (text.len() - range.end - text[range.end..].trim_start().len());
+            (edit::splice(text, range.start..end, ""), range.start)
         };
-        let end = if end == text.len() { range.end } else { end };
-        let new = edit::splice(text, range.start..end, &insert);
-        let at = range.start + insert.len();
         self.page.blocks = None;
         self.page.set_text(new, Sel::caret(at));
     }
@@ -541,6 +572,9 @@ impl Editor {
             Bind::Up | Bind::Down => return self.vertical(bind == Bind::Down),
             Bind::ShiftUp | Bind::ShiftDown => return self.extend_vertically(bind == Bind::ShiftDown),
             Bind::Left | Bind::Right => return self.horizontal(bind == Bind::Right),
+            Bind::ShiftLeft | Bind::ShiftRight => {
+                self.page.perform(Action::Select(if bind == Bind::ShiftRight { Motion::Right } else { Motion::Left }));
+            }
             Bind::Type(c) => {
                 let code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
                 match prefs.auto_pair.then(|| format::auto_pair(&text, sel, c, code)).flatten() {
@@ -690,6 +724,10 @@ impl Editor {
     fn run(&mut self, cmd: EditorCommand, prefs: &EditorPrefs, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         use EditorCommand as C;
         self.select_all_again &= cmd == C::SelectAll;
+        self.cell_menu = None;
+        if self.source.is_none() && self.table_command(cmd) {
+            return self.focus();
+        }
         match cmd {
             C::Save => self.save(),
             C::Close => self.close_requested(effects),
@@ -779,6 +817,10 @@ impl Editor {
                     EditorMsg::ImagesChosen,
                 )
             }
+            C::Find => self.open_find(false),
+            C::Replace => self.open_find(true),
+            C::FindNext => self.find_next(false),
+            C::FindPrevious => self.find_next(true),
             C::SourceMode => self.toggle_source_mode(),
             C::Outline => {
                 self.outline = !self.outline;
@@ -1044,11 +1086,8 @@ impl Editor {
             let text = source.text();
             let sel = source_sel(source, &text);
             self.page.set_source_text(text, sel);
-        } else if let Some(range) = self.page.active.as_ref().and_then(|a| a.table.as_ref()).and_then(|t| t.range) {
-            self.page.change_table(|t, cell| {
-                t.clear(range);
-                cell
-            });
+        } else if self.page.active.as_ref().and_then(|a| a.table.as_ref()).is_some_and(|t| t.range.is_some()) {
+            self.clear_cells();
         } else {
             self.page.perform(Action::Edit(Edit::Delete));
         }
@@ -1205,6 +1244,8 @@ impl Editor {
             Bind::Down | Bind::ShiftDown => Action::Move(Motion::Down),
             Bind::Left => Action::Move(Motion::Left),
             Bind::Right => Action::Move(Motion::Right),
+            Bind::ShiftLeft => Action::Select(Motion::Left),
+            Bind::ShiftRight => Action::Select(Motion::Right),
             Bind::Type(c) => {
                 let text = source.text();
                 let sel = source_sel(source, &text);
@@ -1220,67 +1261,6 @@ impl Editor {
     }
 
     // --- Table keys (filled in by the table editing) ---
-
-    fn table_bind(&mut self, bind: Bind) -> Task<EditorMsg> {
-        match bind {
-            Bind::Tab | Bind::ShiftTab | Bind::Enter => {
-                let Some(state) = self.page.active.as_ref().and_then(|a| a.table.as_ref()) else {
-                    return Task::none();
-                };
-                let (r, c) = state.cell;
-                let (rows, cols) = (state.table.rows.len(), state.table.columns());
-                match bind {
-                    Bind::Tab if r + 1 == rows && c + 1 == cols => self.page.change_table(|t, (r, _)| {
-                        t.insert_row(r + 1);
-                        (r + 1, 0)
-                    }),
-                    Bind::Tab => {
-                        let next = if c + 1 < cols { (r, c + 1) } else { (r + 1, 0) };
-                        self.page.go_to_cell(next);
-                    }
-                    Bind::ShiftTab => {
-                        let prev = if c > 0 {
-                            (r, c - 1)
-                        } else if r > 0 {
-                            (r - 1, cols - 1)
-                        } else {
-                            (0, 0)
-                        };
-                        self.page.go_to_cell(prev);
-                    }
-                    _ if r + 1 == rows => self.page.change_table(|t, (r, c)| {
-                        t.insert_row(r + 1);
-                        (r + 1, c)
-                    }),
-                    _ => self.page.go_to_cell((r + 1, c)),
-                }
-            }
-            Bind::ShiftEnter => self.page.perform(Action::Edit(Edit::Enter)),
-            Bind::Backspace => self.page.perform(Action::Edit(Edit::Backspace)),
-            Bind::Delete => self.page.perform(Action::Edit(Edit::Delete)),
-            Bind::Type(c) => self.page.perform(Action::Edit(Edit::Insert(c))),
-            Bind::Up | Bind::Down | Bind::ShiftUp | Bind::ShiftDown => {
-                let down = matches!(bind, Bind::Down | Bind::ShiftDown);
-                let Some(state) = self.page.active.as_ref().and_then(|a| a.table.as_ref()) else {
-                    return Task::none();
-                };
-                let (r, c) = state.cell;
-                let rows = state.table.rows.len();
-                if down && r + 1 < rows {
-                    self.page.go_to_cell((r + 1, c));
-                } else if !down && r > 0 {
-                    self.page.go_to_cell((r - 1, c));
-                } else if let Some(b) = self.page.neighbor(down) {
-                    self.page.enter_block(b, down, None);
-                }
-            }
-            Bind::Left | Bind::Right => {
-                let right = bind == Bind::Right;
-                self.page.perform(Action::Move(if right { Motion::Right } else { Motion::Left }));
-            }
-        }
-        self.focus()
-    }
 
     // --- Scrolling ---
 
@@ -1324,9 +1304,7 @@ fn source_sel(content: &Content, text: &str) -> Sel {
 }
 
 fn move_source(content: &mut Content, text: &str, sel: Sel) {
-    let position = page::position_of(text, sel.head);
-    let selection = (!sel.is_empty()).then(|| page::position_of(text, sel.anchor));
-    content.move_to(iced::widget::text_editor::Cursor { position, selection });
+    page::move_content(content, text, sel);
 }
 
 impl Page {
@@ -1371,8 +1349,18 @@ pub fn opens_in_editor(path: &Path, builtin: bool) -> bool {
 }
 
 /// The subscription of the editor windows: nothing of their own yet.
-pub fn subscription(_editors: &BTreeMap<window::Id, Editor>) -> Subscription<Message> {
-    Subscription::none()
+pub fn subscription(editors: &BTreeMap<window::Id, Editor>) -> Subscription<Message> {
+    // Dragging over cells ends where the button is released, in or out of the table.
+    if editors.values().any(|e| e.cell_drag) {
+        iced::event::listen_with(|event, _status, window| match event {
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                Some(Message::Editor(window, EditorMsg::Table(TableMsg::Released)))
+            }
+            _ => None,
+        })
+    } else {
+        Subscription::none()
+    }
 }
 
 impl App {

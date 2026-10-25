@@ -126,8 +126,15 @@ impl Table {
     /// The source, with a pipe at both ends of every row and the columns
     /// padded to equal width (East Asian wide characters counting double).
     pub fn to_markdown(&self) -> String {
-        let widths: Vec<usize> =
-            (0..self.columns()).map(|c| self.rows.iter().map(|r| r[c].width()).max().unwrap_or(0).max(3)).collect();
+        // At least three dashes besides the colons.
+        let least = |a: Option<&Align>| match a {
+            Some(Align::Center) => 5,
+            Some(Align::Left | Align::Right) => 4,
+            _ => 3,
+        };
+        let widths: Vec<usize> = (0..self.columns())
+            .map(|c| self.rows.iter().map(|r| r[c].width()).max().unwrap_or(0).max(least(self.align.get(c))))
+            .collect();
         let row = |cells: &[String]| {
             let mut s = String::from("|");
             for (cell, w) in cells.iter().zip(&widths) {
@@ -504,7 +511,7 @@ mod tests {
         assert_eq!(t.rows, vec![vec!["a", "b"], vec!["1", "2"]]);
         let mut t2 = t.clone();
         t2.rows[0][0] = "xyz".into();
-        assert_eq!(t2.to_markdown(), "| xyz | b   |\n| :-- | --: |\n| 1   | 2   |");
+        assert_eq!(t2.to_markdown(), "| xyz  | b    |\n| :--- | ---: |\n| 1    | 2    |");
     }
 
     #[test]
@@ -517,7 +524,7 @@ mod tests {
     #[test]
     fn wide_characters_count_double() {
         let t = Table::parse("| 日本 | a |\n|---|:-:|\n| x | y |").unwrap();
-        assert_eq!(t.to_markdown(), "| 日本 | a   |\n| ---- | :-: |\n| x    | y   |");
+        assert_eq!(t.to_markdown(), "| 日本 | a     |\n| ---- | :---: |\n| x    | y     |");
     }
 
     #[test]
@@ -599,7 +606,7 @@ mod tests {
         assert_eq!(t.range_tsv(all), "a\tb\n1\t2 3");
         assert_eq!(
             t.range_markdown(CellRange::new((1, 0), (1, 1))),
-            "| 1   | 2<br>3 |\n| :-: | ------ |\n|     |        |"
+            "| 1     | 2<br>3 |\n| :---: | ------ |\n|       |        |"
         );
         assert_eq!(
             t.range_html(all, |c| c.to_string()),

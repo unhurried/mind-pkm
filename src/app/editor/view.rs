@@ -6,11 +6,12 @@
 //! widget that reports where the pointer is in it, so that a click can be
 //! mapped back to the source (`hit_test`).
 
+use super::find::FindBar;
 use super::highlight::{self, MarkdownHighlighter};
-use super::keys::{self, BindContext, MENUS};
+use super::keys::{self, BindContext, EditorCommand, MENUS, TABLE_MENU};
 use super::page::{Active, TableState};
 use super::render::{RenderCache, RenderKey, Rendered};
-use super::{DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs};
+use super::{DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
 use crate::app::arrow_cursor::arrow_cursor;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Link, Node, SourceMap, Style, TableNode};
@@ -19,7 +20,7 @@ use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::{
     Column, Row, Stack, button, center, column, container, image, mouse_area, opaque, pin, rich_text, row, rule,
-    scrollable, space, stack, svg, text, text_editor,
+    scrollable, space, stack, svg, text, text_editor, text_input,
 };
 use iced::{
     Alignment, Background, Border, Color, Element, Fill, Font, Length, Point, Shadow, Size, Theme, Vector, border, font,
@@ -193,6 +194,8 @@ struct Ctx<'a> {
     renders: &'a RenderCache,
     /// The source offsets the find bar highlights.
     matches: &'a [std::ops::Range<usize>],
+    /// The match that is selected (start, end).
+    current: Option<(usize, usize)>,
 }
 
 impl Ctx<'_> {
@@ -220,20 +223,69 @@ fn italic(f: Font) -> Font {
 impl Editor {
     pub fn view<'a>(&'a self, prefs: &'a EditorPrefs, renders: &'a RenderCache) -> Element<'a, EditorMsg> {
         let p = Palette::new(prefs.dark);
-        let matches: &[std::ops::Range<usize>] = &[];
-        let ctx = Ctx { editor: self, p, zoom: prefs.zoom, renders, matches };
+        let matches = self.find.as_ref().filter(|b| !b.query.is_empty()).map_or(&[][..], |b| &b.matches[..]);
+        let current = self.current_match().map(|m| (m.start, m.end));
+        let ctx = Ctx { editor: self, p, zoom: prefs.zoom, renders, matches, current };
         let document = self.document(&ctx, prefs);
         let body: Element<EditorMsg> =
             if self.outline { row![self.outline_view(&ctx), document].into() } else { document };
-        let main = column![self.menu_bar(p), container(body).height(Fill), self.status_bar(p, prefs)];
+        let mut main = column![self.menu_bar(p)];
+        if let Some(bar) = &self.find {
+            main = main.push(self.find_bar(bar, p));
+        }
+        let main = main.push(container(body).height(Fill)).push(self.status_bar(p, prefs));
         let mut layers: Stack<EditorMsg> = stack![main].width(Fill).height(Fill);
         if let Some(i) = self.menu {
             layers = layers.push(self.menu_dropdown(i, p, prefs));
         }
+        if let Some(at) = self.cell_menu {
+            layers = layers.push(self.cell_menu_view(at, p));
+        }
         if let Some(dialog) = self.dialogs.front() {
             layers = layers.push(dialog_view(dialog, p));
         }
-        arrow_cursor(container(layers).style(move |_| container::background(p.bg).color(p.text))).into()
+        let root = container(layers).style(move |_| container::background(p.bg).color(p.text));
+        // While a table is edited, where the pointer is (a cell's menu opens there).
+        let mut root = mouse_area(root);
+        if self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
+            root = root.on_move(|p| EditorMsg::Table(TableMsg::PointerAt(p)));
+        }
+        arrow_cursor(root).into()
+    }
+
+    /// A cell's right-click menu at `at` in the window.
+    fn cell_menu_view(&self, at: Point, p: Palette) -> Element<'_, EditorMsg> {
+        const WIDTH: f32 = 220.0;
+        const ITEM: f32 = 26.0;
+        let mut list = Column::new().spacing(0).width(WIDTH);
+        for &(label, item) in TABLE_MENU {
+            list = list.push(
+                button(text(label).size(12).color(p.text))
+                    .width(Fill)
+                    .padding([5, 10])
+                    .style(move |_: &Theme, status| button::Style {
+                        background: matches!(status, button::Status::Hovered).then_some(Background::Color(p.hover)),
+                        text_color: p.text,
+                        ..Default::default()
+                    })
+                    .on_press(EditorMsg::Table(TableMsg::MenuItem(item))),
+            );
+        }
+        let height = TABLE_MENU.len() as f32 * ITEM + 8.0;
+        let x = at.x.min(self.window_size.width - WIDTH - 12.0).max(0.0);
+        let y = at.y.min(self.window_size.height - height - 4.0).max(0.0);
+        let menu = container(list).padding(4).style(move |_| {
+            container::background(p.bg).border(border::color(p.border).width(1).rounded(4)).shadow(Shadow {
+                color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
+                offset: Vector::new(0.0, 2.0),
+                blur_radius: 8.0,
+            })
+        });
+        stack![
+            mouse_area(container(space()).width(Fill).height(Fill)).on_press(EditorMsg::Menu(None)),
+            pin(menu).position(Point::new(x, y)),
+        ]
+        .into()
     }
 
     // --- Bars and menus ---
@@ -308,6 +360,54 @@ impl Editor {
             pin(dropdown).position(Point::new(index as f32 * MENU_BUTTON_WIDTH, 30.0)),
         ]
         .into()
+    }
+
+    fn find_bar<'a>(&'a self, bar: &'a FindBar, p: Palette) -> Element<'a, EditorMsg> {
+        let find = |m: FindMsg| EditorMsg::Find(m);
+        let small = |label: &'static str, m: FindMsg| {
+            button(text(label).size(12).center()).padding([3, 10]).style(button::secondary).on_press(find(m))
+        };
+        let query = text_input("Find", &bar.query)
+            .id(self.id("find"))
+            .on_input(move |q| find(FindMsg::Query(q)))
+            .on_submit(find(FindMsg::Next))
+            .size(13)
+            .padding([3, 6])
+            .width(260);
+        let mut find_row = row![
+            query,
+            small("Previous", FindMsg::Previous),
+            small("Next", FindMsg::Next),
+            iced::widget::checkbox(bar.match_case)
+                .label("Match case")
+                .size(14)
+                .text_size(12)
+                .on_toggle(move |on| find(FindMsg::MatchCase(on))),
+            text(self.find_status()).size(12).color(p.muted),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        find_row = find_row.push(space().width(Fill)).push(small("Close", FindMsg::Close));
+        let mut rows = column![find_row].spacing(6);
+        if bar.replacing {
+            let replacement = text_input("Replace with", &bar.replacement)
+                .id(self.id("replace"))
+                .on_input(move |r| find(FindMsg::Replacement(r)))
+                .on_submit(find(FindMsg::Replace))
+                .size(13)
+                .padding([3, 6])
+                .width(260);
+            rows = rows.push(
+                row![replacement, small("Replace", FindMsg::Replace), small("Replace All", FindMsg::ReplaceAll)]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+            );
+        }
+        container(rows)
+            .padding([6, 10])
+            .width(Fill)
+            .style(move |_| container::background(p.bar_bg).border(border::color(p.border).width(1)))
+            .into()
     }
 
     fn status_bar(&self, p: Palette, prefs: &EditorPrefs) -> Element<'_, EditorMsg> {
@@ -441,8 +541,8 @@ impl Editor {
         prefs: &EditorPrefs,
     ) -> Element<'a, EditorMsg> {
         let p = ctx.p;
-        let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: true };
-        let settings = highlight::Settings { dark: prefs.dark, page_start: true, find: None };
+        let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: true, table: false };
+        let settings = highlight::Settings { dark: prefs.dark, page_start: true, find: self.find_query() };
         let editor = text_editor(source)
             .id(self.id("active"))
             .on_action(EditorMsg::Action)
@@ -471,8 +571,9 @@ impl Editor {
         }
         let (size, font, padding) = region_text_style(&a.kind, ctx.zoom);
         let code = a.kind.is_code();
-        let bind = BindContext { auto_pair: prefs.auto_pair, code, source_mode: false };
-        let settings = highlight::Settings { dark: prefs.dark, page_start: a.region.start == 0, find: None };
+        let bind = BindContext { auto_pair: prefs.auto_pair, code, source_mode: false, table: false };
+        let settings =
+            highlight::Settings { dark: prefs.dark, page_start: a.region.start == 0, find: self.find_query() };
         let background = if code { p.code_bg } else { Color::TRANSPARENT };
         let editor = text_editor(&a.content)
             .id(self.id("active"))
@@ -521,7 +622,7 @@ impl Editor {
         let t = &state.table;
         let columns = t.columns().max(1);
         let cell_width = (width / columns as f32).max(40.0);
-        let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: false };
+        let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: false, table: true };
         let mut grid = Column::new();
         for (r, cells) in t.rows.iter().enumerate() {
             let mut line = Row::new();
@@ -529,7 +630,7 @@ impl Editor {
                 let align = t.align.get(c).copied().unwrap_or_default();
                 let selected = state.range.is_some_and(|range| range.contains((r, c)));
                 let content: Element<EditorMsg> = if (r, c) == state.cell {
-                    text_editor(&a.content)
+                    let editor = text_editor(&a.content)
                         .id(self.id("active"))
                         .on_action(EditorMsg::Action)
                         .key_binding(move |k| keys::binding(k, bind))
@@ -537,7 +638,11 @@ impl Editor {
                         .line_height(LINE_HEIGHT)
                         .font(if r == 0 { bold(APP_FONT) } else { APP_FONT })
                         .padding(0)
-                        .style(move |_, _| editor_style(p, Color::TRANSPARENT))
+                        .style(move |_, _| editor_style(p, Color::TRANSPARENT));
+                    mouse_area(editor)
+                        .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
+                        .on_release(EditorMsg::Table(TableMsg::Released))
+                        .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)))
                         .into()
                 } else {
                     let doc = crate::markdown::Document::parse(&table::cell_to_text(cell));
@@ -549,7 +654,12 @@ impl Editor {
                         color: p.text,
                     };
                     let shown: Element<EditorMsg> = inline_text(&inlines, base, ctx, None, usize::MAX);
-                    mouse_area(container(shown).width(Fill)).on_press(EditorMsg::CellPressed(r, c)).into()
+                    mouse_area(container(shown).width(Fill))
+                        .on_press(EditorMsg::CellPressed(r, c))
+                        .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
+                        .on_release(EditorMsg::Table(TableMsg::Released))
+                        .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)))
+                        .into()
                 };
                 let align_x = match align {
                     table::Align::Center => Alignment::Center,
@@ -571,7 +681,55 @@ impl Editor {
             }
             grid = grid.push(line);
         }
-        grid.into()
+        column![self.table_toolbar(p), grid].spacing(4).into()
+    }
+
+    /// Above the table being edited: alignment, size and deleting the table.
+    fn table_toolbar(&self, p: Palette) -> Element<'_, EditorMsg> {
+        let tool = |label: &'static str, cmd: EditorCommand| {
+            button(text(label).size(11).center())
+                .padding([2, 8])
+                .style(move |_: &Theme, status| button::Style {
+                    background: Some(Background::Color(if matches!(status, button::Status::Hovered) {
+                        p.hover
+                    } else {
+                        p.bar_bg
+                    })),
+                    text_color: p.text,
+                    border: border::color(p.border).width(1).rounded(3),
+                    ..Default::default()
+                })
+                .on_press(EditorMsg::Command(cmd))
+        };
+        let field = |value: String, on_input: fn(String) -> TableMsg| {
+            text_input("", &value)
+                .on_input(move |s| EditorMsg::Table(on_input(s)))
+                .on_submit(EditorMsg::Table(TableMsg::Resize))
+                .size(11)
+                .padding([2, 4])
+                .width(44)
+        };
+        let (rows, cols) = self.resize_values();
+        let label = |s: &'static str| text(s).size(11).color(p.muted);
+        row![
+            tool("Left", EditorCommand::AlignLeft),
+            tool("Center", EditorCommand::AlignCenter),
+            tool("Right", EditorCommand::AlignRight),
+            space().width(12),
+            label("Rows"),
+            field(rows, TableMsg::Rows),
+            label("Columns"),
+            field(cols, TableMsg::Columns),
+            button(text("Resize").size(11).center())
+                .padding([2, 8])
+                .style(button::secondary)
+                .on_press(EditorMsg::Table(TableMsg::Resize)),
+            space().width(Fill),
+            tool("Delete Table", EditorCommand::DeleteTable),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
     }
 
     // --- Rendered blocks ---
@@ -926,27 +1084,27 @@ fn text_line<'a>(
                 if style.code {
                     color = p.code;
                 }
-                let mut span = Span::new(t.clone()).size(size).font(font).color(color);
-                if style.underline || link.is_some() {
-                    span = span.underline(true);
+                // Pieces in and out of find matches.
+                for (piece, found) in match_pieces(t, map, ctx) {
+                    let mut span = Span::new(t[piece].to_string()).size(size).font(font).color(color);
+                    if style.underline || link.is_some() {
+                        span = span.underline(true);
+                    }
+                    if style.strike {
+                        span = span.strikethrough(true);
+                    }
+                    if let Some(current) = found {
+                        span = span.background(if current { p.find } else { p.find_bg });
+                    } else if style.highlight {
+                        span = span.background(p.mark_bg);
+                    } else if style.code || style.kbd {
+                        span = span.background(p.code_bg);
+                    }
+                    if let Some(Link { dest, .. }) = link {
+                        span = span.link(SpanLink { dest: dest.clone(), at: map.source_range().start });
+                    }
+                    spans.push(span);
                 }
-                if style.strike {
-                    span = span.strikethrough(true);
-                }
-                if style.highlight {
-                    span = span.background(p.mark_bg);
-                } else if style.code || style.kbd {
-                    span = span.background(p.code_bg);
-                }
-                // Find matches.
-                let source = map.source_range();
-                if ctx.matches.iter().any(|m| m.start < source.end && m.end > source.start) {
-                    span = span.background(p.find_bg);
-                }
-                if let Some(Link { dest, .. }) = link {
-                    span = span.link(SpanLink { dest: dest.clone(), at: map.source_range().start });
-                }
-                spans.push(span);
                 hits.push(HitRun { text: t.clone(), size, font, map: Some(map.clone()) });
             }
             Inline::FootnoteRef { label, number, source } => {
@@ -980,6 +1138,32 @@ fn text_line<'a>(
 }
 
 /// The size and font of a run's style.
+/// A text run cut where find matches start and end: each piece, and whether
+/// it is in a match (and in the selected one).
+fn match_pieces(t: &str, map: &SourceMap, ctx: &Ctx) -> Vec<(std::ops::Range<usize>, Option<bool>)> {
+    let source = map.source_range();
+    if !ctx.matches.iter().any(|m| m.start < source.end && m.end > source.start) {
+        return vec![(0..t.len(), None)];
+    }
+    let state = |i: usize| {
+        let s = map.source_of(i);
+        let k = ctx.matches.partition_point(|m| m.end <= s);
+        ctx.matches.get(k).filter(|m| m.start <= s).map(|m| ctx.current == Some((m.start, m.end)))
+    };
+    let mut pieces: Vec<(std::ops::Range<usize>, Option<bool>)> = Vec::new();
+    for (i, _) in t.char_indices() {
+        let found = state(i);
+        match pieces.last_mut() {
+            Some((r, f)) if *f == found => r.end = i,
+            _ => pieces.push((i..i, found)),
+        }
+    }
+    for k in 0..pieces.len() {
+        pieces[k].0.end = pieces.get(k + 1).map_or(t.len(), |p| p.0.start);
+    }
+    pieces
+}
+
 fn run_font(style: Style, base: TextBase) -> (f32, Font) {
     let mut font = if style.code || style.kbd { CODE_FONT } else { base.font };
     if style.bold {

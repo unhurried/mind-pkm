@@ -473,3 +473,270 @@ fn dropped_files_are_copied_into_the_assets_folder() {
     assert_eq!(md, vec!["![](Plan.assets/photo.png)".to_string(), "[doc.pdf](../doc.pdf)".to_string()]);
     assert!(f.doc_dir.join("Plan.assets").join("photo.png").is_file());
 }
+
+fn find(app: &mut App, id: window::Id, msg: super::FindMsg) {
+    editor(app, id, EditorMsg::Find(msg));
+}
+
+fn selected(app: &App, id: window::Id) -> std::ops::Range<usize> {
+    app.editors[&id].page.sel.range()
+}
+
+#[test]
+fn finding_the_next_and_previous_match() {
+    let (mut app, _f, _, _) = app_with_page("Foo one\n\n- foo two\n- FOO three\n");
+    let id = open_with_f1(&mut app);
+    // Ctrl+F takes the selected text.
+    select(&mut app, id, "Foo");
+    press(&mut app, id, "f", Modifiers::CTRL);
+    let bar = app.editors[&id].find.as_ref().expect("the find bar");
+    assert_eq!(bar.query, "Foo");
+    assert!(!bar.replacing);
+    assert_eq!(bar.matches, vec![0..3, 11..14, 21..24]);
+    assert_eq!(app.editors[&id].find_status(), "1 of 3");
+    // F3 / Enter: the next match, selected in its block.
+    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F3), Modifiers::empty())));
+    assert_eq!(selected(&app, id), 11..14);
+    assert_eq!(app.editors[&id].page.selected_source(), "foo");
+    find(&mut app, id, super::FindMsg::Next);
+    assert_eq!(selected(&app, id), 21..24);
+    find(&mut app, id, super::FindMsg::Next);
+    assert_eq!(selected(&app, id), 0..3, "wraps around");
+    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F3), Modifiers::SHIFT)));
+    assert_eq!(selected(&app, id), 21..24);
+    // Match case.
+    find(&mut app, id, super::FindMsg::MatchCase(true));
+    assert_eq!(app.editors[&id].find.as_ref().unwrap().matches, vec![0..3]);
+    // Esc closes the bar.
+    editor(&mut app, id, EditorMsg::Escape);
+    assert!(app.editors[&id].find.is_none());
+}
+
+#[test]
+fn replace_and_replace_all() {
+    let (mut app, _f, _, _) = app_with_page("foo a\n\nfoo b\n\nfoo c\n");
+    let id = open_with_f1(&mut app);
+    press(&mut app, id, "h", Modifiers::CTRL);
+    assert!(app.editors[&id].find.as_ref().unwrap().replacing);
+    find(&mut app, id, super::FindMsg::Query("foo".into()));
+    find(&mut app, id, super::FindMsg::Replacement("bar".into()));
+    // Replace without a selected match goes to the first; then replaces it.
+    find(&mut app, id, super::FindMsg::Replace);
+    assert_eq!(page_text(&app, id), "foo a\n\nfoo b\n\nfoo c\n");
+    find(&mut app, id, super::FindMsg::Replace);
+    assert_eq!(page_text(&app, id), "bar a\n\nfoo b\n\nfoo c\n");
+    assert_eq!(app.editors[&id].page.selected_source(), "foo", "the next match");
+    press(&mut app, id, "z", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "foo a\n\nfoo b\n\nfoo c\n");
+    // Replace All: one change.
+    find(&mut app, id, super::FindMsg::ReplaceAll);
+    assert_eq!(page_text(&app, id), "bar a\n\nbar b\n\nbar c\n");
+    assert_eq!(app.editors[&id].find_status(), "No results");
+    press(&mut app, id, "z", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "foo a\n\nfoo b\n\nfoo c\n");
+}
+
+#[test]
+fn finding_in_source_mode() {
+    let (mut app, _f, _, _) = app_with_page("# foo\n\nfoo\n");
+    let id = open_with_f1(&mut app);
+    press(&mut app, id, "/", Modifiers::CTRL);
+    press(&mut app, id, "f", Modifiers::CTRL);
+    find(&mut app, id, super::FindMsg::Query("foo".into()));
+    find(&mut app, id, super::FindMsg::Next);
+    find(&mut app, id, super::FindMsg::Next);
+    let source = app.editors[&id].source.as_ref().unwrap();
+    assert_eq!(source.selection().as_deref(), Some("foo"));
+    assert_eq!(super::source_sel(source, &source.text()).range(), 7..10);
+    find(&mut app, id, super::FindMsg::Replacement("x".into()));
+    find(&mut app, id, super::FindMsg::ReplaceAll);
+    assert_eq!(page_text(&app, id), "# x\n\nx\n");
+    assert_eq!(app.editors[&id].source.as_ref().unwrap().text(), "# x\n\nx\n");
+}
+
+const TABLE: &str = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n";
+
+fn table_of(app: &App, id: window::Id) -> crate::markdown::table::Table {
+    crate::markdown::table::Table::parse(&page_text(app, id)).expect("a table")
+}
+
+fn cell(app: &App, id: window::Id) -> (usize, usize) {
+    app.editors[&id].page.active.as_ref().unwrap().table.as_ref().unwrap().cell
+}
+
+fn cell_range(app: &App, id: window::Id) -> Option<crate::markdown::table::CellRange> {
+    app.editors[&id].page.active.as_ref().unwrap().table.as_ref().unwrap().range
+}
+
+fn rows(app: &App, id: window::Id) -> Vec<Vec<String>> {
+    table_of(app, id).rows
+}
+
+fn named(app: &mut App, id: window::Id, key: Named, modifiers: Modifiers) {
+    send(app, Message::KeyIn(id, key_event(Key::Named(key), modifiers)));
+}
+
+fn strings(rows: &[&[&str]]) -> Vec<Vec<String>> {
+    rows.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect()
+}
+
+#[test]
+fn rows_are_inserted_deleted_and_moved_with_keys() {
+    let (mut app, _f, _, _) = app_with_page(TABLE);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "1");
+    assert_eq!(cell(&app, id), (1, 0));
+    // Ctrl+Enter: an empty row below.
+    named(&mut app, id, Named::Enter, Modifiers::CTRL);
+    assert_eq!(rows(&app, id), strings(&[&["a", "b"], &["1", "2"], &["", ""], &["3", "4"]]));
+    assert_eq!(cell(&app, id), (2, 0));
+    // Ctrl+Shift+Backspace: deleted; the cursor in the row that followed.
+    named(&mut app, id, Named::Backspace, Modifiers::CTRL | Modifiers::SHIFT);
+    assert_eq!(rows(&app, id), strings(&[&["a", "b"], &["1", "2"], &["3", "4"]]));
+    assert_eq!(cell(&app, id), (2, 0));
+    // Alt+Up moves the row.
+    named(&mut app, id, Named::ArrowUp, Modifiers::ALT);
+    assert_eq!(rows(&app, id), strings(&[&["a", "b"], &["3", "4"], &["1", "2"]]));
+    assert_eq!(cell(&app, id), (1, 0));
+    // The header stays where it is.
+    named(&mut app, id, Named::ArrowUp, Modifiers::ALT);
+    assert_eq!(rows(&app, id)[0], vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn moving_a_column_takes_its_alignment() {
+    let (mut app, _f, _, _) = app_with_page("| a | b |\n| :-- | --: |\n| 1 | 2 |\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "1");
+    named(&mut app, id, Named::ArrowRight, Modifiers::ALT);
+    let t = table_of(&app, id);
+    assert_eq!(t.rows, strings(&[&["b", "a"], &["2", "1"]]));
+    use crate::markdown::table::Align;
+    assert_eq!(t.align, vec![Align::Right, Align::Left]);
+    assert_eq!(cell(&app, id), (1, 1));
+}
+
+#[test]
+fn table_menu_commands() {
+    let (mut app, _f, _, _) = app_with_page(TABLE);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "2");
+    let cmd = |app: &mut App, c: super::EditorCommand| editor(app, id, EditorMsg::Command(c));
+    cmd(&mut app, super::EditorCommand::ColumnLeft);
+    assert_eq!(rows(&app, id), strings(&[&["a", "", "b"], &["1", "", "2"], &["3", "", "4"]]));
+    cmd(&mut app, super::EditorCommand::DeleteColumn);
+    cmd(&mut app, super::EditorCommand::ColumnRight);
+    assert_eq!(rows(&app, id), strings(&[&["a", "b", ""], &["1", "2", ""], &["3", "4", ""]]));
+    assert_eq!(cell(&app, id), (1, 2));
+    cmd(&mut app, super::EditorCommand::RowAbove);
+    assert_eq!(rows(&app, id)[1], vec![String::new(); 3]);
+    cmd(&mut app, super::EditorCommand::DeleteRow);
+    cmd(&mut app, super::EditorCommand::DeleteColumn);
+    assert_eq!(rows(&app, id), strings(&[&["a", "b"], &["1", "2"], &["3", "4"]]));
+    // Delete Table.
+    cmd(&mut app, super::EditorCommand::DeleteTable);
+    assert_eq!(page_text(&app, id), "");
+}
+
+#[test]
+fn aligning_the_columns_of_a_range() {
+    let (mut app, _f, _, _) = app_with_page(TABLE);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "1");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftRight));
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftRight));
+    assert_eq!(cell_range(&app, id), Some(crate::markdown::table::CellRange::new((1, 0), (1, 1))));
+    editor(&mut app, id, EditorMsg::Command(super::EditorCommand::AlignCenter));
+    assert!(page_text(&app, id).contains("| :---: | :---: |"), "{}", page_text(&app, id));
+    // The range stays for the next command.
+    assert!(cell_range(&app, id).is_some());
+}
+
+#[test]
+fn ranges_are_cleared_copied_and_pasted() {
+    let (mut app, _f, _, _) = app_with_page(TABLE);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "1");
+    // Dragging from a cell to another selects the cells between.
+    editor(&mut app, id, EditorMsg::CellPressed(1, 0));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Entered(2, 1)));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Released));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Entered(1, 1)));
+    let range = crate::markdown::table::CellRange::new((1, 0), (2, 1));
+    assert_eq!(cell_range(&app, id), Some(range), "moving after the release changes nothing");
+    press(&mut app, id, "c", Modifiers::CTRL);
+    assert_eq!(clipboard(&app).text.as_deref(), Some("1\t2\n3\t4"));
+    assert!(clipboard(&app).html.as_deref().is_some_and(|h| h.contains("<td>4</td>")));
+    // Delete empties them.
+    editor(&mut app, id, EditorMsg::Bind(Bind::Delete));
+    assert_eq!(rows(&app, id), strings(&[&["a", "b"], &["", ""], &["", ""]]));
+    assert_eq!(cell_range(&app, id), None);
+    // A spreadsheet range pasted into the last row grows the table.
+    editor(&mut app, id, EditorMsg::CellPressed(2, 0));
+    pasted(&mut app, id, "x\ty\nz\tw\nu\tv\n", None, false);
+    assert_eq!(rows(&app, id), strings(&[&["a", "b"], &["", ""], &["x", "y"], &["z", "w"], &["u", "v"]]));
+}
+
+#[test]
+fn rows_and_columns_from_the_cell_menu() {
+    let (mut app, _f, _, _) = app_with_page(TABLE);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "1");
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::PointerAt(iced::Point::new(100.0, 200.0))));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Menu(2, 1)));
+    assert_eq!(app.editors[&id].cell_menu, Some(iced::Point::new(100.0, 200.0)));
+    assert_eq!(cell(&app, id), (2, 1), "the right-clicked cell");
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::MenuItem(super::keys::TableMenuItem::CopyColumn)));
+    assert_eq!(clipboard(&app).text.as_deref(), Some("b\n2\n4"));
+    assert_eq!(app.editors[&id].cell_menu, None);
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Menu(1, 0)));
+    let item = super::keys::TableMenuItem::Command(super::EditorCommand::RowBelow);
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::MenuItem(item)));
+    assert_eq!(rows(&app, id).len(), 4);
+    // Ctrl+L selects the row.
+    press(&mut app, id, "l", Modifiers::CTRL);
+    assert_eq!(cell_range(&app, id), Some(crate::markdown::table::CellRange::new((2, 0), (2, 1))));
+}
+
+#[test]
+fn resizing_from_the_toolbar() {
+    let (mut app, _f, _, _) = app_with_page("| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "1");
+    assert_eq!(app.editors[&id].resize_values(), ("2".to_string(), "2".to_string()));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Rows("3".into())));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Columns("3".into())));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Resize));
+    assert_eq!(rows(&app, id), strings(&[&["a", "b", ""], &["1", "2", ""], &["3", "4", ""], &["", "", ""]]));
+    // Not a number: nothing changes.
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Rows("x".into())));
+    editor(&mut app, id, EditorMsg::Table(super::TableMsg::Resize));
+    assert_eq!(rows(&app, id).len(), 4);
+}
+
+#[test]
+fn typing_in_cells() {
+    let (mut app, _f, _, _) = app_with_page("|a|b|\n|-|-|\n|1|2|\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "a");
+    typing(&mut app, id, "x|y");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftEnter));
+    typing(&mut app, id, "z");
+    assert_eq!(rows(&app, id)[0][0], "ax\\|y<br>z");
+    // Tab to the next cell selects its text; at the end a row is added.
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(app.editors[&id].page.selected_source(), "b");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(rows(&app, id).len(), 3);
+    assert_eq!(cell(&app, id), (2, 0));
+    // Right at the end of a cell goes to the next one.
+    typing(&mut app, id, "q");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Right));
+    assert_eq!(cell(&app, id), (2, 1));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Left));
+    assert_eq!(cell(&app, id), (2, 0));
+    let text = page_text(&app, id);
+    assert_eq!(text.lines().next(), Some("| ax\\|y<br>z | b   |"));
+}

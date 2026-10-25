@@ -303,6 +303,9 @@ pub enum Bind {
     Right,
     ShiftUp,
     ShiftDown,
+    /// Shift+Left / Shift+Right in a table (over cells at the edge of a cell's text).
+    ShiftLeft,
+    ShiftRight,
     /// A character auto-pairing may act on.
     Type(char),
 }
@@ -314,6 +317,8 @@ pub struct BindContext {
     /// The region is code (fewer characters are paired).
     pub code: bool,
     pub source_mode: bool,
+    /// The cursor is in a table's cell.
+    pub table: bool,
 }
 
 /// The characters auto-pairing acts on.
@@ -347,6 +352,8 @@ pub fn binding(press: KeyPress, ctx: BindContext) -> Option<Binding<EditorMsg>> 
             (Named::ArrowRight, false) if plain && !ctx.source_mode => return custom(Bind::Right),
             (Named::ArrowUp, true) if plain && !ctx.source_mode => return custom(Bind::ShiftUp),
             (Named::ArrowDown, true) if plain && !ctx.source_mode => return custom(Bind::ShiftDown),
+            (Named::ArrowLeft, true) if plain && ctx.table => return custom(Bind::ShiftLeft),
+            (Named::ArrowRight, true) if plain && ctx.table => return custom(Bind::ShiftRight),
             _ => {}
         }
     }
