@@ -399,20 +399,16 @@ impl Page {
     }
 
     /// The selection the editing rules (Enter, Backspace at the start...)
-    /// work with: at the start / end of what a block shows, its content's
-    /// start / end in the source (inside its block syntax).
+    /// work with: at the start of what a block shows, its content's start in
+    /// the source (after its block syntax, before any inline Markdown).
     pub fn rule_sel(&self) -> Sel {
         if let Some(a) = &self.active
             && let Some(l) = &a.live
             && a.table.is_none()
             && l.sel.is_empty()
+            && l.sel.head == 0
         {
-            if l.sel.head == 0 {
-                return Sel::caret(l.display.content.start);
-            }
-            if l.sel.head >= l.display.text.len() {
-                return Sel::caret(l.display.content.end.max(l.display.content.start));
-            }
+            return Sel::caret(l.display.content.start);
         }
         self.sel
     }

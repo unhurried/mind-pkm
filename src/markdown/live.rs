@@ -208,6 +208,19 @@ impl Display {
                 }
             }
         }
+        // Empty quoted lines Enter added at the end: line breaks to put the cursor after.
+        let last = d.units.iter().map(|u| u.source.end).max().unwrap_or(region.start);
+        for (r, owner) in &hidden {
+            let t = &text[r.clone()];
+            if owner.is_none()
+                && r.start >= last
+                && t.contains('\n')
+                && t.chars().all(|c| matches!(c, '>' | ' ' | '\t' | '\n'))
+            {
+                let breaks = "\n".repeat(t.matches('\n').count());
+                d.push(&breaks, r.clone(), false, Look::Break, None);
+            }
+        }
         // The content: inside the block syntax at both ends.
         let mut start = region.start;
         let mut end = region.end;
@@ -645,6 +658,15 @@ mod tests {
         assert_eq!(Display::for_cell("1. # x", 0).text, "1. # x");
         assert_eq!(Display::for_cell("a\\|b", 0).text, "a|b");
         assert_eq!(Display::for_cell("", 0).text, "");
+    }
+
+    #[test]
+    fn an_empty_quoted_line_at_the_end_is_shown() {
+        let (d, text, _) = shown("> one\n>\n> ‸");
+        assert_eq!(d.text, "one\n\n");
+        assert_eq!(d.to_source(d.text.len()), text.len());
+        // A setext underline stays hidden.
+        assert_eq!(shown_text("Title‸\n==="), "Title");
     }
 
     #[test]

@@ -1358,7 +1358,9 @@ impl Editor {
                 page.live_insert(&text, typed);
             }
         }
-        Task::none()
+        // An edit can put the block elsewhere among the widgets (a new
+        // paragraph getting its text): the focus follows it.
+        self.focus()
     }
 
     // --- Scrolling ---

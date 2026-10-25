@@ -898,3 +898,119 @@ fn a_match_in_a_table_is_selected_in_its_cell() {
     assert_eq!(app.editors[&id].page.selected_source(), "lu");
     assert_eq!(app.editors[&id].find_status(), "1 of 1");
 }
+
+fn shown(app: &App, id: window::Id) -> String {
+    app.editors[&id]
+        .page
+        .active
+        .as_ref()
+        .and_then(|a| a.live.as_ref())
+        .map(|l| l.display.text.clone())
+        .unwrap_or_default()
+}
+
+fn live(app: &mut App, id: window::Id, msg: super::LiveMsg) {
+    editor(app, id, EditorMsg::Live(msg));
+}
+
+#[test]
+fn only_the_element_at_the_cursor_shows_its_markdown() {
+    let (mut app, _f, _, _) = app_with_page("some **bold** [link](x.md)\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "so");
+    assert_eq!(shown(&app, id), "some bold link");
+    click_after(&mut app, id, "**bo");
+    assert_eq!(shown(&app, id), "some **bold** link");
+    // Clicking the rendered text puts the cursor there.
+    live(&mut app, id, super::LiveMsg::Click { at: 2, extend: false });
+    assert_eq!(app.editors[&id].page.sel.head, 2);
+    assert_eq!(shown(&app, id), "some bold link");
+}
+
+#[test]
+fn headings_and_list_items_are_edited_without_their_markers() {
+    let (mut app, _f, _, _) = app_with_page("## Plan\n\n- [ ] task\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "Pl");
+    assert_eq!(shown(&app, id), "Plan");
+    // Backspace at the start of the heading's text: a paragraph.
+    live(&mut app, id, super::LiveMsg::MoveTo { at: 0, select: false });
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "Plan\n\n- [ ] task\n");
+    click_after(&mut app, id, "ta");
+    assert_eq!(shown(&app, id), "task");
+    typing(&mut app, id, "X");
+    assert_eq!(page_text(&app, id), "Plan\n\n- [ ] taXsk\n");
+}
+
+#[test]
+fn deleting_rendered_text_keeps_or_removes_its_markup() {
+    let (mut app, _f, _, _) = app_with_page("**bold** x\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    assert_eq!(shown(&app, id), "bold x");
+    // Selecting `bo` of the rendered word and deleting it.
+    live(&mut app, id, super::LiveMsg::Click { at: 0, extend: false });
+    let l = app.editors[&id].page.active.as_ref().unwrap().live.clone().unwrap();
+    let start = l.display.text.find("bo").unwrap();
+    live(&mut app, id, super::LiveMsg::Click { at: start, extend: false });
+    live(&mut app, id, super::LiveMsg::Drag(start + 2));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Delete));
+    assert_eq!(page_text(&app, id), "**ld** x\n");
+
+    let (mut app, _f, _, _) = app_with_page("a **bold** b\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "b\n".trim_end());
+    click_after(&mut app, id, "a");
+    assert_eq!(shown(&app, id), "a bold b");
+    live(&mut app, id, super::LiveMsg::Click { at: 2, extend: false });
+    // From the bold's start (now shown with its markers) to its end.
+    let l = app.editors[&id].page.active.as_ref().unwrap().live.clone().unwrap();
+    let (s, e) = (l.display.text.find("**").unwrap(), l.display.text.rfind("**").unwrap() + 2);
+    live(&mut app, id, super::LiveMsg::Click { at: s, extend: false });
+    live(&mut app, id, super::LiveMsg::Drag(e));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "a  b\n");
+}
+
+#[test]
+fn enter_twice_leaves_a_quote() {
+    let (mut app, _f, _, _) = app_with_page("> one\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    assert_eq!(page_text(&app, id), "> one\n>\n> \n");
+    assert_eq!(shown(&app, id), "one\n\n");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    typing(&mut app, id, "after");
+    assert_eq!(page_text(&app, id), "> one\n\nafter\n");
+}
+
+#[test]
+fn moving_by_characters_and_words_in_rendered_text() {
+    use iced::widget::text_editor::Motion;
+    let (mut app, _f, _, _) = app_with_page("ab **cd** ef\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "a");
+    let right = |app: &mut App| live(app, id, super::LiveMsg::Motion { motion: Motion::Right, select: false });
+    right(&mut app);
+    right(&mut app);
+    // Next to the bold: its markers show, the cursor before them.
+    assert_eq!(shown(&app, id), "ab **cd** ef");
+    assert_eq!(app.editors[&id].page.sel.head, 3);
+    live(&mut app, id, super::LiveMsg::Motion { motion: Motion::WordRight, select: false });
+    live(&mut app, id, super::LiveMsg::Motion { motion: Motion::End, select: true });
+    assert_eq!(app.editors[&id].page.selected_source().ends_with("ef"), true);
+}
+
+#[test]
+fn typing_into_a_new_paragraph() {
+    let (mut app, _f, _, _) = app_with_page("last\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "last");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    for c in ["q", "2"] {
+        live(&mut app, id, super::LiveMsg::Insert(c.into()));
+    }
+    assert_eq!(page_text(&app, id), "last\n\nq2\n");
+}
