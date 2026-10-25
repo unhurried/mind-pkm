@@ -13,7 +13,7 @@ Enter after a line that is a table header row (`| a | b |`) SHALL turn it into a
 - **THEN** the source becomes a table with the header `Name`, `Note`, a delimiter row and one empty row, and the cursor is in the first empty cell
 
 ### Requirement: Editing cells
-While the cursor is in a table, the table SHALL be shown as a grid of cells with the cursor's cell editable; other cells SHALL be rendered. A cell SHALL accept links, bold, italic and strikethrough. Shift+Enter in a cell SHALL break the line, stored as `<br>`; a `|` typed in a cell SHALL be stored as `\|`. Block elements SHALL NOT be created inside a cell.
+While the cursor is in a table, the table SHALL be shown as a grid of rendered cells; the cursor's cell SHALL be edited in its rendered form, showing as Markdown only the inline elements touching the cursor. A cell SHALL accept links, bold, italic and strikethrough. Shift+Enter in a cell SHALL break the line, stored as `<br>`; a `|` typed in a cell SHALL be stored as `\|`. Block elements SHALL NOT be created inside a cell.
 
 #### Scenario: Line break in a cell
 - **WHEN** Shift+Enter is pressed between `a` and `b` in a cell
@@ -22,6 +22,10 @@ While the cursor is in a table, the table SHALL be shown as a grid of cells with
 #### Scenario: Pipe in a cell
 - **WHEN** `x|y` is typed into a cell
 - **THEN** the file stores the cell as `x\|y`
+
+#### Scenario: Bold text in the cell being edited
+- **WHEN** the cursor is in a cell holding `**done** today`, after `today`
+- **THEN** `done` is shown in bold without asterisks
 
 ### Requirement: Moving between cells
 Tab SHALL move to the next cell, from a row's last cell to the next row's first; Shift+Tab SHALL move back the same way. Tab in the last cell of the last row SHALL add a row and move to its first cell. Enter SHALL move to the cell below, adding a row from the last row. The cell moved to SHALL have its whole text selected.
