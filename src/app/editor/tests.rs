@@ -1000,7 +1000,7 @@ fn moving_by_characters_and_words_in_rendered_text() {
     assert_eq!(app.editors[&id].page.sel.head, 3);
     live(&mut app, id, super::LiveMsg::Motion { motion: Motion::WordRight, select: false });
     live(&mut app, id, super::LiveMsg::Motion { motion: Motion::End, select: true });
-    assert_eq!(app.editors[&id].page.selected_source().ends_with("ef"), true);
+    assert!(app.editors[&id].page.selected_source().ends_with("ef"));
 }
 
 #[test]
