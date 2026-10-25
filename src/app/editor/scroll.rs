@@ -129,6 +129,18 @@ pub fn reveal_caret(region_box: Id, page: Id, caret: CaretText) -> Task<EditorMs
     })
 }
 
+/// Scrolls the page so that the box `target` (a table's cell) is visible.
+pub fn reveal_box(target: Id, page: Id) -> Task<EditorMsg> {
+    let page_id = page.clone();
+    find(target, page).then(move |found| {
+        let Some(f) = found else { return Task::none() };
+        match offset_to_show(f.target.y, f.target.y + f.target.height, f.viewport, f.offset) {
+            Some(y) => operation::scroll_to(page_id.clone(), scrollable::AbsoluteOffset { x: 0.0, y }),
+            None => Task::none(),
+        }
+    })
+}
+
 /// Scrolls the page so that the box `target` is at the top.
 pub fn to_top(target: Id, page: Id) -> Task<EditorMsg> {
     let page_id = page.clone();

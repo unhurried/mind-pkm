@@ -22,9 +22,7 @@ use iced::widget::{
     Column, Row, Stack, button, center, column, container, image, mouse_area, opaque, pin, rich_text, row, rule,
     scrollable, space, stack, svg, text, text_editor, text_input,
 };
-use iced::{
-    Alignment, Background, Border, Color, Element, Fill, Font, Length, Point, Shadow, Size, Theme, Vector, border, font,
-};
+use iced::{Alignment, Background, Border, Color, Element, Fill, Font, Length, Point, Size, Theme, border, font};
 use std::sync::Arc;
 
 pub const CODE_FONT: Font = if cfg!(windows) { Font::with_name("Consolas") } else { Font::MONOSPACE };
@@ -227,13 +225,16 @@ impl Editor {
         let current = self.current_match().map(|m| (m.start, m.end));
         let ctx = Ctx { editor: self, p, zoom: prefs.zoom, renders, matches, current };
         let document = self.document(&ctx, prefs);
-        let body: Element<EditorMsg> =
-            if self.outline { row![self.outline_view(&ctx), document].into() } else { document };
-        let mut main = column![self.menu_bar(p)];
-        if let Some(bar) = &self.find {
-            main = main.push(self.find_bar(bar, p));
-        }
-        let main = main.push(container(body).height(Fill)).push(self.status_bar(p, prefs));
+        // The outline and the find bar keep their places when hidden, so that
+        // the page's widgets (its scroll position) stay where they are.
+        let outline: Element<EditorMsg> = if self.outline { self.outline_view(&ctx) } else { space().into() };
+        let find: Element<EditorMsg> = match &self.find {
+            Some(bar) => self.find_bar(bar, p),
+            None => space().into(),
+        };
+        let body = row![outline, document];
+        let main = column![self.menu_bar(p), find, container(body).height(Fill), self.status_bar(p, prefs)];
+        let main = container(main).style(move |_| container::background(p.bg).color(p.text));
         let mut layers: Stack<EditorMsg> = stack![main].width(Fill).height(Fill);
         if let Some(i) = self.menu {
             layers = layers.push(self.menu_dropdown(i, p, prefs));
@@ -244,9 +245,8 @@ impl Editor {
         if let Some(dialog) = self.dialogs.front() {
             layers = layers.push(dialog_view(dialog, p));
         }
-        let root = container(layers).style(move |_| container::background(p.bg).color(p.text));
         // While a table is edited, where the pointer is (a cell's menu opens there).
-        let mut root = mouse_area(root);
+        let mut root = mouse_area(layers);
         if self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
             root = root.on_move(|p| EditorMsg::Table(TableMsg::PointerAt(p)));
         }
@@ -274,13 +274,9 @@ impl Editor {
         let height = TABLE_MENU.len() as f32 * ITEM + 8.0;
         let x = at.x.min(self.window_size.width - WIDTH - 12.0).max(0.0);
         let y = at.y.min(self.window_size.height - height - 4.0).max(0.0);
-        let menu = container(list).padding(4).style(move |_| {
-            container::background(p.bg).border(border::color(p.border).width(1).rounded(4)).shadow(Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
-                offset: Vector::new(0.0, 2.0),
-                blur_radius: 8.0,
-            })
-        });
+        let menu = container(list)
+            .padding(4)
+            .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(4)));
         stack![
             mouse_area(container(space()).width(Fill).height(Fill)).on_press(EditorMsg::Menu(None)),
             pin(menu).position(Point::new(x, y)),
@@ -349,11 +345,8 @@ impl Editor {
             );
         }
         let dropdown = container(list).padding(4).style(move |_| {
-            container::background(p.bg).border(border::color(p.border).width(1).rounded(4)).shadow(Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.25),
-                offset: Vector::new(0.0, 2.0),
-                blur_radius: 8.0,
-            })
+            // No shadow: the software renderer draws it over the box on partial redraws.
+            container::background(p.bg).border(border::color(p.muted).width(1).rounded(4))
         });
         stack![
             mouse_area(container(space()).width(Fill).height(Fill)).on_press(EditorMsg::Menu(None)),
@@ -667,17 +660,20 @@ impl Editor {
                     _ => Alignment::Start,
                 };
                 let header = r == 0;
-                line =
-                    line.push(container(content).width(cell_width).padding([4, 8]).align_x(align_x).style(move |_| {
-                        let bg = if selected {
-                            p.selection
-                        } else if header {
-                            p.header_bg
-                        } else {
-                            Color::TRANSPARENT
-                        };
-                        container::background(bg).border(border::color(p.border).width(1))
-                    }));
+                let mut cell_box = container(content).width(cell_width).padding([4, 8]).align_x(align_x);
+                if (r, c) == state.cell {
+                    cell_box = cell_box.id(self.id("active-cell"));
+                }
+                line = line.push(cell_box.style(move |_| {
+                    let bg = if selected {
+                        p.selection
+                    } else if header {
+                        p.header_bg
+                    } else {
+                        Color::TRANSPARENT
+                    };
+                    container::background(bg).border(border::color(p.border).width(1))
+                }));
             }
             grid = grid.push(line);
         }
@@ -1401,13 +1397,7 @@ fn dialog_view(dialog: &EditorDialog, p: Palette) -> Element<'_, EditorMsg> {
     let card = container(column![text(body).size(13).color(p.text), buttons].spacing(16))
         .padding(20)
         .max_width(560)
-        .style(move |_| {
-            container::background(p.bg).border(border::color(p.border).width(1).rounded(8)).shadow(Shadow {
-                color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
-                offset: Vector::new(0.0, 4.0),
-                blur_radius: 16.0,
-            })
-        });
+        .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(8)));
     opaque(center(card).style(|_| container::background(Color::from_rgba(0.0, 0.0, 0.0, 0.25))))
 }
 

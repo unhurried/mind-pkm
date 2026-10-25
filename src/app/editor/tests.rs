@@ -812,3 +812,89 @@ fn the_editors_of_deleted_pages_close() {
     let _ = app.close_deleted_editors(std::slice::from_ref(&page));
     assert!(app.editors.is_empty());
 }
+
+#[test]
+fn source_mode_keeps_the_cursor_and_the_history() {
+    let (mut app, _f, _, _) = app_with_page("# one\n\ntwo\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "tw");
+    press(&mut app, id, "/", Modifiers::CTRL);
+    let source = app.editors[&id].source.as_ref().expect("source mode");
+    assert_eq!(source.text(), "# one\n\ntwo\n");
+    assert_eq!(super::source_sel(source, &source.text()).head, 9);
+    typing(&mut app, id, "x");
+    assert_eq!(page_text(&app, id), "# one\n\ntwxo\n");
+    assert_eq!(app.editors[&id].counts().0.words, 2, "the status bar counts the page");
+    // Back: the cursor where it was in the source; the typing can be undone.
+    press(&mut app, id, "/", Modifiers::CTRL);
+    assert!(app.editors[&id].source.is_none());
+    assert_eq!(app.editors[&id].page.sel.head, 10);
+    press(&mut app, id, "z", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "# one\n\ntwo\n");
+}
+
+#[test]
+fn outline_zoom_theme_and_full_screen() {
+    let (mut app, _f, _, _) = app_with_page("# A\n\ntext\n\n## B\n\nmore\n");
+    let id = open_with_f1(&mut app);
+    // The outline lists the headings; a click goes to one.
+    press(&mut app, id, "1", Modifiers::CTRL | Modifiers::SHIFT);
+    assert!(app.editors[&id].outline);
+    assert_eq!(app.editors[&id].page.doc.headings.len(), 2);
+    editor(&mut app, id, EditorMsg::HeadingClicked(1));
+    assert_eq!(app.editors[&id].page.sel.head, page_text(&app, id).find("## B").unwrap());
+    // Zoom steps and back, remembered with the theme in the preferences.
+    press(&mut app, id, "=", Modifiers::CTRL | Modifiers::SHIFT);
+    assert!(app.editor_prefs.zoom > 1.0);
+    press(&mut app, id, "0", Modifiers::CTRL | Modifiers::SHIFT);
+    assert_eq!(app.editor_prefs.zoom, 1.0);
+    press(&mut app, id, "-", Modifiers::CTRL | Modifiers::SHIFT);
+    assert!(app.editor_prefs.zoom < 1.0);
+    editor(&mut app, id, EditorMsg::Command(super::EditorCommand::DarkTheme));
+    assert!(app.editor_prefs.dark);
+    assert_eq!(app.theme(id), iced::Theme::Dark);
+    // F11 full screen, Esc leaves it.
+    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F11), Modifiers::empty())));
+    assert!(app.editors[&id].fullscreen);
+    editor(&mut app, id, EditorMsg::Escape);
+    assert!(!app.editors[&id].fullscreen);
+}
+
+#[test]
+fn counting_a_selection() {
+    let (mut app, _f, _, _) = app_with_page("**two words** and 日本語\n");
+    let id = open_with_f1(&mut app);
+    let (all, none) = app.editors[&id].counts();
+    assert_eq!((all.words, all.characters, none), (6, 17, None));
+    select(&mut app, id, "two words");
+    let (_, selected) = app.editors[&id].counts();
+    let selected = selected.unwrap();
+    assert_eq!((selected.words, selected.characters), (2, 9));
+}
+
+#[test]
+fn deleting_three_blocks() {
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n\nfour\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    // From the text editor's last line to the next block; then the window's keys.
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::ArrowDown), Modifiers::SHIFT)));
+    assert_eq!(app.editors[&id].page.blocks, Some((0, 2)));
+    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::Delete), Modifiers::empty())));
+    assert_eq!(page_text(&app, id), "four\n");
+    press(&mut app, id, "z", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "one\n\ntwo\n\nthree\n\nfour\n");
+}
+
+#[test]
+fn a_match_in_a_table_is_selected_in_its_cell() {
+    let (mut app, _f, _, _) = app_with_page("x\n\n| a | value |\n| --- | --- |\n| 1 | 2 |\n");
+    let id = open_with_f1(&mut app);
+    press(&mut app, id, "f", Modifiers::CTRL);
+    find(&mut app, id, super::FindMsg::Query("lu".into()));
+    find(&mut app, id, super::FindMsg::Next);
+    assert_eq!(cell(&app, id), (0, 1));
+    assert_eq!(app.editors[&id].page.selected_source(), "lu");
+    assert_eq!(app.editors[&id].find_status(), "1 of 1");
+}

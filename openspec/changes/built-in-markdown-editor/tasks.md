@@ -38,33 +38,33 @@
 
 ## 7. Editing features
 
-- [ ] 7.1 Paragraph and format shortcuts, clear formatting, auto-pair (Edit menu toggle, remembered), selection helpers, task box clicks, Ctrl+click links (pages in the editor, anchors, files, URLs); verify with editor app tests
-- [ ] 7.2 Multi-block selection (Shift+arrows at edges, Shift+click, second Ctrl+A) with copy/cut/delete/typing; verify with editor app tests
-- [ ] 7.3 Find/replace bar (Ctrl+F, Ctrl+H, F3, Shift+F3, Esc, match case, Replace All as one change) with highlighted matches; verify with editor app tests
-- [ ] 7.4 Source mode (Ctrl+/) keeping the cursor and history; outline sidebar (Ctrl+Shift+1); full screen (F11); zoom (Ctrl+Shift+=/-/0, remembered); light/dark theme (remembered); status bar counts; verify with editor app tests and under Xvfb
+- [x] 7.1 Paragraph and format shortcuts, clear formatting, auto-pair (Edit menu toggle, remembered), selection helpers, task box clicks, Ctrl+click links (pages in the editor, anchors, files, URLs); verify with editor app tests
+- [x] 7.2 Multi-block selection (Shift+arrows at edges, Shift+click, second Ctrl+A) with copy/cut/delete/typing; verify with editor app tests
+- [x] 7.3 Find/replace bar (Ctrl+F, Ctrl+H, F3, Shift+F3, Esc, match case, Replace All as one change) with highlighted matches; verify with editor app tests
+- [x] 7.4 Source mode (Ctrl+/) keeping the cursor and history; outline sidebar (Ctrl+Shift+1); full screen (F11); zoom (Ctrl+Shift+=/-/0, remembered); light/dark theme (remembered); status bar counts; verify with editor app tests and under Xvfb
 
 ## 8. Tables in the editor
 
-- [ ] 8.1 Grid editing of the active table: cell editor with `<br>`/`\|` conversion, Tab/Shift+Tab/Enter navigation with full selection, Ctrl+Enter, Ctrl+Shift+Backspace, Alt+arrows, Ctrl+L/Ctrl+E; verify with editor app tests
-- [ ] 8.2 Table menu, right-click menu, toolbar (alignment, resize, delete table), cell range selection by drag and Shift+arrows, Delete on ranges; verify with editor app tests and under Xvfb
+- [x] 8.1 Grid editing of the active table: cell editor with `<br>`/`\|` conversion, Tab/Shift+Tab/Enter navigation with full selection, Ctrl+Enter, Ctrl+Shift+Backspace, Alt+arrows, Ctrl+L/Ctrl+E; verify with editor app tests
+- [x] 8.2 Table menu, right-click menu, toolbar (alignment, resize, delete table), cell range selection by drag and Shift+arrows, Delete on ranges; verify with editor app tests and under Xvfb
 
 ## 9. Clipboard and images
 
-- [ ] 9.1 Clipboard through `arboard` behind an injectable trait: copy as HTML + Markdown, Copy as Markdown, Paste as Plain Text, Smart Paste with `htmd`, own copies pasted verbatim, tables as TSV/HTML; verify with editor app tests using a fake clipboard
-- [ ] 9.2 Image insertion: drag and drop (several files), Format → Image dialog, pasted image data (PNG) and files, copying into the image folder with free names, settings and front matter options, path writing (`./`, escaping); verify with unit tests and editor app tests in a temporary directory; README image section
+- [x] 9.1 Clipboard through `arboard` behind an injectable trait: copy as HTML + Markdown, Copy as Markdown, Paste as Plain Text, Smart Paste with `htmd`, own copies pasted verbatim, tables as TSV/HTML; verify with editor app tests using a fake clipboard
+- [x] 9.2 Image insertion: drag and drop (several files), Format → Image dialog, pasted image data (PNG) and files, copying into the image folder with free names, settings and front matter options, path writing (`./`, escaping); verify with unit tests and editor app tests in a temporary directory; README image section
 
 ## 10. Export
 
-- [ ] 10.1 HTML export (style sheet or `export.css`, inline SVG math/diagrams, image paths relative to the output) and PDF export through Edge/Chrome headless with `CREATE_NO_WINDOW`, `PDF export needs Microsoft Edge or Google Chrome.` when missing; verify HTML output in unit tests and a PDF exported under Linux with Chromium; README export section
+- [x] 10.1 HTML export (style sheet or `export.css`, inline SVG math/diagrams, image paths relative to the output) and PDF export through Edge/Chrome headless with `CREATE_NO_WINDOW`, `PDF export needs Microsoft Edge or Google Chrome.` when missing; verify HTML output in unit tests and a PDF exported under Linux with Chromium; README export section
 
 ## 11. Open pages and the PKM commands
 
-- [ ] 11.1 Rename (F2, page and directory), Add Assets and Delete (F11) save affected dirty editors first, then retarget/reload/close them; reload or ask on external changes (focus and tick); verify with app tests for each scenario; README notes
+- [x] 11.1 Rename (F2, page and directory), Add Assets and Delete (F11) save affected dirty editors first, then retarget/reload/close them; reload or ask on external changes (focus and tick); verify with app tests for each scenario; README notes
 
 ## 12. Integration
 
-- [ ] 12.1 README editor section and CLAUDE.md structure/capabilities updated; verify `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `openspec validate --all --strict` pass
-- [ ] 12.2 Run the app under Xvfb: open a page from the map with F1, edit each element type, tables, images, find, source mode, dark theme, export; look at screenshots and fix what looks wrong
+- [x] 12.1 README editor section and CLAUDE.md structure/capabilities updated; verify `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `openspec validate --all --strict` pass
+- [x] 12.2 Run the app under Xvfb: open a page from the map with F1, edit each element type, tables, images, find, source mode, dark theme, export; look at screenshots and fix what looks wrong
 
 ## Workflow follow-up
 

@@ -273,7 +273,8 @@ impl Editor {
                 self.page.text[..self.page.sel.head.min(self.page.text.len())].to_string(),
                 crate::markdown::BlockKind::Paragraph,
             ),
-            (None, Some(a)) if a.table.is_none() => {
+            (None, Some(a)) if a.table.is_some() => return scroll::reveal_box(self.id("active-cell"), self.id("doc")),
+            (None, Some(a)) => {
                 let text = &self.page.text[a.region.clone()];
                 let at = self.page.sel.head.clamp(a.region.start, a.region.end) - a.region.start;
                 (text[..at].to_string(), a.kind.clone())

@@ -226,16 +226,19 @@ impl Page {
                     let cell = (cell.0.min(t.rows.len() - 1), cell.1.min(t.columns() - 1));
                     let text = table::cell_to_text(&t.rows[cell.0][cell.1]);
                     active.content = Content::with_text(&text);
-                    // The cursor where the cell's text was clicked.
+                    // The cursor (a selection within the cell) where it is in the source.
                     let start = table::cell_offset(source, cell);
-                    if let Some(before) = source.get(start..head - region.start) {
-                        let at = table::cell_to_text(before).len().min(text.len());
-                        if text.is_char_boundary(at) {
-                            move_content(&mut active.content, &text, Sel::caret(at));
-                        }
+                    let local = |o: usize| {
+                        let before = source.get(start..o.checked_sub(region.start)?)?;
+                        Some(table::cell_to_text(before).len().min(text.len())).filter(|&i| text.is_char_boundary(i))
+                    };
+                    let same_cell = table::cell_at_offset(source, sel.anchor.saturating_sub(region.start)) == cell;
+                    let anchor = if same_cell { local(sel.anchor) } else { None };
+                    if let Some(h) = local(head) {
+                        move_content(&mut active.content, &text, Sel { anchor: anchor.unwrap_or(h), head: h });
                     }
                     active.table = Some(TableState { table: t, cell, range: None });
-                    self.sel = Sel::caret(head);
+                    self.sel = if anchor.is_some() { sel } else { Sel::caret(head) };
                 } else {
                     let within = |o: usize| o.clamp(region.start, region.end) - region.start;
                     let local = Sel { anchor: within(sel.anchor), head: within(sel.head) };
