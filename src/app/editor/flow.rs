@@ -424,20 +424,6 @@ impl Flow {
         }
         out
     }
-
-    /// The x of `d` on line `line`.
-    fn caret_on(&self, items: &[Measured], line: usize, d: usize) -> f32 {
-        let l = &self.lines[line];
-        for f in &l.frags {
-            if d < f.shown.start {
-                return f.x;
-            }
-            if d <= f.shown.end {
-                return f.x + offset_in(items, f, d);
-            }
-        }
-        l.width
-    }
 }
 
 /// The height above and below the baseline of a measured piece.
