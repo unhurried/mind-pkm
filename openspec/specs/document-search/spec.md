@@ -49,11 +49,15 @@ Each result SHALL show the file's path relative to the document directory, its l
 - **THEN** the snippet shows that text with `tokyo` highlighted
 
 ### Requirement: Opening a result
-Double-click, or Enter on the selected result, SHALL open the file with its default application, and SHALL report a file that no longer exists instead.
+Double-click, or Enter on the selected result, SHALL open a Markdown (`.md`) file in the built-in editor (with the default application when Use Built-in Editor is unchecked) and any other file with its default application, and SHALL report a file that no longer exists instead.
 
 #### Scenario: Deleted since indexing
 - **WHEN** a result's file was deleted and the result is opened
 - **THEN** `file no longer exists: <path>` is shown in the panel
+
+#### Scenario: Page result
+- **WHEN** a result that is a page is double-clicked
+- **THEN** the page opens in an editor window
 
 ### Requirement: Jumping to the node
 Ctrl+Enter or Select Node SHALL select and center the node linking the result's file, else the node linking its nearest containing directory, else - for a file under `<page>.assets/` - the page's node, unfolding its ancestors and switching to the show-all filter when the current filter hides it.

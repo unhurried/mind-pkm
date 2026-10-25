@@ -104,11 +104,15 @@ Every change to the map, including changes made by PKM commands and the backgrou
 - **THEN** the map returns to its state before the refresh
 
 ### Requirement: Following links
-Clicking a node's link marker SHALL open a linked file or directory with its default application, open a URL in the default browser, or, for a node link, select and center the linked node (unfolding its ancestors).
+Clicking a node's link marker SHALL open a linked Markdown (`.md`) file in the built-in editor (with the default application when Use Built-in Editor is unchecked), open another linked file or directory with its default application, open a URL in the default browser, or, for a node link, select and center the linked node (unfolding its ancestors).
 
 #### Scenario: Node link
 - **WHEN** the link marker of a node linking `#ID_123` is clicked
 - **THEN** the node with ID `ID_123` is selected and centered
+
+#### Scenario: Page link
+- **WHEN** the link marker of a page node is clicked
+- **THEN** the page opens in an editor window
 
 ### Requirement: Drag to pan
 Pressing the left mouse button on an empty part of the map and moving the pointer SHALL scroll the map with the pointer, both horizontally and vertically, until the button is released or the pointer leaves the window. A press on a node, a link marker, a fold marker, a branch point or a scrollbar SHALL keep its own behavior and SHALL NOT start a drag; the drag SHALL NOT change the selection or the map.

@@ -36,7 +36,7 @@ The mouse pointer SHALL be the normal arrow everywhere in every window of the ap
 - **THEN** it stays the normal arrow
 
 ### Requirement: Per-user settings
-The application SHALL keep its settings in `%APPDATA%\mind-pkm\`: the last opened map, the window's size, position and maximized state, how each map was last shown (zoom level, scroll position, selected nodes; the map file itself is not changed for it), an optional `template.md` that replaces the built-in New Page template, whether pages open in the built-in editor, the editor windows' size, zoom level and theme, whether the editor pairs brackets, the image insertion options, and an optional `export.css` for page export. A settings file that is not there SHALL be read from `%APPDATA%\freeplane-pkm\`, where versions under the former name kept it.
+The application SHALL keep its settings in `%APPDATA%\mind-pkm\`: the last opened map, the window's size, position and maximized state, how each map was last shown (zoom, scroll position, selection; not in the map file), the page editor's settings, and optional `template.md` (the New Page template) and `export.css` (the export style sheet) files. A settings file that is not there SHALL be read from `%APPDATA%\freeplane-pkm\`, where versions under the former name kept it.
 
 #### Scenario: Custom page template
 - **WHEN** `%APPDATA%\mind-pkm\template.md` exists
