@@ -10,7 +10,7 @@
 //! formatting) return a new text and selection, after which the region is
 //! derived anew.
 
-use crate::markdown::edit::{self, Edited, Pending, Sel};
+use crate::markdown::edit::{self, CodeBody, Edited, Pending, Sel};
 use crate::markdown::history::{History, Snapshot};
 use crate::markdown::live::{self, Display};
 use crate::markdown::page::PageText;
@@ -51,11 +51,13 @@ pub struct Active {
     pub table: Option<TableState>,
     /// For a block or table cell edited in its rendered form.
     pub live: Option<Live>,
+    /// For a code block, edited as its code (`content` holds the code, not the region's source).
+    pub code: Option<CodeBody>,
 }
 
 impl Active {
     fn new(region: Range<usize>, text: &str) -> Active {
-        Active { region, content: Content::with_text(text), kind: own_kind(text), table: None, live: None }
+        Active { region, content: Content::with_text(text), kind: own_kind(text), table: None, live: None, code: None }
     }
 }
 
@@ -311,6 +313,12 @@ impl Page {
                 self.refresh_live();
                 return;
             }
+            if let Some(code) = &a.code {
+                let local = Sel { anchor: code.to_body(sel.anchor), head: code.to_body(sel.head) };
+                move_content(&mut a.content, code.text(), local);
+                self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
+                return;
+            }
             let text = &self.text[a.region.clone()];
             let local = Sel { anchor: sel.anchor - a.region.start, head: sel.head - a.region.start };
             move_content(&mut a.content, text, local);
@@ -352,6 +360,14 @@ impl Page {
                     self.sel = Sel { anchor: within(sel.anchor), head: within(sel.head) };
                     self.refresh_live();
                     return;
+                } else if let Some((b, code)) = block.and_then(|b| Some((b, CodeBody::of(&self.text, &self.doc, b)?))) {
+                    // A code block: its code, without the fences.
+                    let local = Sel { anchor: code.to_body(sel.anchor), head: code.to_body(sel.head) };
+                    active.kind = self.doc.blocks[b].kind.clone();
+                    active.content = Content::with_text(code.text());
+                    move_content(&mut active.content, code.text(), local);
+                    self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
+                    active.code = Some(code);
                 } else {
                     let within = |o: usize| o.clamp(region.start, region.end) - region.start;
                     let local = Sel { anchor: within(sel.anchor), head: within(sel.head) };
@@ -386,6 +402,7 @@ impl Page {
             kind: BlockKind::Paragraph,
             table: None,
             live: Some(Live { display: Display::empty(at), sel: Sel::default() }),
+            code: None,
         });
         self.pending = Some(pending);
         self.sel = Sel::caret(at);
@@ -474,6 +491,12 @@ impl Page {
         let Some(a) = &self.active else { return true };
         match &a.live {
             Some(l) => l.sel.is_empty() && if right { l.sel.head >= l.display.text.len() } else { l.sel.head == 0 },
+            None if a.code.is_some() => {
+                let c = a.content.cursor();
+                let text = a.content.text();
+                let at = offset_of(&text, c.position);
+                c.selection.is_none() && if right { at >= text.len() } else { at == 0 }
+            }
             None => {
                 self.sel.is_empty()
                     && if right { self.sel.head >= a.region.end } else { self.sel.head <= a.region.start }
@@ -670,6 +693,10 @@ impl Page {
             self.live_action(action);
             return;
         }
+        if self.active.as_ref().is_some_and(|a| a.code.is_some()) {
+            self.code_action(action);
+            return;
+        }
         let Some(active) = &mut self.active else { return };
         let is_edit = action.is_edit();
         let typed = match &action {
@@ -703,6 +730,83 @@ impl Page {
         self.sel = Sel { anchor: local.anchor + active.region.start, head: local.head + active.region.start };
         self.reparse();
         self.history.record(before, typed.map(|c| (c, self.sel.head.saturating_sub(c.len_utf8()))), Instant::now());
+    }
+
+    /// An action of the text editor holding the code of the code block being edited.
+    fn code_action(&mut self, action: Action) {
+        let Some(active) = &mut self.active else { return };
+        let Some(code) = &active.code else { return };
+        let is_edit = action.is_edit();
+        let typed = match &action {
+            Action::Edit(Edit::Insert(c)) => Some(*c),
+            _ => None,
+        };
+        let before = Snapshot { text: self.text.clone(), sel: self.sel };
+        active.content.perform(action);
+        let new = active.content.text();
+        let local = content_sel(&active.content, &new);
+        if !is_edit {
+            self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
+            self.history.break_typing();
+            return;
+        }
+        let (text, map) = code.replace(&self.text, &new);
+        let start = active.region.start;
+        self.sel = Sel { anchor: map(local.anchor), head: map(local.head) };
+        self.text = text;
+        self.tentative = None;
+        self.reparse();
+        // The same block with that code, unless the edit made it something else (a closing fence typed in it).
+        let block = self.doc.blocks.iter().position(|b| b.range.start == start);
+        let code = block.and_then(|b| CodeBody::of(&self.text, &self.doc, b)).filter(|c| c.text() == new);
+        match (code, edit::region_at(&self.doc, start), &mut self.active) {
+            (Some(code), Some(region), Some(active)) => {
+                active.region = region;
+                active.code = Some(code);
+            }
+            _ => {
+                self.active = None;
+                self.place(self.sel);
+            }
+        }
+        self.history.record(before, typed.map(|c| (c, self.sel.head.saturating_sub(c.len_utf8()))), Instant::now());
+    }
+
+    /// Changes the language (the info string) of the code block being edited.
+    pub fn set_code_language(&mut self, language: &str) {
+        let Some(code) = self.active.as_ref().and_then(|a| a.code.as_ref()) else { return };
+        let language: String = language.chars().filter(|c| *c != '`' && *c != '\n' && *c != '\r').collect();
+        let range = code.info_range.clone();
+        let text = edit::splice(&self.text, range.clone(), language.trim());
+        let shift = |o: usize| if o >= range.end { o + language.trim().len() - range.len() } else { o };
+        let sel = Sel { anchor: shift(self.sel.anchor), head: shift(self.sel.head) };
+        self.set_text(text, sel);
+    }
+
+    /// The code block being edited, holding no code, replaced by a new paragraph.
+    pub fn remove_empty_code(&mut self) {
+        let Some(a) = &self.active else { return };
+        if !a.code.as_ref().is_some_and(|c| c.text().is_empty()) {
+            return;
+        }
+        let start = edit::line_range(&self.text, a.region.start).start;
+        let removed = edit::splice(&self.text, start..a.region.end, "");
+        let (text, at) = edit::collapse_blank_lines(&removed, start);
+        let doc = Document::parse(&text);
+        let pending = edit::gap_pending(&text, &doc, at, None);
+        self.apply(Edited { sel: Sel::caret(at), text, pending: Some(pending) });
+    }
+
+    /// A new paragraph after the block being edited (shown as source or code).
+    pub fn new_paragraph_after(&mut self) {
+        let Some(a) = &self.active else { return };
+        if a.live.is_some() || a.table.is_some() {
+            return;
+        }
+        let at = a.region.end;
+        self.deactivate();
+        let pending = edit::gap_pending(&self.text, &self.doc, at, None);
+        self.start_pending(pending);
     }
 
     /// Changes the table being edited by `change`, as one undoable change;

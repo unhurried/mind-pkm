@@ -16,6 +16,7 @@ use super::{DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg,
 use crate::app::arrow_cursor::arrow_cursor;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Link, Node, SourceMap, Style, TableNode};
+use crate::markdown::edit::CodeBody;
 use crate::markdown::live::{Display, Look, Object};
 use crate::markdown::parse::ContainerKind;
 use crate::markdown::{BlockKind, ListItem, images, table};
@@ -595,7 +596,7 @@ impl Editor {
     ) -> Element<'a, EditorMsg> {
         let p = ctx.p;
         let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: true, table: false };
-        let settings = highlight::Settings { dark: prefs.dark, page_start: true, find: self.find_query() };
+        let settings = highlight::Settings { dark: prefs.dark, page_start: true, find: self.find_query(), code: None };
         let editor = text_editor(source)
             .id(self.id("active"))
             .on_action(EditorMsg::Action)
@@ -625,11 +626,18 @@ impl Editor {
         if let Some(live) = &a.live {
             return container(self.live_view(a, live, ctx, prefs, width)).id(self.id("active-box")).into();
         }
+        if let Some(code) = &a.code {
+            return self.code_editor(a, code, ctx, prefs);
+        }
         let (size, font, padding) = region_text_style(&a.kind, ctx.zoom);
         let code = a.kind.is_code();
         let bind = BindContext { auto_pair: prefs.auto_pair, code, source_mode: false, table: false };
-        let settings =
-            highlight::Settings { dark: prefs.dark, page_start: a.region.start == 0, find: self.find_query() };
+        let settings = highlight::Settings {
+            dark: prefs.dark,
+            page_start: a.region.start == 0,
+            find: self.find_query(),
+            code: None,
+        };
         let background = if code { p.code_bg } else { Color::TRANSPARENT };
         let editor = text_editor(&a.content)
             .id(self.id("active"))
@@ -663,6 +671,56 @@ impl Editor {
             None => editor.into(),
         };
         container(shown).id(self.id("active-box")).into()
+    }
+
+    /// The code block with the cursor: its code in its box, without the
+    /// fences, and a field for its language.
+    fn code_editor<'a>(
+        &'a self,
+        a: &'a Active,
+        code: &'a CodeBody,
+        ctx: &Ctx<'a>,
+        prefs: &EditorPrefs,
+    ) -> Element<'a, EditorMsg> {
+        let p = ctx.p;
+        let bind = BindContext { auto_pair: prefs.auto_pair, code: true, source_mode: false, table: false };
+        let lang = match &a.kind {
+            BlockKind::Code { lang, .. } => lang.clone().unwrap_or_default(),
+            _ => String::new(),
+        };
+        let settings =
+            highlight::Settings { dark: prefs.dark, page_start: false, find: self.find_query(), code: Some(lang) };
+        let (size, font, padding) = code_text_style(ctx.zoom);
+        let editor = text_editor(&a.content)
+            .id(self.id("active"))
+            .on_action(EditorMsg::Action)
+            .key_binding(move |k| keys::binding(k, bind))
+            .highlight_with::<MarkdownHighlighter>(settings, highlight::format)
+            .size(size)
+            .line_height(LINE_HEIGHT)
+            .font(font)
+            .padding(0)
+            .wrapping(Wrapping::WordOrGlyph)
+            .style(move |_, _| editor_style(p, Color::TRANSPARENT));
+        let language = text_input("language", &code.info)
+            .on_input(EditorMsg::CodeLanguage)
+            .size(ctx.size(0.75))
+            .padding([1, 6])
+            .width(140)
+            .style(move |_: &Theme, _| text_input::Style {
+                background: Background::Color(Color::TRANSPARENT),
+                border: border::color(p.border).width(1).rounded(3),
+                icon: p.muted,
+                placeholder: p.muted,
+                value: p.text,
+                selection: p.selection,
+            });
+        container(column![editor, row![space().width(Fill), language]].spacing(4))
+            .id(self.id("active-box"))
+            .padding(padding)
+            .width(Fill)
+            .style(move |_| container::background(p.code_bg).border(border::rounded(4)))
+            .into()
     }
 
     /// The block with the cursor in its rendered form, around the editing widget.
@@ -1044,6 +1102,11 @@ pub fn region_text_style(kind: &BlockKind, zoom: f32) -> (f32, Font, f32) {
 }
 
 pub const TEXT_LINE_HEIGHT: f32 = LINE_HEIGHT;
+
+/// The size, font and padding of code in its box (as rendered).
+pub fn code_text_style(zoom: f32) -> (f32, Font, f32) {
+    (BODY_SIZE * zoom * 0.9, CODE_FONT, CODE_PADDING)
+}
 
 fn editor_style(p: Palette, background: Color) -> text_editor::Style {
     text_editor::Style {

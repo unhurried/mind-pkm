@@ -84,6 +84,27 @@ pub struct Settings {
     pub page_start: bool,
     /// The find bar's query and whether it matches case.
     pub find: Option<(String, bool)>,
+    /// The text is the code of a code block in this language (empty: none),
+    /// not Markdown.
+    pub code: Option<String>,
+}
+
+impl Settings {
+    /// The state the first line starts in: plain code of a language is the
+    /// inside of a fence that never closes.
+    fn start(&self) -> State {
+        match &self.code {
+            Some(lang) => State::Fence {
+                ch: '`',
+                len: usize::MAX,
+                code: syntax(lang).map(|s| {
+                    let highlighter = SyntectHighlighter::new(code_theme(self.dark));
+                    Box::new((ParseState::new(s), HighlightState::new(&highlighter, ScopeStack::new())))
+                }),
+            },
+            None => State::Normal,
+        }
+    }
 }
 
 pub fn format(h: &Highlight, theme: &Theme) -> Format<Font> {
@@ -135,11 +156,12 @@ impl highlighter::Highlighter for MarkdownHighlighter {
     type Iterator<'a> = std::vec::IntoIter<(Range<usize>, Highlight)>;
 
     fn new(settings: &Settings) -> Self {
-        MarkdownHighlighter { settings: settings.clone(), states: vec![State::Normal], current: 0 }
+        MarkdownHighlighter { settings: settings.clone(), states: vec![settings.start()], current: 0 }
     }
 
     fn update(&mut self, new_settings: &Settings) {
         self.settings = new_settings.clone();
+        self.states = vec![self.settings.start()];
         self.change_line(0);
     }
 
@@ -494,7 +516,7 @@ mod tests {
     use iced::advanced::text::highlighter::Highlighter as _;
 
     fn spans(lines: &[&str]) -> Vec<Vec<(String, Highlight)>> {
-        let settings = Settings { dark: false, page_start: true, find: None };
+        let settings = Settings { dark: false, page_start: true, find: None, code: None };
         let mut h = MarkdownHighlighter::new(&settings);
         lines.iter().map(|l| h.highlight_line(l).map(|(r, hl)| (l[r].to_string(), hl)).collect()).collect()
     }
@@ -539,6 +561,25 @@ mod tests {
     }
 
     #[test]
+    fn the_code_of_a_code_block_alone() {
+        let code = |lang: &str, lines: &[&str]| {
+            let settings = Settings { dark: false, page_start: true, find: None, code: Some(lang.into()) };
+            let mut h = MarkdownHighlighter::new(&settings);
+            lines
+                .iter()
+                .map(|l| h.highlight_line(l).map(|(r, hl)| (l[r].to_string(), hl)).collect())
+                .collect::<Vec<Vec<(String, Highlight)>>>()
+        };
+        // No fence opens it, and a line of backticks doesn't close it.
+        let s = code("rust", &["fn main() {}", "```", "# not a heading"]);
+        assert!(s[0].iter().any(|(t, h)| t == "fn" && matches!(h, Highlight::Syntax(_))));
+        assert!(!s[2].iter().any(|(_, h)| *h == Highlight::Heading));
+        let s = code("", &["# plain", "**x**"]);
+        assert!(has(&s[0], "# plain", Highlight::CodeText));
+        assert!(has(&s[1], "**x**", Highlight::CodeText));
+    }
+
+    #[test]
     fn math_and_front_matter_blocks() {
         let s = spans(&["---", "title: x", "---", "$$", "x^2", "$$"]);
         assert!(has(&s[1], "title: x", Highlight::FrontMatter));
@@ -547,7 +588,7 @@ mod tests {
 
     #[test]
     fn changing_a_line_restarts_from_its_state() {
-        let settings = Settings { dark: false, page_start: false, find: Some(("an".into(), false)) };
+        let settings = Settings { dark: false, page_start: false, find: Some(("an".into(), false)), code: None };
         let mut h = MarkdownHighlighter::new(&settings);
         let _ = h.highlight_line("```").count();
         let _ = h.highlight_line("code").count();

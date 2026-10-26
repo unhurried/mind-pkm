@@ -108,6 +108,8 @@ pub enum EditorMsg {
     TextPressed,
     /// A press on a rendered block outside its text.
     BlockPressed(usize),
+    /// The language field of the code block being edited changed.
+    CodeLanguage(String),
     /// A press on a cell of the table being edited.
     CellPressed(usize, usize),
     /// A press on a source offset of a rendered block (a link, a task box...).
@@ -287,6 +289,19 @@ impl Editor {
                 crate::markdown::BlockKind::Paragraph,
             ),
             (None, Some(a)) if a.table.is_some() => return scroll::reveal_box(self.id("active-cell"), self.id("doc")),
+            (None, Some(a)) if a.code.is_some() => {
+                let code = a.code.as_ref().map_or("", |c| c.text());
+                let at = a.code.as_ref().map_or(0, |c| c.to_body(self.page.sel.head)).min(code.len());
+                let (size, font, padding) = view::code_text_style(prefs.zoom);
+                let caret = scroll::CaretText {
+                    before: code[..at].to_string(),
+                    size,
+                    font,
+                    line_height: view::TEXT_LINE_HEIGHT,
+                    padding,
+                };
+                return scroll::reveal_caret(self.id("active-box"), self.id("doc"), caret);
+            }
             (None, Some(a)) => {
                 let text = &self.page.text[a.region.clone()];
                 let at = self.page.sel.head.clamp(a.region.start, a.region.end) - a.region.start;
@@ -347,6 +362,10 @@ impl Editor {
             }
             EditorMsg::TextPressed => self.text_pressed(),
             EditorMsg::BlockPressed(block) => self.block_pressed(block),
+            EditorMsg::CodeLanguage(language) => {
+                self.page.set_code_language(&language);
+                Task::none()
+            }
             EditorMsg::CellPressed(r, c) => self.cell_pressed((r, c)),
             EditorMsg::PressedAt(offset) => {
                 self.menu = None;
@@ -578,7 +597,15 @@ impl Editor {
                     }
                     return self.focus();
                 }
-                if !sel.is_empty() {
+                let code = self.page.active.as_ref().and_then(|a| a.code.as_ref());
+                if let Some(code) = code.filter(|c| sel.is_empty() && c.to_body(sel.head) == 0) {
+                    // At the start of the code: an empty block goes, else to the block before.
+                    if code.text().is_empty() {
+                        self.page.remove_empty_code();
+                    } else if let Some(e) = edit::backspace_nested(&text, doc, region.clone(), region.start) {
+                        self.page.apply(e);
+                    }
+                } else if !sel.is_empty() {
                     self.page.perform(Action::Edit(Edit::Backspace));
                 } else if let Some(e) = prefs.auto_pair.then(|| format::pair_backspace(&text, sel.head)).flatten() {
                     self.page.apply(e);
@@ -630,8 +657,11 @@ impl Editor {
         let after = self.page.cursor_token();
         if self.page.pending.is_some() || before == after {
             let column = self.page.column();
-            if let Some(b) = self.page.neighbor(down) {
-                self.page.enter_block(b, down, Some(column));
+            match self.page.neighbor(down) {
+                Some(b) => self.page.enter_block(b, down, Some(column)),
+                // Below the last block, when it is code: a new paragraph.
+                None if down && self.page.pending.is_none() => self.page.new_paragraph_after(),
+                None => {}
             }
         }
         self.focus()
@@ -661,8 +691,10 @@ impl Editor {
             return Task::none();
         }
         if self.page.at_edge(right) || self.page.pending.is_some() {
-            if let Some(b) = self.page.neighbor(right) {
-                self.page.enter_block(b, right, None);
+            match self.page.neighbor(right) {
+                Some(b) => self.page.enter_block(b, right, None),
+                None if right && self.page.pending.is_none() => self.page.new_paragraph_after(),
+                None => {}
             }
         } else {
             self.page.perform(Action::Move(if right { Motion::Right } else { Motion::Left }));

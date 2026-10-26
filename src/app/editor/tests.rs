@@ -1192,3 +1192,69 @@ fn paragraph_shortcuts_inside_a_quote() {
     editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
     assert_eq!(page_text(&app, id), "> ## Plan\n>\n> item\n");
 }
+
+/// The text the text editor of the block being edited holds.
+fn editor_text(app: &App, id: window::Id) -> String {
+    app.editors[&id].page.active.as_ref().map(|a| a.content.text()).unwrap_or_default()
+}
+
+#[test]
+fn code_blocks_are_edited_without_their_fences() {
+    let (mut app, _f, _, _) = app_with_page("> ```rust\n> let x = 1;\n> ```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "let x = 1;");
+    assert_eq!(editor_text(&app, id), "let x = 1;");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    typing(&mut app, id, "x");
+    assert_eq!(page_text(&app, id), "> ```rust\n> let x = 1;\n> x\n> ```\n");
+    assert_eq!(editor_text(&app, id), "let x = 1;\nx");
+    // Its language.
+    editor(&mut app, id, EditorMsg::CodeLanguage("python".into()));
+    assert_eq!(page_text(&app, id), "> ```python\n> let x = 1;\n> x\n> ```\n");
+    assert_eq!(app.editors[&id].page.sel.head, page_text(&app, id).find("\n> ```\n").unwrap());
+    // Undo takes back the language, the typing and the line break.
+    for _ in 0..3 {
+        editor(&mut app, id, EditorMsg::Command(super::EditorCommand::Undo));
+    }
+    assert_eq!(page_text(&app, id), "> ```rust\n> let x = 1;\n> ```\n");
+    assert_eq!(editor_text(&app, id), "let x = 1;");
+}
+
+#[test]
+fn leaving_and_removing_code_blocks() {
+    use crate::markdown::BlockKind;
+    // Backspace at the start of the code: to the end of the block before.
+    let (mut app, _f, _, _) = app_with_page("a\n\n```\ncode\n```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "```\n");
+    assert_eq!(editor_text(&app, id), "code");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "a\n\n```\ncode\n```\n");
+    assert_eq!(app.editors[&id].page.sel.head, 1);
+    // Down at the last line of the code ending the page: a new paragraph after it.
+    click_after(&mut app, id, "cod");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Down));
+    assert!(app.editors[&id].page.pending.is_some());
+    typing(&mut app, id, "z");
+    assert_eq!(page_text(&app, id), "a\n\n```\ncode\n```\n\nz\n");
+    // Backspace in an empty code block: an empty paragraph in its place.
+    let (mut app, _f, _, _) = app_with_page("a\n\n```\n```\n\nb\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "a\n\n```");
+    assert!(matches!(active_kind(&app, id), BlockKind::Code { .. }));
+    assert_eq!(editor_text(&app, id), "");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert!(app.editors[&id].page.pending.is_some());
+    typing(&mut app, id, "p");
+    assert_eq!(page_text(&app, id), "a\n\np\n\nb\n");
+}
+
+#[test]
+fn code_typed_into_an_empty_code_block() {
+    let (mut app, _f, _, _) = app_with_page("```js\n```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "```js");
+    typing(&mut app, id, "x;");
+    assert_eq!(page_text(&app, id), "```js\nx;\n```\n");
+    assert_eq!(editor_text(&app, id), "x;");
+}

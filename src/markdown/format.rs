@@ -456,8 +456,9 @@ pub fn auto_pair(text: &str, sel: Sel, c: char, in_code: bool) -> Option<Edited>
     let next = text[at..].chars().next();
     let prev = text[..at].chars().next_back();
     // A closing character typed before the same one steps over it.
-    let is_closing = PAIRS.iter().any(|(_, cl)| *cl == c);
-    if is_closing && next == Some(c) && pairs_here(c) {
+    // (In code, the closing character of a pair code pairs.)
+    let opener = PAIRS.iter().find(|(_, cl)| *cl == c).map(|(o, _)| *o);
+    if opener.is_some_and(pairs_here) && next == Some(c) {
         return Some(Edited { text: text.to_string(), sel: Sel::caret(at + c.len_utf8()), pending: None });
     }
     let close = closing(c).filter(|_| pairs_here(c))?;
@@ -699,6 +700,7 @@ mod tests {
         // In code only some.
         assert_eq!(pair("‸", '`', true), None);
         assert_eq!(pair("‸", '[', true).as_deref(), Some("[‸]"));
+        assert_eq!(pair("f(x‸)", ')', true).as_deref(), Some("f(x)‸"));
         let (t, s) = parse("a(‸)b");
         assert_eq!(show(&pair_backspace(&t, s.head).unwrap()), "a‸b");
         assert!(pair_backspace("a(b", 2).is_none());

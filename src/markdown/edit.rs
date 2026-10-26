@@ -162,6 +162,8 @@ struct Inner {
     text: String,
     /// The containers, outermost first.
     kinds: Vec<ContainerKind>,
+    /// Only empty lines are blank (code), not those of spaces too.
+    exact: bool,
 }
 
 impl Inner {
@@ -183,6 +185,11 @@ impl Inner {
         };
         let span = start..line_range(text, c.range.end).end;
         let kinds: Vec<ContainerKind> = outer.iter().map(|&i| doc.containers[i].kind).collect();
+        Inner::new(text, span, kinds, false)
+    }
+
+    /// The lines `span` of the page without the prefixes of the containers `kinds`.
+    fn new(text: &str, span: Range<usize>, kinds: Vec<ContainerKind>, exact: bool) -> Inner {
         let mut lines = Vec::new();
         let mut inner = String::with_capacity(span.len());
         let mut pos = span.start;
@@ -195,7 +202,25 @@ impl Inner {
             lines.push((pos, prefix));
             pos += line.len() + 1;
         }
-        Inner { span, lines, text: inner, kinds }
+        Inner { span, lines, text: inner, kinds, exact }
+    }
+
+    /// The page offset of an offset in the lines.
+    fn to_page(&self, inner: usize) -> usize {
+        let mut at = 0;
+        for (k, &(start, prefix)) in self.lines.iter().enumerate() {
+            let end = self.lines.get(k + 1).map_or(self.span.end, |next| next.0 - 1);
+            let len = end - start - prefix;
+            if inner <= at + len || k + 1 == self.lines.len() {
+                return start + prefix + (inner - at).min(len);
+            }
+            at += len + 1;
+        }
+        self.span.start
+    }
+
+    fn blank(&self, line: &str) -> bool {
+        if self.exact { line.is_empty() } else { line.trim().is_empty() }
     }
 
     /// The offset in the lines of a page offset (one in a prefix: its line's content start).
@@ -241,12 +266,12 @@ impl Inner {
             let typed_into = open.is_some_and(|o| at <= o && o <= at + line.len());
             let prefix = match old_line {
                 // A blank line to type on gets a whole prefix, whatever it had.
-                _ if typed_into && line.trim().is_empty() => self.prefix(false),
+                _ if typed_into && self.blank(line) => self.prefix(false),
                 Some(k) => {
                     let (start, len) = self.lines[k];
                     page[start..start + len].to_string()
                 }
-                None => self.prefix(line.trim().is_empty()),
+                None => self.prefix(self.blank(line)),
             };
             out.push_str(&prefix);
             starts.push((at, out.len()));
@@ -450,6 +475,131 @@ pub fn gap_pending(text: &str, doc: &Document, at: usize, depth: Option<usize>) 
     }
     let ends_blank = text[at..].starts_with('\n') || at == text.len();
     Pending { at, prefix, suffix: inner.prefixed(&p.suffix, ends_blank), outer: inner.kinds }
+}
+
+/// The code of a code block as the editor shows it: its lines between the
+/// fences, without the prefixes of the containers around it and the
+/// indentation of its fence (an indented block's four spaces). Its fences
+/// are not shown; the info string is edited on its own.
+pub struct CodeBody {
+    lines: Inner,
+    /// A fenced block without a line between its fences: code typed into it
+    /// gets lines of its own, before the closing fence (or after the opening
+    /// one of an unclosed block).
+    empty_at: Option<(usize, bool)>,
+    /// The info string after the opening fence, and where it is.
+    pub info: String,
+    pub info_range: Range<usize>,
+}
+
+impl CodeBody {
+    /// The code of block `block`, a code block other than a diagram.
+    pub fn of(text: &str, doc: &Document, block: usize) -> Option<CodeBody> {
+        let b = doc.blocks.get(block)?;
+        let BlockKind::Code { fenced, .. } = b.kind else { return None };
+        if b.kind.is_mermaid() {
+            return None;
+        }
+        let mut kinds = doc.outer_kinds(block);
+        let first = line_range(text, b.range.start);
+        let last = line_range(text, b.range.end);
+        let line = &text[first.clone()];
+        let prefix = prefix_len(line, kinds.iter().copied());
+        if !fenced {
+            kinds.push(ContainerKind::Item { depth: 0, indent: 4 });
+            let lines = Inner::new(text, first.start..last.end, kinds, true);
+            return Some(CodeBody { lines, empty_at: None, info: String::new(), info_range: first.end..first.end });
+        }
+        let rest = &line[prefix..];
+        let indent = rest.len() - rest.trim_start_matches(' ').len();
+        let fence = &rest[indent..];
+        let ch = fence.chars().next()?;
+        let len = fence.len() - fence.trim_start_matches(ch).len();
+        let info_start = first.start + prefix + indent + len;
+        let info = text[info_start..first.end].trim();
+        let info_at = info_start + (text[info_start..first.end].len() - text[info_start..first.end].trim_start().len());
+        let info_range = if info.is_empty() { info_start..info_start } else { info_at..info_at + info.len() };
+        // The closing fence: the block's last line, when it is one.
+        let closed = last.start > first.start && {
+            let line = &text[last.clone()];
+            let t = line[prefix_len(line, kinds.iter().copied())..].trim();
+            t.len() >= len && t.chars().all(|c| c == ch)
+        };
+        let info = info.to_string();
+        if indent > 0 {
+            kinds.push(ContainerKind::Item { depth: 0, indent });
+        }
+        let (start, end) = (first.end + 1, if closed { last.start.saturating_sub(1) } else { last.end });
+        if start > end || first.end == text.len() {
+            let empty_at = if closed { (last.start, true) } else { (first.end, false) };
+            let lines = Inner::new(text, empty_at.0..empty_at.0, kinds, true);
+            return Some(CodeBody { lines, empty_at: Some(empty_at), info, info_range });
+        }
+        Some(CodeBody { lines: Inner::new(text, start..end, kinds, true), empty_at: None, info, info_range })
+    }
+
+    pub fn text(&self) -> &str {
+        &self.lines.text
+    }
+
+    /// The offset in the code of a page offset (on a fence: the code's start or end).
+    pub fn to_body(&self, offset: usize) -> usize {
+        if self.empty_at.is_some() {
+            return 0;
+        }
+        self.lines.to_inner(offset)
+    }
+
+    /// The page offset of an offset in the code.
+    pub fn to_page(&self, body: usize) -> usize {
+        match self.empty_at {
+            Some((at, _)) => at,
+            None => self.lines.to_page(body),
+        }
+    }
+
+    /// The page with the code replaced by `new`: lines it leaves as they were
+    /// keep their prefixes, the others get the containers' (and the fence's
+    /// indentation); and the page offset of each offset of `new`.
+    pub fn replace(&self, page: &str, new: &str) -> (String, Box<dyn Fn(usize) -> usize>) {
+        match self.empty_at {
+            Some(_) if new.is_empty() => {
+                let at = self.lines.span.start;
+                (page.to_string(), Box::new(move |_| at))
+            }
+            Some((at, before_closing)) => {
+                // New lines: before the closing fence, or after the opening one.
+                let mut out = page[..at].to_string();
+                if !before_closing {
+                    out.push('\n');
+                }
+                let mut starts = Vec::new();
+                let mut pos = 0;
+                for (k, line) in new.split('\n').enumerate() {
+                    if k > 0 {
+                        out.push('\n');
+                    }
+                    out.push_str(&self.lines.prefix(line.is_empty()));
+                    starts.push((pos, out.len()));
+                    out.push_str(line);
+                    pos += line.len() + 1;
+                }
+                if before_closing {
+                    out.push('\n');
+                }
+                out.push_str(&page[at..]);
+                let map = move |o: usize| {
+                    let k = starts.partition_point(|&(s, _)| s <= o).saturating_sub(1);
+                    starts[k].1 + (o - starts[k].0)
+                };
+                (out, Box::new(map))
+            }
+            None => {
+                let (out, map) = self.lines.put_back(page, new, None);
+                (out, Box::new(map))
+            }
+        }
+    }
 }
 
 /// The marker at the start of a block's first line.
@@ -1101,6 +1251,61 @@ mod tests {
         assert_eq!(gap(">\n> b", 1), "> x\n>\n> b");
         // Out of the quote: none.
         assert_eq!(gap("> a\n\nb", 4), "> a\n\nx\n\nb");
+    }
+
+    /// The code of the first code block of `text`, and the page after replacing it by `new`.
+    fn code(text: &str, new: &str) -> (String, String, String) {
+        let doc = Document::parse(text);
+        let b = doc.blocks.iter().position(|b| matches!(b.kind, BlockKind::Code { .. })).expect("a code block");
+        let body = CodeBody::of(text, &doc, b).expect("its code");
+        let (page, map) = body.replace(text, new);
+        let mut marked = page.clone();
+        marked.insert(map(new.len()), '‸');
+        (body.text().to_string(), body.info.clone(), marked)
+    }
+
+    #[test]
+    fn the_code_of_code_blocks() {
+        // Fenced: the lines between the fences, the info string apart.
+        assert_eq!(
+            code("a\n\n```rust\nlet x;\n```\n", "let x;\nlet y;"),
+            ("let x;".into(), "rust".into(), "a\n\n```rust\nlet x;\nlet y;‸\n```\n".into())
+        );
+        // In a quote: lines typed get its `>`, a blank one `>` alone.
+        assert_eq!(code("> ```\n> a\n> ```", "a\n\nb").2, "> ```\n> a\n>\n> b‸\n> ```");
+        // In a list item, under an indented fence.
+        assert_eq!(
+            code("- x\n\n  ```\n  a\n  ```", "a\nb"),
+            ("a".into(), "".into(), "- x\n\n  ```\n  a\n  b‸\n  ```".into())
+        );
+        // A line of spaces is code.
+        assert_eq!(code("> ```\n> a\n> ```", "a\n  ").2, "> ```\n> a\n>   ‸\n> ```");
+        // Without lines: new ones before the closing fence, or after an unclosed opening one.
+        assert_eq!(code("```\n```\n\nz", "x"), ("".into(), "".into(), "```\nx‸\n```\n\nz".into()));
+        assert_eq!(code("```js", "x\ny"), ("".into(), "js".into(), "```js\nx\ny‸".into()));
+        // Indented: its four spaces.
+        assert_eq!(code("    a\n    b", "a\nc"), ("a\nb".into(), "".into(), "    a\n    c‸".into()));
+        // An unclosed fence: up to its last line.
+        assert_eq!(code("```\na\nb", "a\nb!").2, "```\na\nb!‸");
+    }
+
+    #[test]
+    fn code_offsets_both_ways() {
+        let text = "> ```rust\n> one\n> two\n> ```";
+        let doc = Document::parse(text);
+        let body = CodeBody::of(text, &doc, 0).unwrap();
+        assert_eq!(body.text(), "one\ntwo");
+        let two = text.find("two").unwrap();
+        assert_eq!(body.to_body(two), 4);
+        assert_eq!(body.to_page(4), two);
+        assert_eq!(body.to_page(7), two + 3);
+        // On the fences: the code's start and end.
+        assert_eq!(body.to_body(0), 0);
+        assert_eq!(body.to_body(text.len()), 7);
+        assert_eq!(&text[body.info_range.clone()], "rust");
+        // Diagrams have none.
+        let doc = Document::parse("```mermaid\ngraph TD\n```");
+        assert!(CodeBody::of("```mermaid\ngraph TD\n```", &doc, 0).is_none());
     }
 
     #[test]
