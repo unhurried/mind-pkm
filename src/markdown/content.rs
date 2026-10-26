@@ -1368,8 +1368,8 @@ mod tests {
     #[test]
     fn nested_nodes() {
         let doc = Document::parse("> # H\n> - a\n>   - b\n> ```\n> code\n> ```\n");
-        // A block's events leave out its own start: these are the quote's children.
-        let children = nodes(&doc, doc.block_events(0));
+        let top = nodes(&doc, &doc.events);
+        let [Node::Quote(children)] = &top[..] else { panic!("{top:?}") };
         assert!(matches!(&children[0], Node::Heading(1, _)));
         let Node::List { items, .. } = &children[1] else { panic!() };
         assert!(matches!(&items[0].children[1], Node::List { .. }));

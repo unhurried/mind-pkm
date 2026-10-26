@@ -543,9 +543,11 @@ impl Editor {
         match bind {
             Bind::Enter => {
                 if pending {
-                    return Task::none();
+                    // An empty new paragraph in a quote or list item leaves it.
+                    self.page.leave_pending_container();
+                    return self.focus();
                 }
-                match edit::enter(&text, doc, region, sel) {
+                match edit::nested(&text, doc, region, sel, edit::enter) {
                     Some(e) => self.page.apply(e),
                     None => self.page.perform(Action::Edit(Edit::Enter)),
                 }
@@ -554,13 +556,14 @@ impl Editor {
                 if pending {
                     return Task::none();
                 }
-                match edit::shift_enter(&text, doc, region, sel) {
+                match edit::nested(&text, doc, region, sel, edit::shift_enter) {
                     Some(e) => self.page.apply(e),
                     None => self.page.perform(Action::Edit(Edit::Enter)),
                 }
             }
             Bind::Tab | Bind::ShiftTab => {
-                if let Some(e) = edit::indent(&text, doc, region, sel, bind == Bind::ShiftTab) {
+                let outdent = bind == Bind::ShiftTab;
+                if let Some(e) = edit::nested(&text, doc, region, sel, |t, d, r, s| edit::indent(t, d, r, s, outdent)) {
                     self.page.apply(e);
                 }
             }
@@ -579,7 +582,7 @@ impl Editor {
                     self.page.perform(Action::Edit(Edit::Backspace));
                 } else if let Some(e) = prefs.auto_pair.then(|| format::pair_backspace(&text, sel.head)).flatten() {
                     self.page.apply(e);
-                } else if let Some(e) = edit::backspace(&text, doc, region, sel.head) {
+                } else if let Some(e) = edit::backspace_nested(&text, doc, region, sel.head) {
                     self.page.apply(e);
                 } else {
                     self.page.perform(Action::Edit(Edit::Backspace));
@@ -594,7 +597,8 @@ impl Editor {
                     }
                     return self.focus();
                 }
-                match (sel.is_empty()).then(|| edit::delete(&text, doc, region, sel.head)).flatten() {
+                let delete = |t: &str, d: &crate::markdown::Document, r, s: Sel| edit::delete(t, d, r, s.head);
+                match (sel.is_empty()).then(|| edit::nested(&text, doc, region, sel, delete)).flatten() {
                     Some(e) => self.page.apply(e),
                     None => self.page.perform(Action::Edit(Edit::Delete)),
                 }
@@ -608,7 +612,7 @@ impl Editor {
             Bind::Type(c) => {
                 let code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
                 match prefs.auto_pair.then(|| format::auto_pair(&text, sel, c, code)).flatten() {
-                    Some(e) if !pending => self.page.apply(e),
+                    Some(e) if !pending => self.page.apply_typed(e, c),
                     _ => self.page.perform(Action::Edit(Edit::Insert(c))),
                 }
             }
@@ -813,9 +817,13 @@ impl Editor {
             C::HeadingDown => {
                 self.edit_region(|text, doc, region, sel| format::step_heading(text, doc, region, sel, false))
             }
-            C::Quote => self.edit_blocks(|text, _doc, range, sel| Some(format::toggle_quote(text, range, sel))),
-            C::OrderedList => self.edit_blocks(|text, doc, range, _| Some(format::toggle_list(text, doc, range, true))),
-            C::BulletList => self.edit_blocks(|text, doc, range, _| Some(format::toggle_list(text, doc, range, false))),
+            C::Quote => self.edit_blocks(false, |text, _doc, range, sel| Some(format::toggle_quote(text, range, sel))),
+            C::OrderedList => {
+                self.edit_blocks(true, |text, doc, range, _| Some(format::toggle_list(text, doc, range, true)))
+            }
+            C::BulletList => {
+                self.edit_blocks(true, |text, doc, range, _| Some(format::toggle_list(text, doc, range, false)))
+            }
             C::CodeBlock => self.insert_block("```\n", "\n```"),
             C::MathBlock => self.insert_block("$$\n", "\n$$"),
             C::HorizontalRule => self.insert_block("---", ""),
@@ -1032,15 +1040,17 @@ impl Editor {
         if self.page.pending.is_some() {
             return Task::none();
         }
-        if let Some(e) = f(&self.page.text, &self.page.doc, a.region.clone(), self.page.sel) {
+        if let Some(e) = edit::nested(&self.page.text, &self.page.doc, a.region.clone(), self.page.sel, f) {
             self.page.apply(e);
         }
         self.focus()
     }
 
-    /// An edit of the selected blocks, or the active region.
+    /// An edit of the selected blocks, or the active region (inside their
+    /// containers when `nested`).
     fn edit_blocks(
         &mut self,
+        nested: bool,
         f: impl FnOnce(&str, &crate::markdown::Document, std::ops::Range<usize>, Sel) -> Option<edit::Edited>,
     ) -> Task<EditorMsg> {
         let range = match (self.page.blocks_range(), &self.page.active) {
@@ -1049,7 +1059,9 @@ impl Editor {
             _ => return Task::none(),
         };
         self.page.blocks = None;
-        if let Some(e) = f(&self.page.text, &self.page.doc, range, self.page.sel) {
+        let (text, doc, sel) = (&self.page.text, &self.page.doc, self.page.sel);
+        let e = if nested { edit::nested_blocks(text, doc, range, sel, f) } else { f(text, doc, range, sel) };
+        if let Some(e) = e {
             self.page.apply(e);
         }
         self.focus()
@@ -1085,9 +1097,12 @@ impl Editor {
             (Some(a), None) => a.region.end,
             _ => self.page.blocks_range().map_or(text.len(), |r| r.end),
         };
-        let pending = edit::Pending::gap(text, at);
+        let pending = match &self.page.pending {
+            Some(p) if self.page.active.is_some() => p.clone(),
+            _ => edit::gap_pending(text, &self.page.doc, at, None),
+        };
         let (new, start) = pending.materialize(text, &format!("{open}{close}"));
-        let cursor = start + open.len();
+        let cursor = start + pending.prefixed(open).len();
         self.page.blocks = None;
         self.page.set_text(new, Sel::caret(cursor));
         self.focus()

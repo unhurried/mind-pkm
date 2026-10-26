@@ -13,7 +13,7 @@
 //! that keep the markup of elements partly deleted.
 
 use super::content::{self, Inline, Link, Style};
-use super::parse::Document;
+use super::parse::{BlockKind, ContainerKind, Document, prefix_len};
 use pulldown_cmark::Event;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -77,10 +77,11 @@ pub struct Display {
 type Events = [(Event<'static>, Range<usize>)];
 
 /// Whether a block is edited in its rendered form: paragraphs, headings, list
-/// items, quotes and footnote definitions holding only text (code-like blocks,
-/// and quotes or items with other blocks inside, are edited as source).
+/// items, (empty) quotes and footnote definitions holding only text
+/// (code-like blocks, and items or footnotes starting with other blocks, are
+/// edited as source).
 pub fn editable(doc: &Document, block: usize) -> bool {
-    use super::parse::BlockKind as K;
+    use BlockKind as K;
     use pulldown_cmark::Tag;
     let Some(b) = doc.blocks.get(block) else { return false };
     matches!(b.kind, K::Paragraph | K::Heading(_) | K::ListItem(_) | K::Quote | K::Footnote(_))
@@ -89,12 +90,90 @@ pub fn editable(doc: &Document, block: usize) -> bool {
                 e,
                 Event::Html(_)
                     | Event::Rule
-                    | Event::DisplayMath(_)
                     | Event::Start(
-                        Tag::CodeBlock(_) | Tag::HtmlBlock | Tag::Table(_) | Tag::MetadataBlock(_) | Tag::List(_)
+                        Tag::CodeBlock(_)
+                            | Tag::HtmlBlock
+                            | Tag::Table(_)
+                            | Tag::MetadataBlock(_)
+                            | Tag::List(_)
+                            | Tag::BlockQuote(_)
                     )
             )
         })
+}
+
+/// What a block is, to tell whether an edit made it something else: its kind
+/// (whether a list item is a task included) and its containers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shape {
+    kind: std::mem::Discriminant<BlockKind>,
+    task: bool,
+    outer: Vec<ContainerKind>,
+}
+
+impl Shape {
+    pub fn new(kind: &BlockKind, outer: Vec<ContainerKind>) -> Shape {
+        let task = matches!(kind, BlockKind::ListItem(i) if i.task.is_some());
+        Shape { kind: std::mem::discriminant(kind), task, outer }
+    }
+
+    pub fn of(doc: &Document, block: usize) -> Shape {
+        Shape::new(&doc.blocks[block].kind, doc.outer_kinds(block))
+    }
+}
+
+/// After an edit of the block being edited - `doc` now, the cursor at
+/// `cursor`, `typed` inserted, the block `before` it was - the byte the
+/// parse should not see while the element the edit made is not determined
+/// yet: `segment`, where the block's text (or the cursor's line in it)
+/// starts, so that a marker typed there shows as typed. None when the block
+/// is what it was, when the space after a marker determines the element
+/// (`# `, `- `, `1. `, `- [ ] `, `> `), when the new element shows text on
+/// the cursor's line (`>x` is a quote), and for a math paragraph (complete
+/// when its closing `$$` is typed). Line syntax (a fence, `---`, a setext
+/// underline, `[toc]`, HTML) stays undetermined until Enter.
+pub fn undetermined(doc: &Document, cursor: usize, segment: usize, before: &Shape, typed: &str) -> Option<usize> {
+    use super::edit::{self, MarkerKind};
+    if segment >= cursor {
+        return None;
+    }
+    let region = edit::region_at(doc, cursor)?;
+    let block = doc.blocks.iter().position(|b| b.range.start == region.start)?;
+    let shape = Shape::of(doc, block);
+    let kind = &doc.blocks[block].kind;
+    if shape == *before || *kind == BlockKind::Math {
+        return None;
+    }
+    let line = edit::line_range(&doc.text, cursor);
+    let line_text = &doc.text[line.clone()];
+    let rest = &line_text[prefix_len(line_text, shape.outer.iter().copied())..];
+    let marker = edit::line_marker(rest).filter(|m| m.end == rest.len());
+    let made = |m: &MarkerKind| match m {
+        MarkerKind::Heading(_) => matches!(kind, BlockKind::Heading(_)),
+        MarkerKind::Bullet(_) | MarkerKind::Ordered(..) => matches!(kind, BlockKind::ListItem(_)),
+        MarkerKind::Quote => *kind == BlockKind::Quote || shape.outer.last() == Some(&ContainerKind::Quote),
+    };
+    if typed.ends_with([' ', '\t']) && cursor == line.end && marker.is_some_and(|m| made(&m.kind)) {
+        return None;
+    }
+    if editable(doc, block) {
+        let d = Display::new(doc, doc.block_events(block), region, cursor);
+        let shows = d.units.iter().any(|u| {
+            !u.shown.is_empty()
+                && matches!(u.look, Look::Text { .. } | Look::Object(_))
+                && u.source.start < line.end
+                && u.source.end > line.start
+        });
+        if shows {
+            return None;
+        }
+    }
+    let byte = *doc.text.as_bytes().get(segment)?;
+    let masked = Document::parse_masked(&doc.text, Some(segment));
+    let still = edit::region_at(&masked, cursor)
+        .and_then(|r| masked.blocks.iter().position(|b| b.range.start == r.start))
+        .is_some_and(|b| editable(&masked, b));
+    (byte.is_ascii() && byte != b'\n' && still).then_some(segment)
 }
 
 impl Display {
@@ -199,26 +278,22 @@ impl Display {
                     }
                 }
                 Item::Hidden(r, owner) => {
+                    let t = &text[r.clone()];
                     if is_revealed(owner) {
-                        d.push(&text[r.clone()], r, true, Look::Marker, owner);
-                    } else if owner.is_none() && text[r.clone()].trim_matches([' ', '\t']).is_empty() && line_end(&r) {
+                        d.push(t, r, true, Look::Marker, owner);
+                    } else if owner.is_none()
+                        && r.end == region.end
+                        && t.contains('\n')
+                        && t.chars().all(|c| matches!(c, ' ' | '\t' | '\n' | '>'))
+                    {
+                        // A line break typed at the end (Shift+Enter): the new line to type on.
+                        let breaks = "\n".repeat(t.matches('\n').count());
+                        d.push(&breaks, r, false, Look::Break, None);
+                    } else if owner.is_none() && t.trim_matches([' ', '\t']).is_empty() && line_end(&r) {
                         // Spaces typed at the end of a line, which the parser drops.
                         d.push(&text[r.clone()], r, true, Look::Text { style: Style::default(), link: None }, None);
                     }
                 }
-            }
-        }
-        // Empty quoted lines Enter added at the end: line breaks to put the cursor after.
-        let last = d.units.iter().map(|u| u.source.end).max().unwrap_or(region.start);
-        for (r, owner) in &hidden {
-            let t = &text[r.clone()];
-            if owner.is_none()
-                && r.start >= last
-                && t.contains('\n')
-                && t.chars().all(|c| matches!(c, '>' | ' ' | '\t' | '\n'))
-            {
-                let breaks = "\n".repeat(t.matches('\n').count());
-                d.push(&breaks, r.clone(), false, Look::Break, None);
             }
         }
         // The content: inside the block syntax at both ends.
@@ -250,7 +325,7 @@ impl Display {
     pub fn for_cell(cell: &str, cursor: usize) -> Display {
         let wrapped = format!("|{cell}|\n|-|\n");
         let doc = Document::parse(&wrapped);
-        let Some(block) = doc.blocks.iter().position(|b| b.kind == super::parse::BlockKind::Table) else {
+        let Some(block) = doc.blocks.iter().position(|b| b.kind == BlockKind::Table) else {
             return Display::plain(cell);
         };
         let d = Display::new(&doc, doc.block_events(block), 1..1 + cell.len(), cursor + 1);
@@ -643,8 +718,13 @@ mod tests {
         };
         assert_eq!(editable("# h\n\npara\n\n- a\n  - b\n\n> q\n\n[^1]: note"), vec![true; 6]);
         assert_eq!(editable("```\nx\n```\n\n$$\nx\n$$\n\n<div>\nx\n</div>\n\n---"), vec![false; 4]);
-        assert_eq!(editable("> - in a quote"), vec![false]);
+        assert_eq!(
+            editable("> - in a quote\n>\n> > nested\n\n- a\n\n  ```\n  x\n  ```"),
+            vec![true, true, true, false]
+        );
         assert_eq!(editable("| a |\n| - |\n| 1 |"), vec![false]);
+        assert_eq!(editable("see\n$$x^2$$\nhere"), vec![true]);
+        assert_eq!(editable("- > first block of an item"), vec![false]);
     }
 
     #[test]
@@ -661,10 +741,13 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_quoted_line_at_the_end_is_shown() {
-        let (d, text, _) = shown("> one\n>\n> ‸");
-        assert_eq!(d.text, "one\n\n");
-        assert_eq!(d.to_source(d.text.len()), text.len());
+    fn blocks_in_containers_without_their_syntax() {
+        let (d, text, _) = shown("> - a\n> - b‸\n>   more");
+        assert_eq!(d.text, "b\nmore");
+        assert_eq!(&text[d.content.start..], "b\n>   more");
+        // An empty quote: nothing shown, the cursor after its `>`.
+        let (d, text, _) = shown("> ‸");
+        assert_eq!((d.text.as_str(), d.to_source(0)), ("", text.len()));
         // A setext underline stays hidden.
         assert_eq!(shown_text("Title‸\n==="), "Title");
     }

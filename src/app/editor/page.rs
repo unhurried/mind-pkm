@@ -141,6 +141,13 @@ pub struct Page {
     pub active: Option<Active>,
     /// The active region is a new empty paragraph without source yet.
     pub pending: Option<Pending>,
+    /// A byte of the block being edited the parse leaves out: where a block
+    /// marker was typed whose element is not determined yet (it shows as
+    /// typed until then).
+    pub tentative: Option<usize>,
+    /// The next `place` comes from an edit: a line break typed at the end of
+    /// a block's text stays the block's (Shift+Enter at its end).
+    hold_break: bool,
     /// Whole blocks selected (anchor, head), while no region is active.
     pub blocks: Option<(usize, usize)>,
     history: History,
@@ -172,6 +179,8 @@ impl Page {
             sel: Sel::default(),
             active: None,
             pending: None,
+            tentative: None,
+            hold_break: false,
             blocks: None,
             history: History::default(),
             revision: 0,
@@ -217,8 +226,49 @@ impl Page {
     }
 
     fn reparse(&mut self) {
-        self.doc = Document::parse(&self.text);
+        self.doc = Document::parse_masked(&self.text, self.tentative);
         self.revision += 1;
+    }
+
+    /// Parses the text after an edit of the live region (the cursor at
+    /// `cursor`, `typed` inserted where the block's text or a line of it
+    /// starts at `segment`, the block `before` it was), leaving out a marker
+    /// whose element is not determined yet.
+    fn settle(&mut self, cursor: usize, segment: usize, before: &live::Shape, typed: &str) {
+        self.tentative = None;
+        self.reparse();
+        self.tentative = live::undetermined(&self.doc, cursor, segment, before, typed);
+        if self.tentative.is_some() {
+            self.reparse();
+        }
+    }
+
+    /// What the block being edited is (a new paragraph: a paragraph in its containers).
+    fn shape(&self) -> live::Shape {
+        if let Some(p) = &self.pending {
+            return live::Shape::new(&BlockKind::Paragraph, p.outer.clone());
+        }
+        match self.active.as_ref().and_then(|a| self.doc.blocks.iter().position(|b| b.range.start == a.region.start)) {
+            Some(b) => live::Shape::of(&self.doc, b),
+            None => live::Shape::new(&BlockKind::Paragraph, Vec::new()),
+        }
+    }
+
+    /// Where the text typed at the cursor starts the live block's text or a
+    /// line of it: the block's content start on its first line, else the
+    /// line's start after the prefixes of its containers.
+    fn segment(&self) -> usize {
+        let head = self.sel.range().start;
+        let Some(live) = self.live() else { return head };
+        let content = live.display.content.start;
+        let line = edit::line_range(&self.text, head);
+        if line.start <= content && content <= line.end {
+            return content.min(head);
+        }
+        let block =
+            self.active.as_ref().and_then(|a| self.doc.blocks.iter().position(|b| b.range.start == a.region.start));
+        let kinds = block.map_or(Vec::new(), |b| self.doc.outer_kinds(b));
+        line.start + crate::markdown::parse::prefix_len(&self.text[line], kinds)
     }
 
     /// The source of the active region.
@@ -241,6 +291,14 @@ impl Page {
             (0..=o).rev().find(|&i| self.text.is_char_boundary(i)).unwrap_or(0)
         };
         let sel = Sel { anchor: clamp(sel.anchor), head: clamp(sel.head) };
+        let hold_break = std::mem::take(&mut self.hold_break);
+        // An undetermined marker stays so only while its block is edited.
+        if let Some(m) = self.tentative
+            && !edit::region_at(&self.doc, sel.head).is_some_and(|r| r.start <= m && m < r.end)
+        {
+            self.tentative = None;
+            self.reparse();
+        }
         if let Some(a) = &mut self.active
             && a.table.is_none()
             && self.pending.is_none()
@@ -261,7 +319,8 @@ impl Page {
         }
         self.deactivate();
         let head = sel.head;
-        match edit::region_at(&self.doc, head) {
+        let region = edit::region_at(&self.doc, head).or_else(|| hold_break.then(|| self.with_break(head)).flatten());
+        match region {
             Some(region) => {
                 let source = &self.text[region.clone()];
                 let mut active = Active::new(region.clone(), source);
@@ -301,8 +360,21 @@ impl Page {
                 }
                 self.active = Some(active);
             }
-            None => self.start_pending(Pending::gap(&self.text, head)),
+            None => self.start_pending(edit::gap_pending(&self.text, &self.doc, head, None)),
         }
+    }
+
+    /// The region of the block rendered text ends right before `head` with a
+    /// line break: the cursor on a new line of it (after Shift+Enter at its end).
+    fn with_break(&self, head: usize) -> Option<Range<usize>> {
+        let b = self.doc.blocks.iter().rposition(|b| b.range.end < head)?;
+        let start = self.doc.blocks[b].range.start;
+        let gap = &self.text[self.doc.blocks[b].range.end..head];
+        let (before, after) = gap.split_once('\n')?;
+        let one_break = before.trim_matches([' ', '\t']).is_empty()
+            && after.chars().all(|c| matches!(c, ' ' | '\t' | '>'))
+            && (after.is_empty() || !self.doc.blocks[b].outer.is_empty());
+        (one_break && live::editable(&self.doc, b)).then_some(start..head)
     }
 
     /// Makes the active region a new empty paragraph.
@@ -317,6 +389,17 @@ impl Page {
         });
         self.pending = Some(pending);
         self.sel = Sel::caret(at);
+    }
+
+    /// Moves an empty new paragraph in a quote or list item out of it.
+    pub fn leave_pending_container(&mut self) {
+        let Some(p) = &self.pending else { return };
+        if p.outer.is_empty() {
+            return;
+        }
+        let left = edit::gap_pending(&self.text, &self.doc, p.at, Some(p.outer.len() - 1));
+        self.active = None;
+        self.start_pending(left);
     }
 
     /// What the live region shows, after the text or the cursor changed.
@@ -455,20 +538,24 @@ impl Page {
 
     fn live_replace(&mut self, shown: Range<usize>, insert: &str, typed: Option<char>) {
         let before = self.snapshot();
+        let shape = self.shape();
         // A new paragraph gets its source.
         if let Some(pending) = &self.pending {
             if insert.is_empty() {
                 return;
             }
             let (text, start) = pending.materialize(&self.text, insert);
+            let cursor = start + pending.prefixed(insert).len();
             self.pending = None;
             self.text = text;
-            self.reparse();
+            self.settle(cursor, start, &shape, insert);
             self.active = None;
-            self.place(Sel::caret(start + insert.len()));
+            self.hold_break = true;
+            self.place(Sel::caret(cursor));
             self.record(before, typed);
             return;
         }
+        let segment = self.segment();
         let Some(a) = &mut self.active else { return };
         let Some(live) = &a.live else { return };
         if let Some(state) = &mut a.table {
@@ -492,12 +579,13 @@ impl Page {
             a.region = start..start;
         }
         self.text = text;
-        self.reparse();
+        self.settle(cursor, segment.min(cursor), &shape, insert);
         if end == start {
             self.sel = Sel::caret(start);
             self.refresh_live();
         } else {
             self.active = None;
+            self.hold_break = true;
             self.place(Sel::caret(cursor));
         }
         self.record(before, typed);
@@ -559,6 +647,10 @@ impl Page {
     /// the blank lines of a block whose text was all deleted.
     pub fn deactivate(&mut self) {
         let Some(active) = self.active.take() else { return };
+        // A marker left undetermined is what the text says it is.
+        if self.tentative.take().is_some() {
+            self.reparse();
+        }
         if self.pending.take().is_some() {
             return;
         }
@@ -593,6 +685,7 @@ impl Page {
             self.history.break_typing();
             return;
         }
+        self.tentative = None;
         if let Some(pending) = &self.pending {
             if new.is_empty() {
                 return;
@@ -616,6 +709,7 @@ impl Page {
     /// the cursor goes to the cell `change` returns.
     pub fn change_table(&mut self, change: impl FnOnce(&mut Table, (usize, usize)) -> (usize, usize)) {
         let before = self.snapshot();
+        self.tentative = None;
         let Some(active) = &mut self.active else { return };
         let Some(state) = &mut active.table else { return };
         let old = state.cell;
@@ -667,12 +761,38 @@ impl Page {
         let changed = edited.text != self.text;
         self.active = None;
         self.pending = None;
+        self.tentative = None;
         self.text = edited.text;
         self.reparse();
         match edited.pending {
             Some(p) => self.start_pending(p),
-            None => self.place(edited.sel),
+            None => {
+                self.hold_break = true;
+                self.place(edited.sel)
+            }
         }
+        if changed {
+            self.history.record(before, None, Instant::now());
+        }
+        self.history.break_typing();
+    }
+
+    /// Applies an edit made by typing `typed` in the live region (auto-pairing):
+    /// as `apply`, leaving out a marker whose element it does not determine yet.
+    pub fn apply_typed(&mut self, edited: Edited, typed: char) {
+        if self.live().is_none() || self.active.as_ref().is_some_and(|a| a.table.is_some()) || edited.pending.is_some()
+        {
+            return self.apply(edited);
+        }
+        let before = self.snapshot();
+        let (shape, segment) = (self.shape(), self.segment());
+        let changed = edited.text != self.text;
+        self.active = None;
+        self.pending = None;
+        self.text = edited.text;
+        self.settle(edited.sel.head, segment.min(edited.sel.head), &shape, &typed.to_string());
+        self.hold_break = true;
+        self.place(edited.sel);
         if changed {
             self.history.record(before, None, Instant::now());
         }
@@ -698,6 +818,7 @@ impl Page {
         let Some(s) = step else { return false };
         self.active = None;
         self.pending = None;
+        self.tentative = None;
         self.blocks = None;
         self.text = s.text;
         self.reparse();

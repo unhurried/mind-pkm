@@ -4,6 +4,7 @@
 use mind_pkm::markdown::Document;
 use mind_pkm::markdown::edit::{self, Sel};
 use mind_pkm::markdown::live;
+use mind_pkm::markdown::parse::ContainerKind;
 use mind_pkm::markdown::table::{self, Align, Table};
 use proptest::prelude::*;
 
@@ -27,6 +28,12 @@ const LINES: &[&str] = &[
     "> quote",
     "> > nested quote",
     ">",
+    "> - quoted item",
+    ">   - nested quoted item",
+    "> # quoted heading",
+    "> ```",
+    "  > quote in an item",
+    "  ```",
     "```",
     "```rust",
     "fn main() {}",
@@ -72,7 +79,13 @@ proptest! {
         for (i, c) in text.char_indices() {
             if !c.is_whitespace() {
                 let n = doc.blocks.iter().filter(|b| b.range.contains(&i)).count();
-                prop_assert_eq!(n, 1, "byte {} ({:?}) of {:?} is in {} blocks: {:?}", i, c, text, n, doc.blocks);
+                // Lines of a quote's `>` alone between its blocks are in none
+                // (inside a code block in the quote, in that one).
+                let line = edit::line_range(&text, i);
+                let quote_line = c == '>'
+                    && text[line].chars().all(|c| c == '>' || c.is_whitespace())
+                    && doc.containers.iter().any(|q| q.kind == ContainerKind::Quote && q.range.contains(&i));
+                prop_assert!(n == 1 || (n == 0 && quote_line), "byte {} ({:?}) of {:?} is in {} blocks: {:?}", i, c, text, n, doc.blocks);
             }
         }
     }
@@ -96,6 +109,54 @@ proptest! {
             let tail = text.len() - region.end;
             prop_assert_eq!(&e.text[e.text.len() - tail..], &text[region.end..], "after the block of {:?}", text);
             prop_assert!(e.sel.head <= e.text.len());
+        }
+    }
+
+    #[test]
+    fn rules_inside_containers_stay_inside_them(text in page(), pick in any::<prop::sample::Index>(), at in any::<prop::sample::Index>(), rule in 0u8..6) {
+        let doc = Document::parse(&text);
+        prop_assume!(!doc.blocks.is_empty());
+        let block = &doc.blocks[pick.index(doc.blocks.len())];
+        let region = edit::region_at(&doc, block.range.start).unwrap_or(block.range.clone());
+        let positions: Vec<usize> = (region.start..=region.end).filter(|&i| text.is_char_boundary(i)).collect();
+        let c = positions[at.index(positions.len())];
+        let sel = Sel::caret(c);
+        let result = match rule {
+            0 => edit::nested(&text, &doc, region.clone(), sel, edit::enter),
+            1 => edit::nested(&text, &doc, region.clone(), sel, edit::shift_enter),
+            2 => edit::backspace_nested(&text, &doc, region.clone(), c),
+            3 => edit::nested(&text, &doc, region.clone(), sel, |t, d, r, s| edit::delete(t, d, r, s.head)),
+            4 => edit::nested(&text, &doc, region.clone(), sel, |t, d, r, s| edit::indent(t, d, r, s, false)),
+            _ => edit::nested(&text, &doc, region.clone(), sel, |t, d, r, s| edit::indent(t, d, r, s, true)),
+        };
+        if let Some(e) = result {
+            for o in [e.sel.anchor, e.sel.head] {
+                prop_assert!(o <= e.text.len() && e.text.is_char_boundary(o), "{:?} -> {:?}", text, e);
+            }
+            if let Some(p) = &e.pending {
+                prop_assert!(p.at <= e.text.len() && e.text.is_char_boundary(p.at), "{:?} -> {:?}", text, e);
+                let (typed, start) = p.materialize(&e.text, "x");
+                prop_assert_eq!(&typed[start..start + 1], "x");
+            }
+            // Inside a container, the page before it stays.
+            if let Some(&c) = block.outer.last() {
+                let start = edit::line_range(&text, doc.containers[c].range.start).start;
+                prop_assert_eq!(&e.text[..start], &text[..start], "before the container of {:?}", text);
+            }
+        }
+    }
+
+    #[test]
+    fn an_undetermined_marker_is_a_byte_of_its_line(text in page(), at in any::<prop::sample::Index>(), seg in any::<prop::sample::Index>(), typed in "[ a#>*`-]{0,2}") {
+        let doc = Document::parse(&text);
+        let positions: Vec<usize> = (0..=text.len()).filter(|&i| text.is_char_boundary(i)).collect();
+        let cursor = positions[at.index(positions.len())];
+        let segment = positions[seg.index(positions.len())];
+        let before = live::Shape::new(&mind_pkm::markdown::BlockKind::Paragraph, Vec::new());
+        if let Some(m) = live::undetermined(&doc, cursor, segment, &before, &typed) {
+            prop_assert!(m < cursor && text.as_bytes()[m].is_ascii() && text.as_bytes()[m] != b'\n');
+            let masked = Document::parse_masked(&text, Some(m));
+            prop_assert_eq!(&masked.text, &text);
         }
     }
 

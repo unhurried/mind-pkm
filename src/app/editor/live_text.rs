@@ -80,12 +80,14 @@ pub enum RunKind {
         handle: core_svg::Handle,
         max_width: Option<f32>,
     },
-    /// An SVG (a formula) of a size; `center`ed on the text, else on the baseline.
+    /// An SVG (a formula) of a size; `center`ed on the text, else on the
+    /// baseline; `display` math in the middle of a line of its own.
     Svg {
         handle: core_svg::Handle,
         width: f32,
         height: f32,
         center: bool,
+        display: bool,
     },
     Newline,
 }
@@ -318,27 +320,27 @@ impl LiveText<'_> {
                     let k = key.clone().unwrap_or_else(|| unreachable!());
                     let shaped =
                         state.cache.entry(k).or_insert_with(|| shape(text, look.font, look.size, self.line_height, 0));
-                    object_or_decoration(&run.shown, shaped.width, shaped.ascent, shaped.descent, false)
+                    object_or_decoration(&run.shown, shaped.width, shaped.ascent, shaped.descent, false, false)
                 }
                 RunKind::Image { handle, max_width } => {
                     let natural = core_image::Renderer::measure_image(renderer, handle)
                         .map_or(Size::new(0.0, 0.0), |s| Size::new(s.width as f32, s.height as f32));
                     let w = natural.width.min(max_width.unwrap_or(f32::INFINITY)).min(width.max(1.0));
                     let h = if natural.width > 0.0 { natural.height * w / natural.width } else { 0.0 };
-                    object_or_decoration(&run.shown, w, h, 0.0, true)
+                    object_or_decoration(&run.shown, w, h, 0.0, true, false)
                 }
                 RunKind::SvgFile { handle, max_width } => {
                     let natural = core_svg::Renderer::measure_svg(renderer, handle);
                     let natural = Size::new(natural.width as f32, natural.height as f32);
                     let w = natural.width.min(max_width.unwrap_or(f32::INFINITY)).min(width.max(1.0));
                     let h = if natural.width > 0.0 { natural.height * w / natural.width } else { 0.0 };
-                    object_or_decoration(&run.shown, w, h, 0.0, true)
+                    object_or_decoration(&run.shown, w, h, 0.0, true, false)
                 }
-                RunKind::Svg { width: w, height: h, center, .. } => {
+                RunKind::Svg { width: w, height: h, center, display, .. } => {
                     // A formula sits around the middle of the text's lowercase letters.
                     let axis = if *center { self.base.1 * 0.3 } else { 0.0 };
                     let ascent = if *center { h / 2.0 + axis } else { *h };
-                    object_or_decoration(&run.shown, *w, ascent, (h - ascent).max(0.0), false)
+                    object_or_decoration(&run.shown, *w, ascent, (h - ascent).max(0.0), false, *display)
                 }
                 RunKind::Newline => Measured::Newline { at: run.shown.start },
             };
@@ -360,11 +362,18 @@ impl LiveText<'_> {
     }
 }
 
-fn object_or_decoration(shown: &Range<usize>, width: f32, ascent: f32, descent: f32, block: bool) -> Measured {
+fn object_or_decoration(
+    shown: &Range<usize>,
+    width: f32,
+    ascent: f32,
+    descent: f32,
+    block: bool,
+    centered: bool,
+) -> Measured {
     if shown.is_empty() {
         Measured::Decoration { at: shown.start, width, ascent, descent, block }
     } else {
-        Measured::Object { shown: shown.clone(), width, ascent, descent }
+        Measured::Object { shown: shown.clone(), width, ascent, descent, centered }
     }
 }
 

@@ -17,6 +17,7 @@ use crate::app::arrow_cursor::arrow_cursor;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Link, Node, SourceMap, Style, TableNode};
 use crate::markdown::live::{Display, Look, Object};
+use crate::markdown::parse::ContainerKind;
 use crate::markdown::{BlockKind, ListItem, images, table};
 use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
 use iced::widget::text::{LineHeight, Span};
@@ -467,7 +468,7 @@ impl Editor {
             None => {
                 let mut col = Column::new().width(width);
                 let page = &self.page;
-                let mut previous: Option<&BlockKind> = None;
+                let doc = &page.doc;
                 // Tight list items stay close together; headings get more room above.
                 let gap = |prev: Option<&BlockKind>, kind: &BlockKind| -> f32 {
                     let unit = BLOCK_GAP * ctx.zoom;
@@ -481,41 +482,98 @@ impl Editor {
                     }
                 };
                 let active = page.active.as_ref();
-                let mut active_shown = false;
                 let selected = page.blocks.map(|(a, b)| a.min(b)..=a.max(b));
-                for (i, block) in page.doc.blocks.iter().enumerate() {
-                    let space_above = gap(previous, &block.kind);
-                    previous = Some(&block.kind);
-                    if space_above > 0.0 {
-                        col = col.push(space().height(space_above));
-                    }
+                // What the column shows: the blocks, with the active region in
+                // place of the blocks it covers (a new paragraph before the
+                // block after it).
+                enum Entry {
+                    Block(usize),
+                    Active,
+                }
+                let mut entries = Vec::new();
+                let mut active_block = None;
+                for (i, block) in doc.blocks.iter().enumerate() {
                     if let Some(a) = active {
                         let overlaps = block.range.end >= a.region.start && block.range.start <= a.region.end;
-                        let pending_here = page.pending.as_ref().is_some_and(|pd| pd.at <= block.range.start);
-                        if (overlaps && page.pending.is_none()) || (pending_here && !active_shown) {
-                            if !active_shown {
-                                col = col.push(self.active_view(a, ctx, prefs, width));
-                                active_shown = true;
+                        let placed = entries.iter().any(|e| matches!(e, Entry::Active));
+                        if page.pending.is_none() && overlaps {
+                            if !placed {
+                                entries.push(Entry::Active);
+                                active_block = Some(i);
                             }
-                            if overlaps && page.pending.is_none() {
-                                continue;
-                            }
+                            continue;
+                        }
+                        if !placed && page.pending.as_ref().is_some_and(|pd| pd.at <= block.range.start) {
+                            entries.push(Entry::Active);
                         }
                     }
-                    let rendered = self.block_view(i, ctx, width);
-                    let is_selected = selected.as_ref().is_some_and(|s| s.contains(&i));
-                    let rendered: Element<EditorMsg> = if is_selected {
-                        container(rendered).width(Fill).style(move |_| container::background(p.selection)).into()
-                    } else {
-                        rendered
-                    };
-                    let boxed = container(rendered).id(self.id(&format!("block-{i}")));
-                    col = col.push(mouse_area(boxed).on_press(EditorMsg::BlockPressed(i)));
+                    entries.push(Entry::Block(i));
                 }
-                if let Some(a) = active
-                    && !active_shown
-                {
-                    col = col.push(self.active_view(a, ctx, prefs, width));
+                if active.is_some() && !entries.iter().any(|e| matches!(e, Entry::Active)) {
+                    entries.push(Entry::Active);
+                }
+                // The kind of what an entry shows, and the containers around it
+                // (with their index, when known).
+                let describe = |e: &Entry| -> Described {
+                    let of_block = |i: usize| -> Described {
+                        let b = &doc.blocks[i];
+                        (b.kind.clone(), b.outer.iter().map(|&c| (doc.containers[c].kind, Some(c))).collect())
+                    };
+                    match (e, &page.pending, active_block) {
+                        (Entry::Block(i), _, _) => of_block(*i),
+                        (Entry::Active, Some(pd), _) => {
+                            (BlockKind::Paragraph, pd.outer.iter().map(|&k| (k, None)).collect())
+                        }
+                        (Entry::Active, None, Some(i)) => {
+                            (active.map_or(BlockKind::Paragraph, |a| a.kind.clone()), of_block(i).1)
+                        }
+                        (Entry::Active, None, None) => (BlockKind::Paragraph, Vec::new()),
+                    }
+                };
+                let mut previous: Option<Described> = None;
+                for entry in &entries {
+                    let (kind, outer) = describe(entry);
+                    let space_above = gap(previous.as_ref().map(|p| &p.0), &kind);
+                    if space_above > 0.0 {
+                        // Inside the containers both sides share: a quote's bar goes on.
+                        let shared: Vec<ContainerKind> = previous
+                            .as_ref()
+                            .map(|(_, prev)| {
+                                prev.iter()
+                                    .zip(&outer)
+                                    .take_while(|(a, b)| a.0 == b.0 && (a.1.is_none() || b.1.is_none() || a.1 == b.1))
+                                    .map(|(a, _)| a.0)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        col = col.push(in_containers(space().height(space_above).into(), &shared, p, ctx.zoom));
+                    }
+                    let kinds: Vec<ContainerKind> = outer.iter().map(|(k, _)| *k).collect();
+                    let inner = inner_width(width, &kinds, ctx.zoom);
+                    let shown: Element<EditorMsg> = match (entry, active) {
+                        (Entry::Active, Some(a)) => {
+                            in_containers(self.active_view(a, ctx, prefs, inner), &kinds, p, ctx.zoom)
+                        }
+                        (Entry::Block(i), _) => {
+                            let i = *i;
+                            let rendered = self.block_view(i, ctx, inner);
+                            let is_selected = selected.as_ref().is_some_and(|s| s.contains(&i));
+                            let rendered: Element<EditorMsg> = if is_selected {
+                                container(rendered)
+                                    .width(Fill)
+                                    .style(move |_| container::background(p.selection))
+                                    .into()
+                            } else {
+                                rendered
+                            };
+                            let boxed = container(in_containers(rendered, &kinds, p, ctx.zoom))
+                                .id(self.id(&format!("block-{i}")));
+                            mouse_area(boxed).on_press(EditorMsg::BlockPressed(i)).into()
+                        }
+                        (Entry::Active, None) => continue,
+                    };
+                    col = col.push(shown);
+                    previous = Some((kind, outer));
                 }
                 // Room to click below the last block.
                 col = col.push(
@@ -659,9 +717,7 @@ impl Editor {
                 let indent = LIST_INDENT * ctx.zoom * item.depth as f32;
                 let marker_w = LIST_INDENT * ctx.zoom;
                 let block = self.page.active_block().unwrap_or(0);
-                let marker: Element<EditorMsg> = if item.continuation {
-                    space().width(marker_w).into()
-                } else if let Some(checked) = item.task {
+                let marker: Element<EditorMsg> = if let Some(checked) = item.task {
                     container(
                         iced::widget::checkbox(checked)
                             .size(ctx.size(0.95))
@@ -937,7 +993,9 @@ impl Editor {
             BlockKind::Quote | BlockKind::Html | BlockKind::Paragraph => {
                 let nodes = content::nodes(doc, doc.block_events(i));
                 if block.kind == BlockKind::Quote {
-                    quote_view(nodes_view(&nodes, ctx, width - QUOTE_PADDING - QUOTE_BAR, i), p)
+                    // An empty quote: a line of its bar.
+                    let line = space().height(ctx.size(1.0) * LINE_HEIGHT);
+                    quote_view(column![line, nodes_view(&nodes, ctx, width - QUOTE_PADDING - QUOTE_BAR, i)].into(), p)
                 } else {
                     let _ = base;
                     nodes_view(&nodes, ctx, width, i)
@@ -956,9 +1014,7 @@ impl Editor {
         let done = Ctx { p: Palette { text: p.muted, link: p.muted, heading: p.muted, ..p }, ..*ctx };
         let body_ctx = if item.task == Some(true) { &done } else { ctx };
         let body = nodes_view(&nodes, body_ctx, width - indent - marker_w, i);
-        let marker: Element<EditorMsg> = if item.continuation {
-            space().width(marker_w).into()
-        } else if let Some(checked) = item.task {
+        let marker: Element<EditorMsg> = if let Some(checked) = item.task {
             container(
                 iced::widget::checkbox(checked).size(ctx.size(0.95)).on_toggle(move |_| EditorMsg::TaskToggled(i)),
             )
@@ -997,6 +1053,34 @@ fn editor_style(p: Palette, background: Color) -> text_editor::Style {
         value: p.text,
         selection: p.selection,
     }
+}
+
+/// What a block in the column is, and the containers around it (with their
+/// index in the page's parse when known).
+type Described = (BlockKind, Vec<(ContainerKind, Option<usize>)>);
+
+/// `content` inside the containers `kinds` (outermost first): a quote's bar,
+/// a list item's indentation.
+fn in_containers<'a>(
+    content: Element<'a, EditorMsg>,
+    kinds: &[ContainerKind],
+    p: Palette,
+    zoom: f32,
+) -> Element<'a, EditorMsg> {
+    kinds.iter().rev().fold(content, |inner, kind| match kind {
+        ContainerKind::Quote => quote_view(inner, p),
+        ContainerKind::Item { depth, .. } => {
+            row![space().width(LIST_INDENT * zoom * (*depth + 1) as f32), inner].into()
+        }
+    })
+}
+
+/// The width left for a block inside the containers `kinds`.
+fn inner_width(width: f32, kinds: &[ContainerKind], zoom: f32) -> f32 {
+    kinds.iter().fold(width, |w, kind| match kind {
+        ContainerKind::Quote => w - QUOTE_PADDING - QUOTE_BAR,
+        ContainerKind::Item { depth, .. } => w - LIST_INDENT * zoom * (*depth + 1) as f32,
+    })
 }
 
 fn quote_view<'a>(content: Element<'a, EditorMsg>, p: Palette) -> Element<'a, EditorMsg> {
@@ -1380,6 +1464,7 @@ fn live_runs(display: &Display, base: TextBase, ctx: &Ctx, page: &super::page::P
                                     width: s.width * scale,
                                     height: s.height * scale,
                                     center: true,
+                                    display: *block,
                                 }
                             }
                             Some(Rendered::Done(Err(_))) => RunKind::Label {

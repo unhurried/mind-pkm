@@ -32,8 +32,9 @@ pub struct Cluster {
 pub enum Measured {
     /// Text: its clusters, and the height above and below its baseline.
     Text { clusters: Vec<Cluster>, ascent: f32, descent: f32 },
-    /// One object over `shown` (an image, a formula, a label).
-    Object { shown: Range<usize>, width: f32, ascent: f32, descent: f32 },
+    /// One object over `shown` (an image, a formula, a label); a `centered`
+    /// one alone on its line (display math) in the middle of it.
+    Object { shown: Range<usize>, width: f32, ascent: f32, descent: f32, centered: bool },
     /// A line break at the shown byte `at`.
     Newline { at: usize },
     /// Something drawn that takes no place in the text (a preview) at `at`;
@@ -90,6 +91,8 @@ struct Atom {
     decoration: bool,
     /// On a line of its own.
     block: bool,
+    /// In the middle of its line when alone on it.
+    centered: bool,
     break_before: bool,
     no_break_after: bool,
     no_break_before: bool,
@@ -114,13 +117,14 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                         newline: false,
                         decoration: false,
                         block: false,
+                        centered: false,
                         break_before: cl.break_before,
                         no_break_after: cl.no_break_after,
                         no_break_before: cl.no_break_before,
                     });
                 }
             }
-            Measured::Object { shown, width, ascent, descent } => atoms.push(Atom {
+            Measured::Object { shown, width, ascent, descent, centered } => atoms.push(Atom {
                 item: i,
                 cluster: 0,
                 shown: shown.clone(),
@@ -131,6 +135,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                 newline: false,
                 decoration: false,
                 block: false,
+                centered: *centered,
                 break_before: true,
                 no_break_after: false,
                 no_break_before: false,
@@ -146,6 +151,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                 newline: false,
                 decoration: true,
                 block: *block,
+                centered: false,
                 break_before: true,
                 no_break_after: false,
                 no_break_before: false,
@@ -161,6 +167,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                 newline: true,
                 decoration: false,
                 block: false,
+                centered: false,
                 break_before: false,
                 no_break_after: false,
                 no_break_before: false,
@@ -262,6 +269,18 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                 }
             }
             x += atom.w;
+        }
+        // Display math alone on its line goes in the middle of it.
+        let mut content = line.iter().filter(|&&a| !atoms[a].newline);
+        if let (Some(&only), None) = (content.next(), content.next())
+            && atoms[only].centered
+            && width.is_finite()
+        {
+            let offset = ((width - x) / 2.0).max(0.0);
+            for f in &mut frags {
+                f.x += offset;
+            }
+            x += offset;
         }
         let start = line.first().map(|&a| atoms[a].shown.start);
         let end = line.last().map(|&a| atoms[a].shown.end);
@@ -548,7 +567,7 @@ mod tests {
                 ascent: 20.0,
                 descent: 6.0,
             },
-            Measured::Object { shown: 4..7, width: 30.0, ascent: 40.0, descent: 0.0 },
+            Measured::Object { shown: 4..7, width: 30.0, ascent: 40.0, descent: 0.0, centered: false },
             run(" ef", 7),
         ];
         let flow = layout(&items, 1000.0, (12.0, 4.0), 10);
@@ -629,6 +648,24 @@ mod tests {
         assert_eq!(flow.lines[2].frags[0].item, 2);
         // The caret skips the preview.
         assert_eq!(flow.caret(&items, 2).line, 2);
+    }
+
+    #[test]
+    fn display_math_alone_on_its_line_is_centered() {
+        let math = |at: usize| Measured::Object {
+            shown: at..at + 3,
+            width: 40.0,
+            ascent: 20.0,
+            descent: 10.0,
+            centered: true,
+        };
+        let items = [run("ab", 0), Measured::Newline { at: 2 }, math(3), Measured::Newline { at: 6 }, run("cd", 7)];
+        let flow = layout(&items, 200.0, (12.0, 4.0), 9);
+        assert_eq!(flow.lines[1].frags[0].x, 80.0);
+        assert_eq!(flow.caret(&items, 3).x, 80.0);
+        // Among text it stays where it is.
+        let items = [run("ab", 0), math(2)];
+        assert_eq!(layout(&items, 200.0, (12.0, 4.0), 5).lines[0].frags[1].x, 20.0);
     }
 
     #[test]

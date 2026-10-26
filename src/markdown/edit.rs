@@ -7,7 +7,7 @@
 //! a block (or a few, while text is pasted or typed). A new empty paragraph
 //! has no source until something is typed into it; it is `Pending`.
 
-use super::parse::{BlockKind, Document};
+use super::parse::{BlockKind, ContainerKind, Document, prefix_len};
 use std::ops::Range;
 
 /// A selection in the page text: `anchor` stays, `head` is the cursor.
@@ -38,6 +38,8 @@ pub struct Pending {
     pub at: usize,
     pub prefix: String,
     pub suffix: String,
+    /// The containers it is in (quotes, list items), outermost first.
+    pub outer: Vec<ContainerKind>,
 }
 
 impl Pending {
@@ -47,7 +49,9 @@ impl Pending {
         let rest = &text[at..];
         let newlines = rest.len() - rest.trim_start_matches('\n').len();
         let suffix = if rest.trim().is_empty() { 0 } else { 2usize.saturating_sub(newlines) };
-        Pending { at, prefix: "\n\n".into(), suffix: "\n".repeat(suffix) }
+        // Nothing before it (the only item of a list ended): no blank lines.
+        let prefix = if text[..at].trim().is_empty() { "" } else { "\n\n" };
+        Pending { at, prefix: prefix.into(), suffix: "\n".repeat(suffix), outer: Vec::new() }
     }
 
     /// An empty paragraph at `at`, between blocks or in an empty page: blank
@@ -65,20 +69,39 @@ impl Pending {
         let newlines_after = after.len() - after.trim_start_matches('\n').len();
         let prefix = if before.trim().is_empty() { 0 } else { 2usize.saturating_sub(newlines_before) };
         let suffix = if after.trim().is_empty() { 0 } else { 2usize.saturating_sub(newlines_after) };
-        Pending { at, prefix: "\n".repeat(prefix), suffix: "\n".repeat(suffix) }
+        Pending { at, prefix: "\n".repeat(prefix), suffix: "\n".repeat(suffix), outer: Vec::new() }
     }
 
     fn before(at: usize) -> Pending {
-        Pending { at, prefix: String::new(), suffix: "\n\n".into() }
+        Pending { at, prefix: String::new(), suffix: "\n\n".into(), outer: Vec::new() }
+    }
+
+    /// `typed` as it goes into the paragraph: its line breaks followed by
+    /// the prefixes of the containers the paragraph is in.
+    pub fn prefixed(&self, typed: &str) -> String {
+        if self.outer.is_empty() {
+            return typed.to_string();
+        }
+        typed
+            .split('\n')
+            .enumerate()
+            .map(
+                |(i, line)| {
+                    if i == 0 { line.to_string() } else { container_prefix(&self.outer, line.trim().is_empty()) + line }
+                },
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// The text with `typed` put in the paragraph, and where `typed` starts.
     pub fn materialize(&self, text: &str, typed: &str) -> (String, usize) {
+        let typed = self.prefixed(typed);
         let mut out = String::with_capacity(text.len() + typed.len() + 4);
         out.push_str(&text[..self.at]);
         out.push_str(&self.prefix);
         let start = out.len();
-        out.push_str(typed);
+        out.push_str(&typed);
         out.push_str(&self.suffix);
         out.push_str(&text[self.at..]);
         (out, start)
@@ -126,6 +149,307 @@ pub fn splice(text: &str, range: Range<usize>, with: &str) -> String {
     out.push_str(with);
     out.push_str(&text[range.end..]);
     out
+}
+
+/// The lines of a container without the prefixes (`>`, indentation) of the
+/// containers around a block in it: the text the editing rules see for a
+/// block inside quotes and list items, which they treat as a page.
+struct Inner {
+    /// The page's whole lines these are.
+    span: Range<usize>,
+    /// For each line: where it starts in the page and the length of its prefix.
+    lines: Vec<(usize, usize)>,
+    text: String,
+    /// The containers, outermost first.
+    kinds: Vec<ContainerKind>,
+}
+
+impl Inner {
+    /// The lines of the innermost container around the block at `offset`
+    /// (for a list item, its lines after the first); None for a block in no
+    /// container.
+    fn of(text: &str, doc: &Document, offset: usize) -> Option<Inner> {
+        let block = doc.blocks.iter().position(|b| b.range.start <= offset && offset <= b.range.end)?;
+        let &innermost = doc.blocks[block].outer.last()?;
+        Some(Inner::within(text, doc, &doc.blocks[block].outer[..], innermost))
+    }
+
+    /// The lines of container `innermost`, inside the containers `outer` (it included).
+    fn within(text: &str, doc: &Document, outer: &[usize], innermost: usize) -> Inner {
+        let c = &doc.containers[innermost];
+        let start = match c.kind {
+            ContainerKind::Quote => line_range(text, c.range.start).start,
+            ContainerKind::Item { .. } => (line_range(text, c.range.start).end + 1).min(c.range.end),
+        };
+        let span = start..line_range(text, c.range.end).end;
+        let kinds: Vec<ContainerKind> = outer.iter().map(|&i| doc.containers[i].kind).collect();
+        let mut lines = Vec::new();
+        let mut inner = String::with_capacity(span.len());
+        let mut pos = span.start;
+        for line in text[span.clone()].split('\n') {
+            let prefix = prefix_len(line, kinds.iter().copied());
+            if !lines.is_empty() {
+                inner.push('\n');
+            }
+            inner.push_str(&line[prefix..]);
+            lines.push((pos, prefix));
+            pos += line.len() + 1;
+        }
+        Inner { span, lines, text: inner, kinds }
+    }
+
+    /// The offset in the lines of a page offset (one in a prefix: its line's content start).
+    fn to_inner(&self, offset: usize) -> usize {
+        let offset = offset.clamp(self.span.start, self.span.end);
+        let k = self.lines.partition_point(|&(start, _)| start <= offset).saturating_sub(1);
+        let inner_start: usize = self.lines[..k].iter().zip(&self.lines[1..]).map(|(a, b)| b.0 - a.0 - a.1).sum();
+        let (start, prefix) = self.lines[k];
+        inner_start + offset.saturating_sub(start + prefix)
+    }
+
+    fn prefix(&self, blank: bool) -> String {
+        container_prefix(&self.kinds, blank)
+    }
+
+    /// The page with the lines replaced by `new` (a rule's outcome on them):
+    /// lines the rule left as they were keep their prefix, the others get the
+    /// containers' prefix (that of a line with text on the line holding the
+    /// offset `open`, where text is going to be typed); and the page offset
+    /// of each offset of `new`.
+    fn put_back(&self, page: &str, new: &str, open: Option<usize>) -> (String, impl Fn(usize) -> usize + use<>) {
+        let old = &self.text;
+        let same_start = old.bytes().zip(new.bytes()).take_while(|(a, b)| a == b).count();
+        let same_end = old.bytes().rev().zip(new.bytes().rev()).take_while(|(a, b)| a == b).count();
+        let same_end = same_end.min(old.len() - same_start).min(new.len() - same_start);
+        let old_starts: Vec<usize> = std::iter::once(0).chain(old.match_indices('\n').map(|(i, _)| i + 1)).collect();
+        let mut out = String::with_capacity(page.len() + new.len());
+        out.push_str(&page[..self.span.start]);
+        // For each line of `new`: where its content starts in the page.
+        let mut starts: Vec<(usize, usize)> = Vec::new();
+        let mut at = 0;
+        for line in new.split('\n') {
+            if at > 0 {
+                out.push('\n');
+            }
+            let old_line = if at < same_start {
+                old_starts.binary_search(&at).ok()
+            } else if at >= new.len() - same_end {
+                old_starts.binary_search(&(at + old.len() - new.len())).ok()
+            } else {
+                None
+            };
+            let typed_into = open.is_some_and(|o| at <= o && o <= at + line.len());
+            let prefix = match old_line {
+                // A blank line to type on gets a whole prefix, whatever it had.
+                _ if typed_into && line.trim().is_empty() => self.prefix(false),
+                Some(k) => {
+                    let (start, len) = self.lines[k];
+                    page[start..start + len].to_string()
+                }
+                None => self.prefix(line.trim().is_empty()),
+            };
+            out.push_str(&prefix);
+            starts.push((at, out.len()));
+            out.push_str(line);
+            at += line.len() + 1;
+        }
+        out.push_str(&page[self.span.end..]);
+        let map = move |o: usize| {
+            let k = starts.partition_point(|&(s, _)| s <= o).saturating_sub(1);
+            starts[k].1 + (o - starts[k].0)
+        };
+        (out, map)
+    }
+
+    /// A rule's outcome on the lines as the page's.
+    fn edited(&self, page: &str, e: Edited) -> Edited {
+        let open = match &e.pending {
+            Some(p) => (!p.prefix.contains('\n')).then_some(p.at),
+            None => Some(e.sel.head),
+        };
+        let (text, map) = self.put_back(page, &e.text, open);
+        let sel = Sel { anchor: map(e.sel.anchor), head: map(e.sel.head) };
+        let pending = e.pending.map(|p| {
+            let at = map(p.at);
+            // The new paragraph's lines get the prefixes as well.
+            let ends_blank = text[at..].starts_with('\n') || at == text.len();
+            Pending {
+                at,
+                prefix: self.prefixed(&p.prefix, false),
+                suffix: self.prefixed(&p.suffix, ends_blank),
+                outer: self.kinds.iter().copied().chain(p.outer).collect(),
+            }
+        });
+        Edited { text, sel, pending }
+    }
+
+    /// `s` with the prefix after each of its line breaks; `last_blank`:
+    /// whether the line its last line break starts stays blank.
+    fn prefixed(&self, s: &str, last_blank: bool) -> String {
+        let mut out = String::new();
+        let mut rest = s;
+        while let Some(i) = rest.find('\n') {
+            out.push_str(&rest[..=i]);
+            rest = &rest[i + 1..];
+            let blank = if rest.contains('\n') { rest.starts_with('\n') } else { rest.is_empty() && last_blank };
+            out.push_str(&self.prefix(blank));
+        }
+        out.push_str(rest);
+        out
+    }
+}
+
+/// The prefix a new line inside the containers `kinds` (outermost first)
+/// gets: their prefixes, `>` alone on a blank line.
+pub fn container_prefix(kinds: &[ContainerKind], blank: bool) -> String {
+    let n = kinds.len();
+    let p: String = kinds.iter().enumerate().map(|(i, k)| k.line_prefix(blank && i + 1 == n)).collect();
+    if blank { p.trim_end().to_string() } else { p }
+}
+
+/// `nested` for a range of blocks: inside their containers when they all
+/// share them, else as it is.
+pub fn nested_blocks(
+    text: &str,
+    doc: &Document,
+    range: Range<usize>,
+    sel: Sel,
+    rule: impl FnOnce(&str, &Document, Range<usize>, Sel) -> Option<Edited>,
+) -> Option<Edited> {
+    let mut outers = doc
+        .blocks
+        .iter()
+        .filter(|b| b.range.end >= range.start && b.range.start <= range.end.max(range.start))
+        .map(|b| &b.outer);
+    let first = outers.next();
+    if first.is_some_and(|f| !f.is_empty() && outers.all(|o| o == f)) {
+        let inner =
+            Inner::of(text, doc, range.start.max(doc.blocks.iter().find(|b| b.range.end >= range.start)?.range.start))?;
+        let inner_doc = Document::parse(&inner.text);
+        let r = inner.to_inner(range.start)..inner.to_inner(range.end);
+        let s = Sel { anchor: inner.to_inner(sel.anchor), head: inner.to_inner(sel.head) };
+        let e = rule(&inner.text, &inner_doc, r, s)?;
+        return Some(inner.edited(text, e));
+    }
+    rule(text, doc, range, sel)
+}
+
+/// Applies the editing `rule` to the block at `region` inside the containers
+/// around it (quotes, list items): to the lines of the innermost one without
+/// their prefixes, as to a page; the lines it changes get the prefixes back.
+/// A block in no container gets the rule as it is.
+pub fn nested(
+    text: &str,
+    doc: &Document,
+    region: Range<usize>,
+    sel: Sel,
+    rule: impl FnOnce(&str, &Document, Range<usize>, Sel) -> Option<Edited>,
+) -> Option<Edited> {
+    let Some(inner) = Inner::of(text, doc, region.start) else { return rule(text, doc, region, sel) };
+    let inner_doc = Document::parse(&inner.text);
+    let r = inner.to_inner(region.start)..inner.to_inner(region.end);
+    let s = Sel { anchor: inner.to_inner(sel.anchor), head: inner.to_inner(sel.head) };
+    let e = rule(&inner.text, &inner_doc, r, s)?;
+    Some(inner.edited(text, e))
+}
+
+/// Backspace (see `backspace`) inside the containers around the block: at
+/// the start of the first block of a quote, the block leaves the quote; of
+/// a list item, it joins the item's text as the block before it.
+pub fn backspace_nested(text: &str, doc: &Document, region: Range<usize>, c: usize) -> Option<Edited> {
+    let Some(inner) = Inner::of(text, doc, region.start) else { return backspace(text, doc, region, c) };
+    let inner_doc = Document::parse(&inner.text);
+    let r = inner.to_inner(region.start)..inner.to_inner(region.end);
+    let ic = inner.to_inner(c);
+    if let Some(e) = backspace(&inner.text, &inner_doc, r.clone(), ic) {
+        return Some(inner.edited(text, e));
+    }
+    if ic != r.start {
+        return None;
+    }
+    match inner.kinds.last() {
+        Some(ContainerKind::Item { .. }) => backspace(text, doc, region.clone(), region.start),
+        _ => leave_container(text, doc, region),
+    }
+}
+
+/// The block at `region` out of the innermost container around it: that
+/// container's prefix off its lines, and off a blank line after it.
+fn leave_container(text: &str, doc: &Document, region: Range<usize>) -> Option<Edited> {
+    let block = doc.blocks.iter().position(|b| b.range.start == region.start)?;
+    let kinds = doc.outer_kinds(block);
+    if kinds.is_empty() {
+        return None;
+    }
+    let outer = &kinds[..kinds.len() - 1];
+    let lines = line_range(text, region.start).start..line_range(text, region.end).end;
+    // Its lines, and the blank one after it.
+    let next = line_range(text, (lines.end + 1).min(text.len()));
+    let next_blank = lines.end < text.len() && {
+        let line = &text[next.clone()];
+        line[prefix_len(line, kinds.iter().copied())..].trim().is_empty()
+    };
+    let end = if next_blank { next.end } else { lines.end };
+    let content = content_start(text, region.start);
+    let mut out = String::new();
+    let mut removed_before = 0;
+    let mut pos = lines.start;
+    for (i, line) in text[lines.start..end].split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let keep = prefix_len(line, outer.iter().copied());
+        let drop = prefix_len(line, kinds.iter().copied()) - keep;
+        let rest = &line[keep + drop..];
+        if rest.trim().is_empty() {
+            out.push_str(line[..keep].trim_end());
+        } else {
+            out.push_str(&line[..keep]);
+            out.push_str(rest);
+        }
+        if pos + keep + drop <= content {
+            removed_before += drop;
+        }
+        pos += line.len() + 1;
+    }
+    let t = splice(text, lines.start..end, &out);
+    Some(Edited::new(t, content - removed_before))
+}
+
+/// A new empty paragraph at `at`, a position between blocks, inside the
+/// containers around `at` (their first `depth` only, when given).
+pub fn gap_pending(text: &str, doc: &Document, at: usize, depth: Option<usize>) -> Pending {
+    // The containers around it, outermost first (as they were found): those
+    // whose lines it is on (a list item's after its first).
+    let mut around: Vec<usize> = (0..doc.containers.len())
+        .filter(|&c| {
+            let r = &doc.containers[c].range;
+            let first_line_end = line_range(text, r.start).end;
+            let start = match doc.containers[c].kind {
+                ContainerKind::Quote => r.start,
+                ContainerKind::Item { .. } => first_line_end + 1,
+            };
+            start <= at && at <= line_range(text, r.end).end
+        })
+        .collect();
+    if let Some(d) = depth {
+        around.truncate(d);
+    }
+    let Some(&innermost) = around.last() else { return Pending::gap(text, at) };
+    let inner = Inner::within(text, doc, &around, innermost);
+    let p = Pending::gap(&inner.text, inner.to_inner(at));
+    // The text stays as it is: a prefix the line it goes on lacks comes with it.
+    let (_, map) = inner.put_back(text, &inner.text, None);
+    let at = map(p.at);
+    let mut prefix = inner.prefixed(&p.prefix, false);
+    if !p.prefix.contains('\n') {
+        let present = &text[line_range(text, at).start..at];
+        if let Some(missing) = inner.prefix(false).strip_prefix(present) {
+            prefix = format!("{missing}{prefix}");
+        }
+    }
+    let ends_blank = text[at..].starts_with('\n') || at == text.len();
+    Pending { at, prefix, suffix: inner.prefixed(&p.suffix, ends_blank), outer: inner.kinds }
 }
 
 /// The marker at the start of a block's first line.
@@ -572,9 +896,11 @@ fn indent_list_item(text: &str, doc: &Document, region: Range<usize>, sel: Sel, 
         }
         m.indent - parent_indent(text, region.start, m.indent)
     } else {
-        // Under the previous item of the same list.
+        // Under the previous item of the same list (past the blocks inside items).
+        let outer = doc.blocks[index].outer.len();
         let prev = doc.blocks[..index].iter().rev().find_map(|b| match &b.kind {
-            BlockKind::ListItem(p) if !p.continuation && p.depth <= item.depth => Some((b, p.depth)),
+            _ if b.outer.len() > outer => None,
+            BlockKind::ListItem(p) if p.depth <= item.depth => Some((b, p.depth)),
             BlockKind::ListItem(_) => None,
             _ => Some((b, usize::MAX)),
         });
@@ -655,31 +981,31 @@ mod tests {
     fn enter_at(marked: &str) -> String {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
-        show(&enter(&text, &doc, region, Sel::caret(c)).expect("handled"))
+        show(&nested(&text, &doc, region, Sel::caret(c), enter).expect("handled"))
     }
 
     fn shift_enter_at(marked: &str) -> String {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
-        show(&shift_enter(&text, &doc, region, Sel::caret(c)).expect("handled"))
+        show(&nested(&text, &doc, region, Sel::caret(c), shift_enter).expect("handled"))
     }
 
     fn backspace_at(marked: &str) -> Option<String> {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
-        backspace(&text, &doc, region, c).map(|e| show(&e))
+        backspace_nested(&text, &doc, region, c).map(|e| show(&e))
     }
 
     fn delete_at(marked: &str) -> Option<String> {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
-        delete(&text, &doc, region, c).map(|e| show(&e))
+        nested(&text, &doc, region, Sel::caret(c), |t, d, r, s| delete(t, d, r, s.head)).map(|e| show(&e))
     }
 
     fn tab_at(marked: &str, outdent: bool) -> String {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
-        show(&indent(&text, &doc, region, Sel::caret(c), outdent).expect("handled"))
+        show(&nested(&text, &doc, region, Sel::caret(c), |t, d, r, s| indent(t, d, r, s, outdent)).expect("handled"))
     }
 
     #[test]
@@ -735,9 +1061,65 @@ mod tests {
 
     #[test]
     fn enter_in_quotes() {
-        assert_eq!(enter_at("> one‸"), "> one\n>\n> ‸");
-        assert_eq!(enter_at("> > deep‸"), "> > deep\n> >\n> > ‸");
-        assert_eq!(enter_at("> one\n>\n> ‸"), "> one\n\n¶");
+        // A new paragraph in the quote, which gets its source once typed into.
+        assert_eq!(enter_at("> one‸"), "> one\n>\n> ¶");
+        assert_eq!(enter_at("> > deep‸"), "> > deep\n> >\n> > ¶");
+        assert_eq!(enter_at("> one‸two"), "> one\n>\n> ‸two");
+        // Lists in a quote.
+        assert_eq!(enter_at("> - a‸"), "> - a\n> - ‸");
+        assert_eq!(enter_at("> 1. a‸\n> 2. b"), "> 1. a\n> 2. ‸\n> 2. b");
+        assert_eq!(enter_at("> - a\n> - ‸"), "> - a\n>\n> ¶");
+        assert_eq!(enter_at("> - ‸"), "> ¶");
+        // A heading in a quote.
+        assert_eq!(enter_at("> # H‸\n>\n> p"), "> # H\n>\n> ¶\n>\n> p");
+        // A quote in a list item.
+        assert_eq!(enter_at("- a\n\n  > q‸"), "- a\n\n  > q\n  >\n  > ¶");
+    }
+
+    #[test]
+    fn tab_and_backspace_in_a_quote() {
+        assert_eq!(tab_at("> - a\n> - b‸", false), "> - a\n>   - b‸");
+        assert_eq!(tab_at("> - a\n>   - b‸", true), "> - a\n> - b‸");
+        assert_eq!(backspace_at("> - ‸a").as_deref(), Some("> ‸a"));
+        // The first block of a quote leaves it; a later one joins the one before.
+        assert_eq!(backspace_at("> ‸one\n>\n> two").as_deref(), Some("‸one\n\n> two"));
+        assert_eq!(backspace_at("> one\n>\n> ‸two").as_deref(), Some("> one‸two"));
+        assert_eq!(delete_at("> one‸\n>\n> two").as_deref(), Some("> one‸two"));
+        assert_eq!(backspace_at("> > ‸deep").as_deref(), Some("> ‸deep"));
+    }
+
+    #[test]
+    fn new_paragraphs_in_gaps_inside_a_quote() {
+        let gap = |text: &str, at: usize| {
+            let doc = Document::parse(text);
+            let p = gap_pending(text, &doc, at, None);
+            p.materialize(text, "x").0
+        };
+        // On a quote's blank line between two paragraphs.
+        assert_eq!(gap("> a\n>\n> b", 5), "> a\n>\n> x\n>\n> b");
+        // On a quote's blank first line.
+        assert_eq!(gap(">\n> b", 1), "> x\n>\n> b");
+        // Out of the quote: none.
+        assert_eq!(gap("> a\n\nb", 4), "> a\n\nx\n\nb");
+    }
+
+    #[test]
+    fn rules_in_the_blocks_of_a_list_item() {
+        // A new paragraph in the item, under its text.
+        assert_eq!(enter_at("- p1\n\n  p2‸\n- b"), "- p1\n\n  p2\n\n  ¶\n- b");
+        assert_eq!(shift_enter_at("- p1\n\n  p2‸"), "- p1\n\n  p2\n  ‸");
+        // A fence typed there is completed inside the item.
+        assert_eq!(enter_at("- a\n\n  ```‸"), "- a\n\n  ```\n  ‸\n  ```");
+        // Typed before other blocks, the fence is a paragraph until Enter (the editor masks it).
+        let text = "- a\n\n  ```\n\n  > q";
+        let fence = text.find('`').unwrap();
+        let doc = Document::parse_masked(text, Some(fence));
+        let region = region_at(&doc, fence + 3).unwrap();
+        let e = nested(text, &doc, region, Sel::caret(fence + 3), enter).unwrap();
+        assert_eq!(show(&e), "- a\n\n  ```\n  ‸\n  ```\n\n  > q");
+        // The first block after the item's text joins it.
+        assert_eq!(backspace_at("- p1\n\n  ‸p2").as_deref(), Some("- p1‸p2"));
+        assert_eq!(delete_at("- p1‸\n\n  p2").as_deref(), Some("- p1‸p2"));
     }
 
     #[test]

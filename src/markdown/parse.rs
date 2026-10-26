@@ -4,9 +4,12 @@
 //! The whole text is parsed at once (pulldown-cmark, with byte offsets), so
 //! that reference links and footnotes resolve across blocks. Top-level
 //! elements become blocks; lists are flattened so that every list item is a
-//! block of its own (without its nested lists). Text that no element covers
-//! (link reference definitions) becomes an `Other` block, so that every
-//! non-blank byte of the page belongs to exactly one block.
+//! block of its own (without its nested lists). Quotes are containers: each
+//! block in a quote is a block of its own, and so is each block of a list
+//! item after its first one; the containers around a block are its `outer`.
+//! Text that no element covers (link reference definitions) becomes an
+//! `Other` block, so that every non-blank byte of the page outside container
+//! syntax belongs to exactly one block.
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::collections::HashMap;
@@ -37,6 +40,66 @@ pub struct Block {
     /// contents of a quote, the rows of a table...). Never contains a nested
     /// list of a list item.
     pub events: Range<usize>,
+    /// The containers around it (indices in `Document::containers`), outermost first.
+    pub outer: Vec<usize>,
+}
+
+/// A quote, or a list item holding blocks after its first one: its blocks
+/// are blocks of their own, with their lines starting with its prefix.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Container {
+    pub kind: ContainerKind,
+    /// From the start of its first line to its last non-blank character.
+    pub range: Range<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerKind {
+    /// Its lines start with `>` (and a space).
+    Quote,
+    /// Its lines after the first are indented by `indent` spaces (its
+    /// content column, in its lines without the prefixes of the containers
+    /// around it); `depth` is that of its block.
+    Item { depth: usize, indent: usize },
+}
+
+impl ContainerKind {
+    /// What it puts at the start of a line of its content, and of a blank one.
+    pub fn line_prefix(self, blank: bool) -> String {
+        match (self, blank) {
+            (ContainerKind::Quote, false) => "> ".into(),
+            (ContainerKind::Quote, true) => ">".into(),
+            (ContainerKind::Item { indent, .. }, false) => " ".repeat(indent),
+            (ContainerKind::Item { .. }, true) => String::new(),
+        }
+    }
+}
+
+/// The length of the prefixes the containers `kinds` (outermost first) put
+/// at the start of `line`: a quote's `>` (after up to three spaces) with the
+/// space after it, a list item's indentation up to its content column. A
+/// line missing a quote's `>` (a lazy continuation line) ends there.
+pub fn prefix_len(line: &str, kinds: impl IntoIterator<Item = ContainerKind>) -> usize {
+    let b = line.as_bytes();
+    let mut pos = 0;
+    for kind in kinds {
+        match kind {
+            ContainerKind::Quote => {
+                let spaces = b[pos..].iter().take(3).take_while(|&&c| c == b' ').count();
+                if b.get(pos + spaces) != Some(&b'>') {
+                    return pos;
+                }
+                pos += spaces + 1;
+                if matches!(b.get(pos), Some(b' ' | b'\t')) {
+                    pos += 1;
+                }
+            }
+            ContainerKind::Item { indent, .. } => {
+                pos += b[pos..].iter().take(indent).take_while(|&&c| c == b' ').count();
+            }
+        }
+    }
+    pos
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,8 +136,6 @@ pub struct ListItem {
     pub task: Option<bool>,
     /// Whether the list separates its items with blank lines.
     pub loose: bool,
-    /// The item's content after one of its nested lists, not the item itself.
-    pub continuation: bool,
     /// The end of the item with all its nested lists.
     pub subtree_end: usize,
     /// Where its top-level list starts: items of one list share it.
@@ -117,6 +178,7 @@ pub struct Document {
     /// The events with their byte ranges in `text`.
     pub events: Vec<(Event<'static>, Range<usize>)>,
     pub blocks: Vec<Block>,
+    pub containers: Vec<Container>,
     /// Footnote labels by the number they are shown with (order of first reference).
     pub footnotes: HashMap<String, usize>,
     pub headings: Vec<HeadingInfo>,
@@ -124,23 +186,52 @@ pub struct Document {
 
 impl Document {
     pub fn parse(text: &str) -> Document {
-        let prepared = lenient_links(text);
+        Document::parse_masked(text, None)
+    }
+
+    /// Parses `text` as if the byte at `mask` (an ASCII character other than
+    /// a line break) were a letter, so that a marker being typed there is
+    /// not taken as syntax; the text the parse shows there is the real one.
+    pub fn parse_masked(text: &str, mask: Option<usize>) -> Document {
+        let mask = mask.filter(|&m| text.as_bytes().get(m).is_some_and(|b| b.is_ascii() && *b != b'\n'));
+        let masked = mask.map(|m| {
+            let mut bytes = text.as_bytes().to_vec();
+            bytes[m] = b'x';
+            String::from_utf8(bytes).expect("an ASCII byte replaced by an ASCII byte")
+        });
+        let prepared = lenient_links(masked.as_deref().unwrap_or(text));
         let parser = Parser::new_ext(&prepared.text, options());
-        let events: Vec<(Event<'static>, Range<usize>)> = parser
+        let mut events: Vec<(Event<'static>, Range<usize>)> = parser
             .into_offset_iter()
             .map(|(e, r)| (e.into_static(), prepared.original(r.start)..prepared.original(r.end)))
             .collect();
+        if let Some(m) = mask {
+            for (event, range) in &mut events {
+                if let Event::Text(t) = event
+                    && range.contains(&m)
+                    && t.len() == range.len()
+                {
+                    *event = Event::Text(text[range.clone()].to_string().into());
+                }
+            }
+        }
         let mut doc = Document {
             text: text.to_string(),
             events,
             blocks: Vec::new(),
+            containers: Vec::new(),
             footnotes: HashMap::new(),
             headings: Vec::new(),
         };
-        doc.blocks = segment(&doc.text, &doc.events);
+        (doc.blocks, doc.containers) = segment(&doc.text, &doc.events);
         doc.footnotes = number_footnotes(&doc.events);
         doc.headings = headings(&doc);
         doc
+    }
+
+    /// The kinds of the containers around block `block`, outermost first.
+    pub fn outer_kinds(&self, block: usize) -> Vec<ContainerKind> {
+        self.blocks.get(block).map_or(Vec::new(), |b| b.outer.iter().map(|&c| self.containers[c].kind).collect())
     }
 
     /// The index of the block containing byte `offset` (its end included).
@@ -315,15 +406,50 @@ fn code_ranges(text: &str) -> Vec<Range<usize>> {
     ranges
 }
 
-/// The start of the line holding `offset` when only whitespace precedes it there.
-fn line_start_if_indented(text: &str, offset: usize) -> usize {
+/// The start of the line holding `offset` when only whitespace (and, inside
+/// a container, the `>` of quotes) precedes it there.
+fn line_start_if_indented(text: &str, offset: usize, inside: bool) -> usize {
     let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
-    if text[line_start..offset].chars().all(|c| c == ' ' || c == '\t') { line_start } else { offset }
+    let prefix = |c: char| c == ' ' || c == '\t' || (inside && c == '>');
+    if text[line_start..offset].chars().all(prefix) { line_start } else { offset }
 }
 
-/// `range` without trailing whitespace.
-fn trim_end(text: &str, range: Range<usize>) -> Range<usize> {
-    let end = range.start + text[range.clone()].trim_end().len();
+/// Whether an event starts a block (or is a thematic break).
+fn is_block(e: &Event) -> bool {
+    matches!(
+        e,
+        Event::Rule
+            | Event::Start(
+                Tag::Paragraph
+                    | Tag::Heading { .. }
+                    | Tag::BlockQuote(_)
+                    | Tag::CodeBlock(_)
+                    | Tag::HtmlBlock
+                    | Tag::Table(_)
+                    | Tag::MetadataBlock(_)
+                    | Tag::FootnoteDefinition(_)
+                    | Tag::List(_)
+            )
+    )
+}
+
+/// Whether `s` holds nothing but whitespace (and, inside a container, `>`).
+fn is_blank(s: &str, inside: bool) -> bool {
+    s.chars().all(|c| c.is_whitespace() || (inside && c == '>'))
+}
+
+/// `range` without trailing whitespace, nor trailing lines holding nothing
+/// but the prefixes of the containers `kinds` around it.
+fn trim_end(text: &str, range: Range<usize>, kinds: &[ContainerKind]) -> Range<usize> {
+    let mut end = range.start + text[range.clone()].trim_end().len();
+    while !kinds.is_empty() {
+        let Some(nl) = text[range.start..end].rfind('\n') else { break };
+        let line = &text[range.start + nl + 1..end];
+        if !line[prefix_len(line, kinds.iter().copied())..].trim().is_empty() {
+            break;
+        }
+        end = range.start + text[range.start..range.start + nl].trim_end().len();
+    }
     range.start..end
 }
 
@@ -345,37 +471,192 @@ fn matching_end(events: &[(Event<'static>, Range<usize>)], start: usize) -> usiz
     events.len() - 1
 }
 
-fn segment(text: &str, events: &[(Event<'static>, Range<usize>)]) -> Vec<Block> {
-    let mut blocks = Vec::new();
-    let mut i = 0;
-    while i < events.len() {
-        let (event, range) = &events[i];
-        match event {
-            Event::Start(tag) => {
-                let end = matching_end(events, i);
-                if let Tag::List(start) = tag {
-                    let list = List { text, events, top: range.start };
-                    list.flatten(i, end, *start, 0, &mut blocks);
-                } else {
-                    let kind = block_kind(tag, &events[i + 1..end], text, range);
-                    let range = trim_end(text, line_start_if_indented(text, range.start)..range.end);
-                    blocks.push(Block { range, kind, events: i + 1..end });
+fn segment(text: &str, events: &[(Event<'static>, Range<usize>)]) -> (Vec<Block>, Vec<Container>) {
+    let mut s = Segmenter { text, events, blocks: Vec::new(), containers: Vec::new() };
+    s.children(0, events.len(), &[]);
+    let mut blocks = s.blocks;
+    blocks.sort_by_key(|b| b.range.start);
+    (fill_gaps(text, blocks), s.containers)
+}
+
+/// Turns the parser's events into blocks and containers.
+struct Segmenter<'a> {
+    text: &'a str,
+    events: &'a [(Event<'static>, Range<usize>)],
+    blocks: Vec<Block>,
+    containers: Vec<Container>,
+}
+
+impl Segmenter<'_> {
+    /// The elements among the events `from..to` (siblings), inside the containers `outer`.
+    fn children(&mut self, from: usize, to: usize, outer: &[usize]) {
+        let mut i = from;
+        while i < to {
+            let (event, range) = &self.events[i];
+            match event {
+                Event::Start(tag) => {
+                    let end = matching_end(self.events, i);
+                    match tag {
+                        Tag::List(start) => self.list(i, end, *start, 0, outer, range.start),
+                        Tag::BlockQuote(_) => self.quote(i, end, outer),
+                        _ => self.leaf(i, end, outer),
+                    }
+                    i = end + 1;
                 }
-                i = end + 1;
-            }
-            Event::Rule => {
-                let range = trim_end(text, line_start_if_indented(text, range.start)..range.end);
-                blocks.push(Block { range, kind: BlockKind::ThematicBreak, events: i..i });
-                i += 1;
-            }
-            _ => {
-                // Top-level HTML outside an HTML block does not occur; skip anything else.
-                i += 1;
+                Event::Rule => {
+                    self.leaf(i, i, outer);
+                    i += 1;
+                }
+                _ => {
+                    // Top-level HTML outside an HTML block does not occur; skip anything else.
+                    i += 1;
+                }
             }
         }
     }
-    blocks.sort_by_key(|b| b.range.start);
-    fill_gaps(text, blocks)
+
+    fn kinds(&self, outer: &[usize]) -> Vec<ContainerKind> {
+        outer.iter().map(|&c| self.containers[c].kind).collect()
+    }
+
+    /// The start of a block beginning at `offset`: its line's start when
+    /// only indentation or container syntax precedes it there.
+    fn start(&self, offset: usize, outer: &[usize]) -> usize {
+        line_start_if_indented(self.text, offset, !outer.is_empty())
+    }
+
+    /// A block for the element started at event `start` (ended at `end`; a
+    /// rule when they are the same).
+    fn leaf(&mut self, start: usize, end: usize, outer: &[usize]) {
+        let (event, range) = &self.events[start];
+        let (kind, events) = match event {
+            Event::Start(tag) => (block_kind(tag, &self.events[start + 1..end], self.text, range), start + 1..end),
+            _ => (BlockKind::ThematicBreak, start..start),
+        };
+        let range = trim_end(self.text, self.start(range.start, outer)..range.end, &self.kinds(outer));
+        self.blocks.push(Block { range, kind, events, outer: outer.to_vec() });
+    }
+
+    /// A quote: a container for its blocks, or an empty `Quote` block.
+    fn quote(&mut self, start: usize, end: usize, outer: &[usize]) {
+        let range = self.start(self.events[start].1.start, outer)..self.events[start].1.end;
+        let range = trim_end(self.text, range, &self.kinds(outer));
+        let empty = !self.events[start + 1..end].iter().any(|(e, _)| matches!(e, Event::Start(_) | Event::Rule));
+        if empty {
+            self.blocks.push(Block { range, kind: BlockKind::Quote, events: start + 1..end, outer: outer.to_vec() });
+            return;
+        }
+        self.containers.push(Container { kind: ContainerKind::Quote, range });
+        let mut inner = outer.to_vec();
+        inner.push(self.containers.len() - 1);
+        self.children(start + 1, end, &inner);
+    }
+
+    /// Adds a block for every item of the list starting at event `start` (and
+    /// ending at `end`), and recursively for its nested lists and for the
+    /// blocks of its items after their first one. `top`: where the list at
+    /// depth 0 starts.
+    #[allow(clippy::too_many_arguments)]
+    fn list(&mut self, start: usize, end: usize, first_number: Option<u64>, depth: usize, outer: &[usize], top: usize) {
+        let (text, events) = (self.text, self.events);
+        // A loose list has paragraphs in its items.
+        let loose = {
+            let mut level = 0;
+            let mut loose = false;
+            for (event, _) in &events[start + 1..end] {
+                match event {
+                    Event::Start(Tag::Item) => level += 1,
+                    Event::End(TagEnd::Item) => level -= 1,
+                    Event::Start(Tag::Paragraph) if level == 1 => loose = true,
+                    Event::Start(Tag::List(_)) => level += 10,
+                    Event::End(TagEnd::List(_)) => level -= 10,
+                    _ => {}
+                }
+            }
+            loose
+        };
+        let mut index = 0;
+        let mut i = start + 1;
+        while i < end {
+            if !matches!(events[i].0, Event::Start(Tag::Item)) {
+                i += 1;
+                continue;
+            }
+            let item_end = matching_end(events, i);
+            let item_range = events[i].1.clone();
+            let number = first_number.map(|n| n + index);
+            index += 1;
+            let task = events[i + 1..item_end].iter().take(3).find_map(|(e, _)| match e {
+                Event::TaskListMarker(checked) => Some(*checked),
+                _ => None,
+            });
+            let item_start = self.start(item_range.start, outer);
+            let item = ListItem { depth, number, task, loose, subtree_end: item_range.end, list: top };
+            // The item's block: its first block (or a tight item's text), up
+            // to its first nested list or other block.
+            let mut j = i + 1;
+            let mut seen = false;
+            while j < item_end {
+                let e = &events[j].0;
+                if matches!(e, Event::Start(Tag::List(_))) || (seen && is_block(e)) {
+                    break;
+                }
+                seen |= !matches!(e, Event::TaskListMarker(_));
+                j = if matches!(e, Event::Start(_)) { matching_end(events, j) } else { j } + 1;
+            }
+            let own_end =
+                if j < item_end { line_start_if_indented(text, events[j].1.start, true) } else { item_range.end };
+            let range = trim_end(text, item_start..own_end.max(item_start), &self.kinds(outer));
+            let kind = BlockKind::ListItem(item);
+            self.blocks.push(Block { range, kind, events: i + 1..j, outer: outer.to_vec() });
+            // The rest: nested lists as items, any other block a block of its own inside the item.
+            let mut container: Option<usize> = None;
+            while j < item_end {
+                let e = &events[j].0;
+                let child_end = if matches!(e, Event::Start(_)) { matching_end(events, j) } else { j };
+                if let Event::Start(Tag::List(n)) = e {
+                    self.list(j, child_end, *n, depth + 1, outer, top);
+                    j = child_end + 1;
+                    continue;
+                }
+                if matches!(e, Event::TaskListMarker(_)) {
+                    j += 1;
+                    continue;
+                }
+                let c = *container.get_or_insert_with(|| {
+                    let line_start = text[..item_start].rfind('\n').map_or(0, |p| p + 1);
+                    let line = &text[line_start..text[line_start..].find('\n').map_or(text.len(), |e| line_start + e)];
+                    let prefix = prefix_len(line, outer.iter().map(|&c| self.containers[c].kind));
+                    // The content column: where its first content starts on its first line.
+                    let first = events[i + 1..item_end].first().map_or(item_range.end, |(_, r)| r.start);
+                    let indent = first.saturating_sub(line_start + prefix).min(line.len() - prefix);
+                    let range = trim_end(text, item_start..item_range.end, &self.kinds(outer));
+                    self.containers.push(Container { kind: ContainerKind::Item { depth, indent }, range });
+                    self.containers.len() - 1
+                });
+                let mut inner = outer.to_vec();
+                inner.push(c);
+                if matches!(e, Event::Start(Tag::BlockQuote(_))) {
+                    self.quote(j, child_end, &inner);
+                } else if is_block(e) {
+                    self.leaf(j, child_end, &inner);
+                } else {
+                    // Text of a tight item after a nested list: a paragraph of its own.
+                    let mut k = j;
+                    while k < item_end && !is_block(&events[k].0) && !matches!(events[k].0, Event::End(_)) {
+                        k = if matches!(events[k].0, Event::Start(_)) { matching_end(events, k) } else { k } + 1;
+                    }
+                    let start = line_start_if_indented(text, events[j].1.start, true);
+                    let range = trim_end(text, start..events[k - 1].1.end, &self.kinds(&inner));
+                    self.blocks.push(Block { range, kind: BlockKind::Paragraph, events: j..k, outer: inner });
+                    j = k;
+                    continue;
+                }
+                j = child_end + 1;
+            }
+            i = item_end + 1;
+        }
+    }
 }
 
 fn block_kind(tag: &Tag, inner: &[(Event<'static>, Range<usize>)], text: &str, range: &Range<usize>) -> BlockKind {
@@ -419,90 +700,8 @@ pub fn heading_level(level: HeadingLevel) -> u8 {
     }
 }
 
-/// A top-level list being flattened into item blocks.
-struct List<'a> {
-    text: &'a str,
-    events: &'a [(Event<'static>, Range<usize>)],
-    /// Where the top-level list starts.
-    top: usize,
-}
-
-impl List<'_> {
-    /// Adds a block for every item of the list starting at event `start` (and
-    /// ending at `end`), and recursively for its nested lists.
-    fn flatten(&self, start: usize, end: usize, first_number: Option<u64>, depth: usize, blocks: &mut Vec<Block>) {
-        let (text, events, list) = (self.text, self.events, self.top);
-        // A loose list has paragraphs in its items.
-        let loose = {
-            let mut level = 0;
-            let mut loose = false;
-            for (event, _) in &events[start + 1..end] {
-                match event {
-                    Event::Start(Tag::Item) => level += 1,
-                    Event::End(TagEnd::Item) => level -= 1,
-                    Event::Start(Tag::Paragraph) if level == 1 => loose = true,
-                    Event::Start(Tag::List(_)) => level += 10,
-                    Event::End(TagEnd::List(_)) => level -= 10,
-                    _ => {}
-                }
-            }
-            loose
-        };
-        let mut index = 0;
-        let mut i = start + 1;
-        while i < end {
-            if !matches!(events[i].0, Event::Start(Tag::Item)) {
-                i += 1;
-                continue;
-            }
-            let item_end = matching_end(events, i);
-            let item_range = events[i].1.clone();
-            let number = first_number.map(|n| n + index);
-            index += 1;
-            let task = events[i + 1..item_end].iter().take(3).find_map(|(e, _)| match e {
-                Event::TaskListMarker(checked) => Some(*checked),
-                _ => None,
-            });
-            // The item's own segments around its nested lists.
-            let mut segment_start = line_start_if_indented(text, item_range.start);
-            let mut segment_events = i + 1;
-            let mut continuation = false;
-            let mut j = i + 1;
-            let push = |range: Range<usize>, evs: Range<usize>, continuation: bool, blocks: &mut Vec<Block>| {
-                // A continuation starts at its first non-blank line.
-                let start = if continuation {
-                    let skipped = text[range.clone()].len() - text[range.clone()].trim_start().len();
-                    line_start_if_indented(text, range.start + skipped)
-                } else {
-                    range.start
-                };
-                let range = trim_end(text, start.min(range.end)..range.end);
-                if !continuation || !text[range.clone()].trim().is_empty() {
-                    let item = ListItem { depth, number, task, loose, continuation, subtree_end: item_range.end, list };
-                    blocks.push(Block { range, kind: BlockKind::ListItem(item), events: evs });
-                }
-            };
-            while j < item_end {
-                if let Event::Start(Tag::List(n)) = &events[j].0 {
-                    let list_end = matching_end(events, j);
-                    let list_start = line_start_if_indented(text, events[j].1.start);
-                    push(segment_start..list_start, segment_events..j, continuation, blocks);
-                    self.flatten(j, list_end, *n, depth + 1, blocks);
-                    continuation = true;
-                    segment_start = events[j].1.end;
-                    segment_events = list_end + 1;
-                    j = list_end + 1;
-                } else {
-                    j += 1;
-                }
-            }
-            push(segment_start..item_range.end, segment_events..item_end, continuation, blocks);
-            i = item_end + 1;
-        }
-    }
-}
-
-/// Adds an `Other` block for each run of non-blank lines no block covers.
+/// Adds an `Other` block for each run of non-blank lines no block covers
+/// (lines holding only the `>` of quotes are blank).
 fn fill_gaps(text: &str, blocks: Vec<Block>) -> Vec<Block> {
     let mut out = Vec::with_capacity(blocks.len());
     let mut pos = 0;
@@ -512,9 +711,14 @@ fn fill_gaps(text: &str, blocks: Vec<Block>) -> Vec<Block> {
         let mut line_start = from;
         for line in text[from..to].split_inclusive('\n') {
             let line_end = line_start + line.len();
-            if line.trim().is_empty() {
+            if is_blank(line, true) {
                 if let Some(r) = run.take() {
-                    out.push(Block { range: trim_end(text, r), kind: BlockKind::Other, events: 0..0 });
+                    out.push(Block {
+                        range: trim_end(text, r, &[]),
+                        kind: BlockKind::Other,
+                        events: 0..0,
+                        outer: Vec::new(),
+                    });
                 }
             } else {
                 run = Some(run.map_or(line_start..line_end, |r| r.start..line_end));
@@ -522,7 +726,7 @@ fn fill_gaps(text: &str, blocks: Vec<Block>) -> Vec<Block> {
             line_start = line_end;
         }
         if let Some(r) = run {
-            out.push(Block { range: trim_end(text, r), kind: BlockKind::Other, events: 0..0 });
+            out.push(Block { range: trim_end(text, r, &[]), kind: BlockKind::Other, events: 0..0, outer: Vec::new() });
         }
     };
     for block in blocks {
@@ -615,7 +819,8 @@ mod tests {
             ("---\ntitle: x\n---", BlockKind::FrontMatter),
             ("# Head", BlockKind::Heading(1)),
             ("para\nline2", BlockKind::Paragraph),
-            ("> q1\n> > q2", BlockKind::Quote),
+            ("> q1", BlockKind::Paragraph),
+            ("> > q2", BlockKind::Paragraph),
             ("| a | b |\n|---|:-:|\n| 1 | 2 |", BlockKind::Table),
             ("$$\nx^2\n$$", BlockKind::Math),
             ("[^1]: note", BlockKind::Footnote("1".into())),
@@ -661,18 +866,117 @@ mod tests {
     }
 
     #[test]
-    fn content_after_a_nested_list_is_a_continuation() {
-        let text = "- a\n\n  - b\n\n  more\n- c\n";
+    fn content_after_a_nested_list_is_a_block_in_the_item() {
+        let b = nested("- a\n\n  - b\n\n  more\n- c\n");
+        assert_eq!(b.len(), 4, "{b:#?}");
+        assert!(item(0)(&b[0].1) && b[0].0 == "- a");
+        assert!(item(1)(&b[1].1) && b[1].0 == "  - b");
+        assert_eq!((b[2].0.as_str(), &b[2].1), ("  more", &BlockKind::Paragraph));
+        assert_eq!(b[2].2, [ContainerKind::Item { depth: 0, indent: 2 }]);
+        assert!(item(0)(&b[3].1) && b[3].0 == "- c");
+    }
+
+    /// The blocks of `text`: source, kind and the kinds of the containers around it.
+    fn nested(text: &str) -> Vec<(String, BlockKind, Vec<ContainerKind>)> {
         let doc = Document::parse(text);
-        let s: Vec<(&str, bool)> = doc
+        (0..doc.blocks.len())
+            .map(|b| (text[doc.blocks[b].range.clone()].to_string(), doc.blocks[b].kind.clone(), doc.outer_kinds(b)))
+            .collect()
+    }
+
+    fn item(depth: usize) -> impl Fn(&BlockKind) -> bool {
+        move |k| matches!(k, BlockKind::ListItem(i) if i.depth == depth)
+    }
+
+    #[test]
+    fn blocks_in_quotes_are_blocks_of_their_own() {
+        use ContainerKind::Quote;
+        let b = nested("> # H\n> - a\n>   - b\n>\n> para\n> > inner\n\n>\n");
+        assert_eq!(b.len(), 6, "{b:#?}");
+        assert_eq!((b[0].0.as_str(), &b[0].1, &b[0].2[..]), ("> # H", &BlockKind::Heading(1), &[Quote][..]));
+        assert_eq!(b[1].0, "> - a");
+        assert!(item(0)(&b[1].1) && b[1].2 == [Quote]);
+        assert_eq!(b[2].0, ">   - b");
+        assert!(item(1)(&b[2].1) && b[2].2 == [Quote]);
+        assert_eq!((b[3].0.as_str(), &b[3].1, &b[3].2[..]), ("> para", &BlockKind::Paragraph, &[Quote][..]));
+        assert_eq!((b[4].0.as_str(), &b[4].1, &b[4].2[..]), ("> > inner", &BlockKind::Paragraph, &[Quote, Quote][..]));
+        // An empty quote is a block.
+        assert_eq!((b[5].0.as_str(), &b[5].1, b[5].2.is_empty()), (">", &BlockKind::Quote, true));
+        // Items of a list in a quote share their list.
+        let doc = Document::parse("> - a\n> - b\n");
+        let lists: Vec<usize> = doc
             .blocks
             .iter()
-            .map(|b| match &b.kind {
-                BlockKind::ListItem(i) => (&text[b.range.clone()], i.continuation),
-                k => panic!("{k:?}"),
+            .filter_map(|b| match &b.kind {
+                BlockKind::ListItem(i) => Some(i.list),
+                _ => None,
             })
             .collect();
-        assert_eq!(s, vec![("- a", false), ("  - b", false), ("  more", true), ("- c", false)]);
+        assert_eq!(lists, vec![2, 2]);
+    }
+
+    #[test]
+    fn blocks_of_a_list_item_after_its_first() {
+        use ContainerKind::{Item, Quote};
+        let b = nested("- a\n\n  ```\n  code\n  ```\n\n  more\n\n  > q\n- b\n");
+        assert_eq!(b.len(), 5, "{b:#?}");
+        assert_eq!(b[0].0, "- a");
+        assert!(item(0)(&b[0].1) && b[0].2.is_empty());
+        assert_eq!(b[1].0, "  ```\n  code\n  ```");
+        assert!(matches!(b[1].1, BlockKind::Code { .. }));
+        assert_eq!(b[1].2, [Item { depth: 0, indent: 2 }]);
+        assert_eq!((b[2].0.as_str(), &b[2].1), ("  more", &BlockKind::Paragraph));
+        assert_eq!(b[2].2, [Item { depth: 0, indent: 2 }]);
+        assert_eq!((b[3].0.as_str(), &b[3].1), ("  > q", &BlockKind::Paragraph));
+        assert_eq!(b[3].2, [Item { depth: 0, indent: 2 }, Quote]);
+        assert_eq!(b[4].0, "- b");
+        // The first block is the item's, whatever it is; a later paragraph is one of its own.
+        let b = nested("- ```\n  x\n  ```\n\n- p1\n\n  p2\n");
+        assert_eq!(b.len(), 3, "{b:#?}");
+        assert_eq!(b[1].0, "- p1");
+        assert_eq!((b[2].0.as_str(), &b[2].2[..]), ("  p2", &[Item { depth: 0, indent: 2 }][..]));
+        // A list in a quote in an item: depth counts within the quote.
+        let b = nested("1. a\n\n   > - x\n");
+        assert_eq!(b[1].0, "   > - x");
+        assert!(item(0)(&b[1].1));
+        assert_eq!(b[1].2, [Item { depth: 0, indent: 3 }, Quote]);
+        // A tight item's text after a nested list.
+        let b = nested("- a\n  - b\n  c\n");
+        assert_eq!(b.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), vec!["- a", "  - b\n  c"]);
+    }
+
+    #[test]
+    fn container_prefixes() {
+        use ContainerKind::{Item, Quote};
+        assert_eq!(prefix_len("> a", [Quote]), 2);
+        assert_eq!(prefix_len(">a", [Quote]), 1);
+        assert_eq!(prefix_len("  > > a", [Quote, Quote]), 6);
+        assert_eq!(prefix_len("lazy", [Quote]), 0);
+        assert_eq!(prefix_len(">     code", [Quote, Item { depth: 0, indent: 2 }]), 4);
+        assert_eq!(prefix_len("> ", [Quote, Item { depth: 0, indent: 2 }]), 2);
+    }
+
+    #[test]
+    fn a_masked_byte_is_not_syntax() {
+        let text = "a\n\n```\n\nb\n\nc\n";
+        assert_eq!(Document::parse(text).blocks.len(), 2, "the fence takes the rest");
+        let fence = text.find('`').unwrap();
+        let doc = Document::parse_masked(text, Some(fence));
+        let k: Vec<(&str, &BlockKind)> = doc.blocks.iter().map(|b| (&text[b.range.clone()], &b.kind)).collect();
+        assert_eq!(
+            k,
+            vec![
+                ("a", &BlockKind::Paragraph),
+                ("```", &BlockKind::Paragraph),
+                ("b", &BlockKind::Paragraph),
+                ("c", &BlockKind::Paragraph)
+            ]
+        );
+        assert_eq!(plain_text(doc.block_events(1)), "```");
+        assert_eq!(doc.text, text);
+        // A heading marker.
+        let doc = Document::parse_masked("#", Some(0));
+        assert_eq!((doc.blocks[0].kind.clone(), plain_text(doc.block_events(0))), (BlockKind::Paragraph, "#".into()));
     }
 
     #[test]

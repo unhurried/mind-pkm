@@ -979,11 +979,21 @@ fn enter_twice_leaves_a_quote() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "one");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
-    assert_eq!(page_text(&app, id), "> one\n>\n> \n");
-    assert_eq!(shown(&app, id), "one\n\n");
+    // A new paragraph in the quote, without source until typed into.
+    let pending = app.editors[&id].page.pending.clone().expect("a new paragraph");
+    assert_eq!(pending.outer, vec![crate::markdown::parse::ContainerKind::Quote]);
+    assert_eq!(page_text(&app, id), "> one\n");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     typing(&mut app, id, "after");
     assert_eq!(page_text(&app, id), "> one\n\nafter\n");
+    // Typed into right away, it stays in the quote.
+    let (mut app, _f, _, _) = app_with_page("> one\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    typing(&mut app, id, "two");
+    assert_eq!(page_text(&app, id), "> one\n>\n> two\n");
+    assert_eq!(shown(&app, id), "two");
 }
 
 #[test]
@@ -1013,4 +1023,172 @@ fn typing_into_a_new_paragraph() {
         live(&mut app, id, super::LiveMsg::Insert(c.into()));
     }
     assert_eq!(page_text(&app, id), "last\n\nq2\n");
+}
+
+/// Types `s` as the editing widget sends it: characters auto-pairing may
+/// apply to as key bindings, the others as inserted text.
+fn type_keys(app: &mut App, id: window::Id, s: &str) {
+    for c in s.chars() {
+        if "()[]{}\"'`*_~$".contains(c) {
+            editor(app, id, EditorMsg::Bind(Bind::Type(c)));
+        } else {
+            live(app, id, super::LiveMsg::Insert(c.into()));
+        }
+    }
+}
+
+/// The kind of the block being edited.
+fn active_kind(app: &App, id: window::Id) -> crate::markdown::BlockKind {
+    app.editors[&id].page.active.as_ref().map(|a| a.kind.clone()).unwrap_or(crate::markdown::BlockKind::Other)
+}
+
+/// An editor on `text` with the cursor in a new paragraph after its first line.
+fn new_paragraph_after_first(text: &str) -> (App, window::Id, crate::pkm::testutil::Fixture) {
+    let (mut app, f, _, _) = app_with_page(text);
+    let id = open_with_f1(&mut app);
+    let first = text.lines().next().unwrap().to_string();
+    click_after(&mut app, id, &first);
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    (app, id, f)
+}
+
+#[test]
+fn a_marker_shows_as_typed_until_its_space() {
+    use crate::markdown::BlockKind;
+    let (mut app, id, _f) = new_paragraph_after_first("a\n");
+    type_keys(&mut app, id, "#");
+    assert_eq!((shown(&app, id), active_kind(&app, id)), ("#".into(), BlockKind::Paragraph));
+    type_keys(&mut app, id, "tag");
+    assert_eq!((page_text(&app, id), shown(&app, id)), ("a\n\n#tag\n".into(), "#tag".into()));
+
+    let (mut app, id, _f) = new_paragraph_after_first("a\n");
+    type_keys(&mut app, id, "*");
+    assert_eq!((shown(&app, id), active_kind(&app, id)), ("*".into(), BlockKind::Paragraph));
+    type_keys(&mut app, id, " ");
+    assert!(matches!(active_kind(&app, id), BlockKind::ListItem(_)));
+    assert_eq!(shown(&app, id), "");
+    type_keys(&mut app, id, "item");
+    assert_eq!((page_text(&app, id), shown(&app, id)), ("a\n\n* item\n".into(), "item".into()));
+
+    // `##`, `1.`, `>` and a task box wait for their space too.
+    // `- ` is a list item already: then its box waits for its space.
+    for (keys, before, kind) in
+        [("## ", "##", "Heading"), ("1. ", "1.", "ListItem"), ("> ", ">", "Quote"), ("- [ ] ", "[ ]", "ListItem")]
+    {
+        let (mut app, id, _f) = new_paragraph_after_first("a\n");
+        type_keys(&mut app, id, keys.trim_end());
+        assert_eq!(shown(&app, id), before, "{keys}");
+        type_keys(&mut app, id, " ");
+        assert_eq!(shown(&app, id), "", "{keys}");
+        assert!(format!("{:?}", active_kind(&app, id)).starts_with(kind), "{keys}: {:?}", active_kind(&app, id));
+    }
+    let (mut app, id, _f) = new_paragraph_after_first("a\n");
+    type_keys(&mut app, id, "- [ ] x");
+    let item = app.editors[&id].page.doc.blocks.iter().find_map(|b| match &b.kind {
+        BlockKind::ListItem(i) => Some(i.task),
+        _ => None,
+    });
+    assert_eq!(item, Some(Some(false)));
+}
+
+#[test]
+fn a_list_in_a_quote_as_it_is_typed() {
+    use crate::markdown::BlockKind;
+    use crate::markdown::parse::ContainerKind;
+    let (mut app, id, _f) = new_paragraph_after_first("a\n");
+    type_keys(&mut app, id, "> - x");
+    assert_eq!(page_text(&app, id), "a\n\n> - x\n");
+    assert_eq!(shown(&app, id), "x");
+    let page = &app.editors[&id].page;
+    let b = page.active_block().unwrap();
+    assert!(matches!(page.doc.blocks[b].kind, BlockKind::ListItem(_)));
+    assert_eq!(page.doc.outer_kinds(b), vec![ContainerKind::Quote]);
+    // Enter: the next item in the quote.
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    type_keys(&mut app, id, "y");
+    assert_eq!(page_text(&app, id), "a\n\n> - x\n> - y\n");
+}
+
+#[test]
+fn line_syntax_waits_for_enter() {
+    use crate::markdown::BlockKind;
+    // A fence leaves the paragraphs after it alone until Enter closes it.
+    let (mut app, id, _f) = new_paragraph_after_first("a\n\nb\n\nc\n");
+    type_keys(&mut app, id, "```");
+    assert_eq!(page_text(&app, id), "a\n\n```\n\nb\n\nc\n");
+    assert_eq!(shown(&app, id), "```");
+    let kinds: Vec<BlockKind> = app.editors[&id].page.doc.blocks.iter().map(|b| b.kind.clone()).collect();
+    assert_eq!(kinds, vec![BlockKind::Paragraph; 4]);
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    assert_eq!(page_text(&app, id), "a\n\n```\n\n```\n\nb\n\nc\n");
+    assert!(matches!(active_kind(&app, id), BlockKind::Code { .. }));
+
+    // A thematic break, then a new paragraph after it.
+    let (mut app, id, _f) = new_paragraph_after_first("a\n");
+    type_keys(&mut app, id, "---");
+    assert_eq!(shown(&app, id), "---");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    let page = &app.editors[&id].page;
+    assert!(page.doc.blocks.iter().any(|b| b.kind == BlockKind::ThematicBreak));
+    assert!(page.pending.is_some());
+
+    // A setext underline.
+    let (mut app, _f, _, _) = app_with_page("Title\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "Title");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftEnter));
+    type_keys(&mut app, id, "==");
+    assert_eq!(shown(&app, id), "Title\n==");
+}
+
+#[test]
+fn an_undetermined_marker_left_behind_is_what_the_text_says() {
+    use crate::markdown::BlockKind;
+    let (mut app, id, _f) = new_paragraph_after_first("a\n");
+    type_keys(&mut app, id, "#");
+    click_after(&mut app, id, "a");
+    let kinds: Vec<BlockKind> = app.editors[&id].page.doc.blocks.iter().map(|b| b.kind.clone()).collect();
+    assert_eq!(kinds, vec![BlockKind::Paragraph, BlockKind::Heading(1)]);
+    // Undo takes the marker back as typed.
+    assert!(app.editors.get_mut(&id).unwrap().page.undo());
+    assert_eq!(page_text(&app, id), "a\n");
+}
+
+#[test]
+fn shift_enter_at_the_end_of_a_paragraph() {
+    let (mut app, _f, _, _) = app_with_page("one\n\nnext\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftEnter));
+    // The cursor on a new line of the paragraph.
+    assert!(app.editors[&id].page.pending.is_none());
+    assert_eq!(shown(&app, id), "one\n");
+    type_keys(&mut app, id, "two");
+    assert_eq!(page_text(&app, id), "one\ntwo\n\nnext\n");
+    assert_eq!(shown(&app, id), "one\ntwo");
+    // In a quote too.
+    let (mut app, _f, _, _) = app_with_page("> one\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftEnter));
+    type_keys(&mut app, id, "two");
+    assert_eq!(page_text(&app, id), "> one\n> two\n");
+}
+
+#[test]
+fn paragraph_shortcuts_inside_a_quote() {
+    use super::EditorCommand as C;
+    let (mut app, _f, _, _) = app_with_page("> Plan\n>\n> item\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "Pl");
+    editor(&mut app, id, EditorMsg::Command(C::Heading(2)));
+    assert_eq!(page_text(&app, id), "> ## Plan\n>\n> item\n");
+    assert_eq!(shown(&app, id), "Plan");
+    click_after(&mut app, id, "ite");
+    editor(&mut app, id, EditorMsg::Command(C::BulletList));
+    assert_eq!(page_text(&app, id), "> ## Plan\n>\n> - item\n");
+    // Backspace at the start of the item removes its bullet; it stays in the quote.
+    live(&mut app, id, super::LiveMsg::MoveTo { at: 0, select: false });
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "> ## Plan\n>\n> item\n");
 }
