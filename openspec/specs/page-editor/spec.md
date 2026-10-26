@@ -24,7 +24,7 @@ The editor SHALL open UTF-8 files, with or without a byte-order mark; a file tha
 - **THEN** an error naming the file is shown and no editor window opens
 
 ### Requirement: Block-level live preview
-The editor SHALL show the document as a sequence of rendered blocks (see markdown-rendering). The block holding the cursor SHALL stay rendered, showing as Markdown only the inline elements touching the cursor; code blocks, math blocks, diagrams, front matter, HTML blocks, thematic breaks and `[toc]` SHALL show their whole source while they hold the cursor. Blocks are paragraphs, headings, single list items, quotes, those code-like blocks, tables and footnote definitions.
+The editor SHALL show the document as a sequence of rendered blocks (see markdown-rendering). The block holding the cursor SHALL stay rendered, showing as Markdown only the inline elements touching the cursor; math blocks, diagrams, front matter, HTML blocks, thematic breaks and `[toc]` SHALL show their whole source while they hold the cursor, and code blocks their code. Blocks are paragraphs, headings, single list items, quotes, those code-like blocks, tables and footnote definitions.
 
 #### Scenario: Leaving a paragraph
 - **WHEN** the cursor is in the paragraph `some **bold** text` and moves to the next block
@@ -44,7 +44,7 @@ The editor SHALL show the document as a sequence of rendered blocks (see markdow
 
 #### Scenario: Editing a code block
 - **WHEN** the cursor is in a fenced code block
-- **THEN** the block shows its source, fences included
+- **THEN** the block shows its code in its box, without the fences, and its language in a field
 
 ### Requirement: Styled source of the active block
 Markdown shown while editing - the source of an inline element at the cursor, and the source of a code-like block - SHALL be styled like the rendering where text can show it: bold and italic text in bold and italic, code in the code font, links in the link color, and Markdown markers dimmed. Block markers (`#`, list markers and task boxes, `>`) SHALL NOT be shown while a block is edited: a heading keeps its size, a list item its bullet, number or checkbox, a quote its bar.
@@ -353,3 +353,18 @@ Inside a quote or list item, Enter, Shift+Enter, Tab, Backspace and Delete SHALL
 #### Scenario: A paragraph in a list item
 - **WHEN** Enter is pressed at the end of the second paragraph of a list item and `x` is typed
 - **THEN** `x` is a new paragraph of the same item, indented like it
+
+### Requirement: Editing code blocks
+A code block other than a diagram SHALL be edited as its code, in its box with its highlighting: its fences, the indentation of its lines and the prefixes of a quote or list item it is in are not shown, and lines typed get them. A field in the box SHALL show and change its language. Backspace in an empty code block SHALL turn it into an empty paragraph; Down at the last line of a code block ending the page SHALL start a new paragraph after it.
+
+#### Scenario: Typing in a code block
+- **WHEN** the cursor is at the end of `let x = 1;` in the quoted code block `> ```rust` / `> let x = 1;` / `> ```` and Enter and `x` are typed
+- **THEN** the block shows `let x = 1;` and `x` without fences, and the source reads `> let x = 1;` and `> x` between the fences
+
+#### Scenario: Changing the language
+- **WHEN** `python` is entered in the language field of the code block ` ```rust `
+- **THEN** its opening fence reads ` ```python ` and the code is highlighted as Python
+
+#### Scenario: Removing an empty code block
+- **WHEN** Backspace is pressed in a code block holding no code
+- **THEN** the code block is gone and the cursor is in an empty paragraph in its place
