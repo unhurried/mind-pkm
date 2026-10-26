@@ -32,7 +32,11 @@ Alternative considered: keeping a quote as one block and drawing its inner list 
 
 `edit::nested(text, doc, region, sel, rule)` applies a rule to a block with containers: it takes the lines of the innermost container (for an item, the lines after its first one), removes the containers' prefixes from each line (`>` and one space for a quote, up to the content column of spaces for an item; a lazy line keeps what it has), parses that text, applies the rule as at the top level, and puts the result back: unchanged lines keep their original prefix, changed and new lines get the canonical one (`> ` or the item's indentation, `>` alone on blank quote lines). The selection and a new paragraph (`Pending`) are mapped back; a new paragraph's line breaks get the prefixes too, so the paragraph Enter adds after a quoted paragraph is `\n>\n> ...`. `Pending` remembers its containers so that the view draws it inside them.
 
-The rules get two container-specific cases: Enter in an empty new paragraph inside a container moves it out of the innermost container; Backspace at the start of the first block of a container (no block before it inside) removes the container's prefix from the block's lines (and turns a following `>`-only line into a blank one).
+The rules get two container-specific cases: Enter in an empty new paragraph inside a container moves it out of the innermost container; Backspace at the start of the first block of a quote (no block before it inside) removes the quote's prefix from the block's lines (and turns a following `>`-only line into a blank one), while at the start of the first block of a list item after its text it joins that text, the block before it.
+
+A list item's later blocks include its later paragraphs, which were part of the item's block (or a "continuation" item block after a nested list): every one of them is now a block inside the item, so the rules above apply to them uniformly, and the item's block is its first block only.
+
+A line break typed at the very end of a block (Shift+Enter) stays in the block: the region holding the cursor is extended over it after an edit, and the display shows it as a line to type on (before, the cursor fell into a new paragraph).
 
 `format::set_heading`, `step_heading` and `toggle_list` go through `nested` when the blocks they change share their containers; `toggle_quote` stays line-based (it unquotes quoted lines).
 
