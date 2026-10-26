@@ -55,6 +55,8 @@ pub enum Command {
     Update,
     AddAssets,
     FindUnlinked,
+    OpenExternally,
+    ToggleBuiltinEditor,
 }
 
 /// What was last cut or copied here: the subtrees, and the plain text put on
@@ -81,12 +83,18 @@ impl App {
             Command::New => return self.guard_unsaved(AfterUnsaved::New),
             Command::Open => return self.guard_unsaved(AfterUnsaved::Open),
             Command::Exit => return self.guard_unsaved(AfterUnsaved::Exit),
+            Command::ToggleBuiltinEditor => {
+                let prefs =
+                    super::editor::EditorPrefs { builtin: !self.editor_prefs.builtin, ..self.editor_prefs.clone() };
+                self.set_editor_prefs(prefs);
+                return Task::none();
+            }
             _ => {}
         }
         let Some(doc) = &mut self.doc else { return Task::none() };
         let focus = doc.focus;
         match cmd {
-            Command::New | Command::Open | Command::Exit => Task::none(),
+            Command::New | Command::Open | Command::Exit | Command::ToggleBuiltinEditor => Task::none(),
             Command::Save => self.save(None),
             Command::SaveAs => self.choose_file(FileAction::SaveAs(None)),
             Command::Undo => {
@@ -141,13 +149,16 @@ impl App {
             }
 
             // --- PKM ---
-            Command::PkmOpen => {
+            Command::PkmOpen | Command::OpenExternally => {
                 let result = commands::open_targets(&doc.map, &doc.sorted_selection());
-                for file in self.report(result).unwrap_or_default() {
-                    self.open_in_desktop(&file);
+                let files = self.report(result).unwrap_or_default();
+                if cmd == Command::OpenExternally {
+                    files.iter().for_each(|f| self.open_in_desktop(f));
+                    return Task::none();
                 }
-                Task::none()
+                Task::batch(files.iter().map(|f| self.open_page(f)).collect::<Vec<_>>())
             }
+
             Command::PkmEdit => self.pkm_edit(),
             Command::FoldOneLevel | Command::UnfoldOneLevel => {
                 doc.fold_one_level(cmd == Command::FoldOneLevel);
@@ -184,7 +195,17 @@ impl App {
             }
             Command::Update => self.start_update(true),
             Command::AddAssets => {
+                // The page gets a link to its assets: saved first, read again after.
+                let page = self.doc_path_of(focus);
+                if let Err(e) = self.save_editors_of(page.as_slice()) {
+                    self.message(e);
+                    return Task::none();
+                }
+                let Some(doc) = &self.doc else { return Task::none() };
                 let result = commands::add_assets(&doc.map, &doc.sorted_selection(), focus);
+                if let (Ok(()), Some(page)) = (&result, &page) {
+                    self.editors_reload(page);
+                }
                 self.report(result);
                 Task::none()
             }
@@ -279,12 +300,13 @@ impl App {
                 }
             })
             .collect();
+        let mut tasks = Vec::new();
         for result in results {
             if let Some(path) = self.report(result) {
-                self.open_in_desktop(&path);
+                tasks.push(self.open_page(&path));
             }
         }
-        Task::none()
+        Task::batch(tasks)
     }
 
     pub(super) fn open_in_desktop(&mut self, path: &Path) {
@@ -302,7 +324,7 @@ impl App {
             return self.center_on_focus();
         }
         if let Some(file) = doc.map.link_file(id) {
-            self.open_in_desktop(&file);
+            return self.open_page(&file);
         } else if let Some(link) = doc.map.link(id).map(str::to_string)
             && let Err(e) = opener::open(&link)
         {

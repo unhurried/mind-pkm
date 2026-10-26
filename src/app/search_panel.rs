@@ -206,8 +206,7 @@ impl App {
             }
             SearchMsg::RowDoubleClicked(i) => {
                 self.search.selected = Some(i);
-                self.open_selected_hit();
-                Task::none()
+                self.open_selected_hit()
             }
             SearchMsg::Move(delta) => {
                 if self.search.hits.is_empty() {
@@ -224,10 +223,7 @@ impl App {
                     operation::AbsoluteOffset { x: None, y: Some((i as f32 - 3.0).max(0.0) * ROW_HEIGHT) },
                 )
             }
-            SearchMsg::OpenFile => {
-                self.open_selected_hit();
-                Task::none()
-            }
+            SearchMsg::OpenFile => self.open_selected_hit(),
             SearchMsg::SelectNode => self.select_hit_node(),
             SearchMsg::Close => {
                 self.search.open = false;
@@ -243,13 +239,16 @@ impl App {
         if self.search.query.trim().is_empty() { Task::none() } else { self.run_search() }
     }
 
-    fn open_selected_hit(&mut self) {
-        let Some(hit) = self.search.selected.and_then(|i| self.search.hits.get(i)).cloned() else { return };
+    /// Opens the selected result: a page in the editor, any other file with its application.
+    fn open_selected_hit(&mut self) -> Task<Message> {
+        let Some(hit) = self.search.selected.and_then(|i| self.search.hits.get(i)).cloned() else {
+            return Task::none();
+        };
         if !hit.file.exists() {
             self.search.status = format!("file no longer exists: {}", hit.relative_path);
-            return;
+            return Task::none();
         }
-        self.open_in_desktop(&hit.file);
+        self.open_page(&hit.file)
     }
 
     /// Selects and centers the node of the selected result.

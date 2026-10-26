@@ -3,6 +3,7 @@
 //! so that integration tests and benchmarks can use the modules too.
 
 pub mod app;
+pub mod markdown;
 pub mod mindmap;
 pub mod paths;
 pub mod pkm;

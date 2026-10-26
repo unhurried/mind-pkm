@@ -13,9 +13,18 @@ use iced::widget::operation;
 #[derive(Debug, Clone)]
 pub enum Dialog {
     Message(String),
-    Confirm { text: String, action: ConfirmAction },
-    Input { prompt: String, value: String, action: InputAction },
+    Confirm {
+        text: String,
+        action: ConfirmAction,
+    },
+    Input {
+        prompt: String,
+        value: String,
+        action: InputAction,
+    },
     Unsaved(AfterUnsaved),
+    /// Ending the application with pages that have unsaved changes: their names.
+    UnsavedPages(Vec<String>),
 }
 
 /// What a confirmation dialog does on Yes.
@@ -78,16 +87,13 @@ impl App {
     }
 
     pub(super) fn dialog_ok(&mut self) -> Task<Message> {
-        // The unsaved changes question is answered only by its own buttons.
-        if matches!(self.dialogs.front(), Some(Dialog::Unsaved(_))) {
+        // The unsaved changes questions are answered only by their own buttons.
+        if matches!(self.dialogs.front(), Some(Dialog::Unsaved(_) | Dialog::UnsavedPages(_))) {
             return Task::none();
         }
         let task = match self.dialogs.pop_front() {
-            None | Some(Dialog::Message(_) | Dialog::Unsaved(_)) => Task::none(),
-            Some(Dialog::Confirm { action: ConfirmAction::DeleteDocs(targets), .. }) => {
-                self.delete_docs(&targets);
-                Task::none()
-            }
+            None | Some(Dialog::Message(_) | Dialog::Unsaved(_) | Dialog::UnsavedPages(_)) => Task::none(),
+            Some(Dialog::Confirm { action: ConfirmAction::DeleteDocs(targets), .. }) => self.delete_docs(&targets),
             Some(Dialog::Input { value, action, .. }) => self.input_done(Some(value), action),
         };
         Task::batch([task, self.after_dialog()])
@@ -106,12 +112,25 @@ impl App {
     /// Unsaved changes: save them (choosing a file first for a new map), then
     /// go on unless saving failed or was cancelled.
     pub(super) fn dialog_save(&mut self) -> Task<Message> {
+        if matches!(self.dialogs.front(), Some(Dialog::UnsavedPages(_))) {
+            self.dialogs.pop_front();
+            let errors = self.save_all_pages();
+            if errors.is_empty() {
+                return self.exit();
+            }
+            errors.into_iter().for_each(|e| self.message(e));
+            return Task::none();
+        }
         let Some(after) = self.take_unsaved_dialog() else { return Task::none() };
         self.save(Some(after))
     }
 
     /// Unsaved changes: discard them and go on.
     pub(super) fn dialog_discard(&mut self) -> Task<Message> {
+        if matches!(self.dialogs.front(), Some(Dialog::UnsavedPages(_))) {
+            self.dialogs.pop_front();
+            return self.exit();
+        }
         let Some(after) = self.take_unsaved_dialog() else { return Task::none() };
         if let Some(doc) = &mut self.doc {
             doc.dirty = false;
@@ -121,17 +140,30 @@ impl App {
 
     /// Deletes the pages and directories confirmed for deletion (F11), moving
     /// their files to the Recycle Bin.
-    fn delete_docs(&mut self, targets: &[(NodeId, DocType)]) {
-        let Some(doc) = &mut self.doc else { return };
+    fn delete_docs(&mut self, targets: &[(NodeId, DocType)]) -> Task<Message> {
+        // Open pages are saved first (to the Recycle Bin with their changes), their editors close.
+        let paths: Vec<_> = targets.iter().filter_map(|&(n, _)| self.doc_path_of(n)).collect();
+        if let Err(e) = self.save_editors_of(&paths) {
+            self.message(e);
+            return Task::none();
+        }
+        let Some(doc) = &mut self.doc else { return Task::none() };
         doc.checkpoint();
         let result = commands::delete_execute(&mut doc.map, targets, &mut |files| {
             trash::delete_all(files).map_err(|e| e.to_string())
         });
         self.report(result);
+        self.close_deleted_editors(&paths)
     }
 
     /// Acts on an input dialog's value; None when it was cancelled.
     fn input_done(&mut self, value: Option<String>, action: InputAction) -> Task<Message> {
+        if let InputAction::Rename(id, kind) = action {
+            if let Some(v) = value.filter(|v| !v.is_empty()) {
+                self.rename_doc(id, kind, &v);
+            }
+            return Task::none();
+        }
         let Some(doc) = &mut self.doc else { return Task::none() };
         let non_empty = value.clone().filter(|v| !v.is_empty());
         match action {
@@ -155,14 +187,7 @@ impl App {
                     }
                 }
             },
-            InputAction::Rename(id, kind) => {
-                if let Some(v) = non_empty
-                    && doc.map.exists(id)
-                {
-                    let result = doc.try_change(|map| commands::rename(map, id, kind, &v));
-                    self.report(result);
-                }
-            }
+            InputAction::Rename(..) => {}
             InputAction::Filter => {
                 // Cancelled: the current filter stays.
                 if let Some(v) = value {
@@ -180,6 +205,28 @@ impl App {
             }
         }
         Task::none()
+    }
+}
+
+impl App {
+    /// Edit (F2) on a page or directory node: renames it with its files; open
+    /// pages are saved first and follow.
+    fn rename_doc(&mut self, id: NodeId, kind: DocType, name: &str) {
+        if !self.doc.as_ref().is_some_and(|d| d.map.exists(id)) {
+            return;
+        }
+        let old = self.doc_path_of(id);
+        if let Err(e) = self.save_editors_of(old.as_slice()) {
+            self.message(e);
+            return;
+        }
+        let Some(doc) = &mut self.doc else { return };
+        let result = doc.try_change(|map| commands::rename(map, id, kind, name));
+        let renamed = result.is_ok();
+        self.report(result);
+        if renamed && let (Some(old), Some(new)) = (old, self.doc_path_of(id)) {
+            self.editors_renamed(&old, &new);
+        }
     }
 }
 

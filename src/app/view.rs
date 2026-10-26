@@ -120,6 +120,8 @@ pub const MENUS: &[Menu] = &[
             ("Update Next Steps and Search Index", "F12", Command::Update),
             ("Add Assets", "", Command::AddAssets),
             ("Find Unlinked", "", Command::FindUnlinked),
+            ("Open Externally", "", Command::OpenExternally),
+            ("Use Built-in Editor", "", Command::ToggleBuiltinEditor),
         ],
     ),
 ];
@@ -165,7 +167,13 @@ pub fn node_size(cache: &mut HashMap<String, Size>, map: &MindMap, id: NodeId, z
 // --- The window ---
 
 impl App {
-    pub(super) fn view(&self) -> Element<'_, Message> {
+    pub(super) fn view(&self, window: iced::window::Id) -> Element<'_, Message> {
+        if let Some(editor) = self.editors.get(&window) {
+            return editor.view(&self.editor_prefs, &self.renders).map(move |m| Message::Editor(window, m));
+        }
+        if window != self.main_window {
+            return space().into();
+        }
         let body: Element<Message> = match &self.doc {
             None => self.welcome(),
             Some(doc) => {
@@ -238,10 +246,15 @@ impl App {
         let (_, items) = MENUS[index];
         let mut list = Column::new().spacing(0).width(340);
         for (label, shortcut, cmd) in items.iter() {
+            let checked = *cmd == Command::ToggleBuiltinEditor && self.editor_prefs.builtin;
             list = list.push(
                 button(
-                    row![text(*label).size(12).width(Fill), text(*shortcut).size(11).color(MUTED)]
-                        .align_y(Alignment::Center),
+                    row![
+                        text(if checked { "✓" } else { "" }).size(12).width(14),
+                        text(*label).size(12).width(Fill),
+                        text(*shortcut).size(11).color(MUTED)
+                    ]
+                    .align_y(Alignment::Center),
                 )
                 .width(Fill)
                 .padding([5, 12])
@@ -503,6 +516,14 @@ impl App {
                 .spacing(12)
                 .into(),
                 vec![ok("OK"), cancel("Cancel")],
+            ),
+            Dialog::UnsavedPages(pages) => (
+                text(format!("These pages have unsaved changes: {}. Save them?", pages.join(", "))).size(13).into(),
+                vec![
+                    dialog_button("Save", button::primary, Message::DialogSave),
+                    dialog_button("Don't Save", button::secondary, Message::DialogDiscard),
+                    cancel("Cancel"),
+                ],
             ),
             Dialog::Unsaved(_) => (
                 text("The map has unsaved changes. Save them?").size(13).into(),

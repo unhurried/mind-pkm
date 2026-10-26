@@ -1,10 +1,12 @@
 //! The application: state, messages and their handling.
 //!
-//! `App::update` handles a message, then recomputes the layout. The handling
-//! itself lives with its topic: documents (`file`), dialogs (`dialog`),
-//! commands (`command`), keyboard input (`keys`), scrolling and zooming
-//! (`viewport`) and the
-//! search panel (`search_panel`); `doc` holds an open map and its edits.
+//! It has one map window and an editor window per open page (`editor`).
+//! Window events carry the window's id and are routed to the map or to the
+//! editor of that window first. `App::update` handles a map message, then
+//! recomputes the layout. The handling itself lives with its topic: documents
+//! (`file`), dialogs (`dialog`), commands (`command`), keyboard input (`keys`),
+//! scrolling and zooming (`viewport`) and the search panel (`search_panel`);
+//! `doc` holds an open map and its edits.
 
 mod arrow_cursor;
 mod command;
@@ -12,6 +14,7 @@ mod ctrl_wheel;
 mod dialog;
 mod doc;
 mod drag;
+mod editor;
 mod file;
 mod keys;
 mod layout;
@@ -29,13 +32,14 @@ use command::{Clipboard, Command};
 use dialog::Dialog;
 use doc::Doc;
 use drag::NodeDrag;
+use editor::{Editor, EditorMsg, EditorPrefs, RenderCache, RenderKey};
 use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::scrollable;
 use iced::{Point, Size, Subscription, Task, Vector, window};
 use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 use std::time::Duration;
 use viewport::Pan;
@@ -52,21 +56,24 @@ const DIALOG_INPUT_ID: &str = "dialog-input";
 
 pub fn run(initial: Option<PathBuf>) -> iced::Result {
     let geometry = settings::window().unwrap_or(INITIAL_WINDOW);
-    let position = geometry.position.map_or(window::Position::Default, window::Position::Specific);
-    iced::application(move || App::boot(initial.clone(), geometry), App::update, App::view)
+    iced::daemon(move || App::boot(initial.clone(), geometry), App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
         .theme(App::theme)
         .default_font(view::APP_FONT)
-        .exit_on_close_request(false)
-        .window(window::Settings {
-            size: geometry.size,
-            position,
-            maximized: geometry.maximized,
-            icon: window_icon(),
-            ..Default::default()
-        })
         .run()
+}
+
+/// The settings of a window of the application: closing it is up to `update`.
+fn window_settings(size: Size, position: Option<Point>, maximized: bool) -> window::Settings {
+    window::Settings {
+        size,
+        position: position.map_or(window::Position::Default, window::Position::Specific),
+        maximized,
+        icon: window_icon(),
+        exit_on_close_request: false,
+        ..Default::default()
+    }
 }
 
 /// The window (title bar / taskbar) icon, drawn by `tools/make_icon.py`.
@@ -76,12 +83,27 @@ fn window_icon() -> Option<window::Icon> {
 }
 
 /// Runs blocking work (file I/O, indexing) on the blocking thread pool.
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     tokio::task::spawn_blocking(f).await.expect("background task panicked")
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// A key no widget took, in a window.
+    KeyIn(window::Id, keyboard::Event),
+    /// Escape in a window (also when a text box has it).
+    EscapeIn(window::Id),
+    /// A window was resized, moved, asked to close, got a dropped file, got the focus.
+    Resized(window::Id, Size),
+    Moved(window::Id, Point),
+    CloseRequest(window::Id),
+    FileDropped(window::Id, PathBuf),
+    Focused(window::Id),
+    /// A message of an editor window.
+    Editor(window::Id, EditorMsg),
+    /// Math or a diagram rendered in the background.
+    Rendered(RenderKey, Result<String, String>),
+    // The map window's messages.
     Key(keyboard::Event),
     Escape,
     Command(Command),
@@ -163,6 +185,14 @@ impl Message {
 }
 
 pub struct App {
+    main_window: window::Id,
+    /// The page editor windows.
+    editors: BTreeMap<window::Id, Editor>,
+    editor_prefs: EditorPrefs,
+    /// The math and diagrams of open pages, rendered.
+    renders: RenderCache,
+    /// The clipboard with rich text, images and files, for the editors.
+    system_clipboard: std::sync::Arc<std::sync::Mutex<Box<dyn editor::clipboard::ClipboardBackend>>>,
     doc: Option<Doc>,
     /// The generation given to the last opened document.
     next_generation: u64,
@@ -200,20 +230,28 @@ pub struct App {
 impl App {
     fn boot(initial: Option<PathBuf>, window: WindowGeometry) -> (Self, Task<Message>) {
         let mut app = App::new();
+        app.editor_prefs = EditorPrefs::load();
         app.window_size = window.size;
         app.window_position = window.position;
         app.window = window;
+        let (id, opened) = window::open(window_settings(window.size, window.position, window.maximized));
+        app.main_window = id;
         let explicit = initial.is_some();
         let task = match initial.or_else(settings::last_file) {
             Some(path) if explicit || path.exists() => app.open_path(path),
             _ => Task::none(),
         };
-        (app, task)
+        (app, Task::batch([opened.discard(), task]))
     }
 
     /// The application without a map, before anything is opened.
     fn new() -> Self {
         App {
+            main_window: window::Id::unique(),
+            editors: BTreeMap::new(),
+            editor_prefs: EditorPrefs::default(),
+            renders: RenderCache::default(),
+            system_clipboard: std::sync::Arc::new(std::sync::Mutex::new(editor::clipboard::default_backend())),
             doc: None,
             next_generation: 0,
             dialogs: VecDeque::new(),
@@ -236,7 +274,10 @@ impl App {
         }
     }
 
-    fn title(&self) -> String {
+    fn title(&self, window: window::Id) -> String {
+        if let Some(editor) = self.editors.get(&window) {
+            return editor.title();
+        }
         match &self.doc {
             Some(doc) => {
                 let name = doc.map.path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
@@ -246,26 +287,33 @@ impl App {
         }
     }
 
-    fn theme(&self) -> iced::Theme {
-        iced::Theme::Light
+    fn theme(&self, window: window::Id) -> iced::Theme {
+        if self.editors.contains_key(&window) && self.editor_prefs.dark {
+            iced::Theme::Dark
+        } else {
+            iced::Theme::Light
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            keyboard::listen().map(Message::Key),
+            // Keys no widget took, as `keyboard::listen` would give them, with their window.
+            iced::event::listen_with(|event, status, window| match (event, status) {
+                (iced::Event::Keyboard(event), iced::event::Status::Ignored) => Some(Message::KeyIn(window, event)),
+                _ => None,
+            }),
             // Escape also when a text input has it (closing a dialog from its input).
-            iced::event::listen_with(|event, _status, _window| match event {
+            iced::event::listen_with(|event, _status, window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed { key: Key::Named(Named::Escape), .. }) => {
-                    Some(Message::Escape)
+                    Some(Message::EscapeIn(window))
                 }
+                iced::Event::Window(window::Event::Moved(position)) => Some(Message::Moved(window, position)),
+                iced::Event::Window(window::Event::Resized(size)) => Some(Message::Resized(window, size)),
+                iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::FileDropped(window, path)),
+                iced::Event::Window(window::Event::Focused) => Some(Message::Focused(window)),
                 _ => None,
             }),
-            window::resize_events().map(|(_, size)| Message::WindowResized(size)),
-            iced::event::listen_with(|event, _status, _window| match event {
-                iced::Event::Window(window::Event::Moved(position)) => Some(Message::WindowMoved(position)),
-                _ => None,
-            }),
-            window::close_requests().map(|_| Message::CloseRequested),
+            window::close_requests().map(Message::CloseRequest),
             iced::time::every(TICK).map(|_| Message::Tick),
             // Pointer tracking only while panning, so ordinary moves cost nothing.
             if self.pan.is_some() {
@@ -281,10 +329,15 @@ impl App {
                 Subscription::none()
             },
             if self.drag.is_some() { drag::drag_events() } else { Subscription::none() },
+            editor::subscription(&self.editors),
         ])
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let message = match self.route(message) {
+            Ok(message) => message,
+            Err(task) => return task,
+        };
         if !message.may_change_layout() {
             return self.handle(message);
         }
@@ -300,8 +353,44 @@ impl App {
         Task::batch(tasks)
     }
 
+    /// Window events of the map window as its own messages; those of editor
+    /// windows (and editor messages) handled here (`Err` with their task).
+    fn route(&mut self, message: Message) -> Result<Message, Task<Message>> {
+        let main = self.main_window;
+        match message {
+            Message::KeyIn(id, event) if id == main => Ok(Message::Key(event)),
+            Message::EscapeIn(id) if id == main => Ok(Message::Escape),
+            Message::Resized(id, size) if id == main => Ok(Message::WindowResized(size)),
+            Message::Moved(id, position) if id == main => Ok(Message::WindowMoved(position)),
+            Message::CloseRequest(id) if id == main => Ok(Message::CloseRequested),
+            Message::FileDropped(id, _) | Message::Focused(id) if id == main => Err(Task::none()),
+            Message::KeyIn(id, event) => Err(self.editor_message(id, EditorMsg::Key(event))),
+            Message::EscapeIn(id) => Err(self.editor_message(id, EditorMsg::Escape)),
+            Message::Resized(id, size) => Err(self.editor_message(id, EditorMsg::Resized(size))),
+            Message::Moved(..) => Err(Task::none()),
+            Message::CloseRequest(id) => Err(self.editor_message(id, EditorMsg::CloseRequested)),
+            Message::FileDropped(id, path) => Err(self.editor_message(id, EditorMsg::FileDropped(path))),
+            Message::Focused(id) => Err(self.editor_message(id, EditorMsg::Focused)),
+            Message::Editor(id, msg) => Err(self.editor_message(id, msg)),
+            Message::Rendered(key, svg) => {
+                self.renders.insert(key, svg);
+                Err(Task::none())
+            }
+            other => Ok(other),
+        }
+    }
+
     fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::KeyIn(..)
+            | Message::EscapeIn(_)
+            | Message::Resized(..)
+            | Message::Moved(..)
+            | Message::CloseRequest(_)
+            | Message::FileDropped(..)
+            | Message::Focused(_)
+            | Message::Editor(..)
+            | Message::Rendered(..) => Task::none(),
             Message::Key(event) => self.on_key(event),
             Message::Escape => self.on_escape(),
             Message::Command(cmd) => {
@@ -363,11 +452,12 @@ impl App {
             }
             Message::CloseRequested => self.guard_unsaved(AfterUnsaved::Exit),
             Message::Tick => {
+                let pages = self.editors_tick();
                 let due = self
                     .doc
                     .as_ref()
                     .is_some_and(|d| d.edited_since_refresh && d.last_refresh.elapsed() >= UPDATE_INTERVAL);
-                if due { self.start_update(false) } else { Task::none() }
+                Task::batch([pages, if due { self.start_update(false) } else { Task::none() }])
             }
             Message::DialogInput(value) => {
                 self.dialog_input(value);
