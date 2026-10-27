@@ -153,6 +153,10 @@ Tab and Shift+Tab in a list item SHALL indent the item under the previous item a
 - **WHEN** the second item of a bullet list has the cursor and Tab is pressed
 - **THEN** it becomes a nested item of the first one
 
+#### Scenario: Nesting an empty item
+- **WHEN** Enter starts a new item below an item and Tab is pressed, at any depth, before anything is typed
+- **THEN** the empty item stays a list item, shown without its marker as typed text, and what is typed next goes into it
+
 ### Requirement: Source mode
 Ctrl+/ SHALL switch between the live preview and a source mode that shows the whole file as Markdown text with the same styling, and back, keeping the cursor at the same place in the text. Undo history SHALL be shared by both modes.
 

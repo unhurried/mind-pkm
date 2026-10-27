@@ -1258,3 +1258,22 @@ fn code_typed_into_an_empty_code_block() {
     assert_eq!(page_text(&app, id), "```js\nx;\n```\n");
     assert_eq!(editor_text(&app, id), "x;");
 }
+
+#[test]
+fn an_item_indented_by_tab_is_an_empty_item_until_typed_into() {
+    use crate::markdown::BlockKind;
+    for marker in ["*", "-", "+"] {
+        let (mut app, id, _f) = new_paragraph_after_first("a\n");
+        type_keys(&mut app, id, &format!("{marker} aaa"));
+        for (depth, text) in [(1, "bbb"), (2, "ccc")] {
+            editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+            editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+            // The empty item is an item, not a line of the paragraph above it.
+            assert_eq!(shown(&app, id), "", "{marker} {text}");
+            assert!(matches!(active_kind(&app, id), BlockKind::ListItem(ref i) if i.depth == depth), "{marker} {text}");
+            type_keys(&mut app, id, text);
+            assert_eq!(shown(&app, id), text, "{marker} {text}");
+        }
+        assert_eq!(page_text(&app, id), format!("a\n\n{marker} aaa\n  {marker} bbb\n    {marker} ccc\n"));
+    }
+}

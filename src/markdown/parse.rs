@@ -194,17 +194,52 @@ impl Document {
     /// not taken as syntax; the text the parse shows there is the real one.
     pub fn parse_masked(text: &str, mask: Option<usize>) -> Document {
         let mask = mask.filter(|&m| text.as_bytes().get(m).is_some_and(|b| b.is_ascii() && *b != b'\n'));
-        let masked = mask.map(|m| {
-            let mut bytes = text.as_bytes().to_vec();
-            bytes[m] = b'x';
-            String::from_utf8(bytes).expect("an ASCII byte replaced by an ASCII byte")
+        let doc = Document::build(text, mask, &[]);
+        // An empty item starting a nested list (just indented with Tab) is
+        // not an item to CommonMark: it cannot interrupt the paragraph above.
+        let empty = empty_nested_items(&doc);
+        if empty.is_empty() {
+            return doc;
+        }
+        let items = Document::build(text, mask, &empty);
+        let all_items = empty.iter().all(|&at| {
+            let line = line_start(text, at);
+            items
+                .blocks
+                .iter()
+                .any(|b| matches!(b.kind, BlockKind::ListItem(_)) && line_start(text, b.range.start) == line)
         });
-        let prepared = lenient_links(masked.as_deref().unwrap_or(text));
-        let parser = Parser::new_ext(&prepared.text, options());
-        let mut events: Vec<(Event<'static>, Range<usize>)> = parser
-            .into_offset_iter()
-            .map(|(e, r)| (e.into_static(), prepared.original(r.start)..prepared.original(r.end)))
-            .collect();
+        if all_items { items } else { doc }
+    }
+
+    /// Parses `text` with a letter after each of the `fills` (the ends of
+    /// lines), which the events' ranges do not show.
+    fn build(text: &str, mask: Option<usize>, fills: &[usize]) -> Document {
+        let mut base = text.to_string();
+        if let Some(m) = mask {
+            base.replace_range(m..=m, "x");
+        }
+        for &at in fills.iter().rev() {
+            base.insert(at, 'x');
+        }
+        let prepared = lenient_links(&base);
+        // Fill `i` is the byte at `fills[i] + i` of the text the parser got.
+        let fill_at = |i: usize| fills[i] + i;
+        let in_text = |offset: usize| {
+            let offset = prepared.original(offset);
+            offset - (0..fills.len()).filter(|&i| fill_at(i) < offset).count()
+        };
+        let is_fill = |offset: usize, end: usize| {
+            let (start, end) = (prepared.original(offset), prepared.original(end));
+            (0..fills.len()).any(|i| start == fill_at(i) && end == start + 1)
+        };
+        let mut events: Vec<(Event<'static>, Range<usize>)> = Vec::new();
+        for (event, range) in Parser::new_ext(&prepared.text, options()).into_offset_iter() {
+            let letter = matches!(event, Event::Text(_) | Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph));
+            if !(letter && is_fill(range.start, range.end)) {
+                events.push((event.into_static(), in_text(range.start)..in_text(range.end)));
+            }
+        }
         if let Some(m) = mask {
             for (event, range) in &mut events {
                 if let Event::Text(t) = event
@@ -257,6 +292,46 @@ impl Document {
             .find(|h| h.anchor == wanted)
             .or_else(|| self.headings.iter().find(|h| h.text.to_lowercase() == wanted))
     }
+}
+
+/// The start of the line of `text` holding byte `at`.
+fn line_start(text: &str, at: usize) -> usize {
+    text[..at].rfind('\n').map_or(0, |i| i + 1)
+}
+
+/// The ends of the lines that are nothing but the marker of a list item
+/// (`*`, `+`, `-`, `1.`, `1)`), indented to nest under the item above them,
+/// when `doc` has them as lines of that item's paragraph.
+fn empty_nested_items(doc: &Document) -> Vec<usize> {
+    let text = &doc.text;
+    let mut found = Vec::new();
+    let mut start = 0;
+    for line in text.split('\n') {
+        let at = start;
+        start += line.len() + 1;
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        let rest = line[indent..].trim_end_matches([' ', '\t']);
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let marker =
+            matches!(rest, "*" | "+" | "-") || (digits > 0 && digits <= 9 && matches!(&rest[digits..], "." | ")"));
+        if !marker || at < 2 || text[..at - 1].ends_with('\n') || line.ends_with('\r') {
+            continue;
+        }
+        // In the paragraph of an item whose text starts to the left of it.
+        let Some(item) = doc
+            .blocks
+            .iter()
+            .find(|b| matches!(b.kind, BlockKind::ListItem(_)) && b.range.start < at && at < b.range.end)
+        else {
+            continue;
+        };
+        let first = &text[line_start(text, item.range.start)..];
+        let first = first.split('\n').next().unwrap_or_default();
+        if crate::markdown::edit::line_marker(first).is_some_and(|m| indent >= m.end) {
+            found.push(at + line.len());
+        }
+    }
+    found
 }
 
 /// The text a parser sees, with the bytes inserted to make it parse leniently.
@@ -886,6 +961,48 @@ mod tests {
 
     fn item(depth: usize) -> impl Fn(&BlockKind) -> bool {
         move |k| matches!(k, BlockKind::ListItem(i) if i.depth == depth)
+    }
+
+    /// The kind and source of every block of `text`.
+    fn item_flags(text: &str) -> Vec<(String, bool)> {
+        let doc = Document::parse(text);
+        doc.blocks
+            .iter()
+            .map(|b| (text[b.range.clone()].to_string(), matches!(b.kind, BlockKind::ListItem(_))))
+            .collect()
+    }
+
+    #[test]
+    fn an_empty_item_nested_under_a_paragraph_is_an_item() {
+        for marker in ["*", "-", "+", "1."] {
+            let pad = " ".repeat(marker.len() + 1);
+            let text = format!("{marker} aaa\n{pad}{marker} bbb\n{pad}{pad}{marker} \n");
+            let doc = Document::parse(&text);
+            let depths: Vec<usize> = doc
+                .blocks
+                .iter()
+                .filter_map(|b| match &b.kind {
+                    BlockKind::ListItem(i) => Some(i.depth),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(depths, vec![0, 1, 2], "{text:?}");
+            assert_eq!(doc.text, text);
+            // The page's text has no letter that stands in for the empty item.
+            assert_eq!(plain_text(doc.block_events(2)), "", "{text:?}");
+        }
+        // An item of a loose list, and one after other lines.
+        let doc = Document::parse("- a\n\n  - b\n    - \n\n- c\n");
+        assert_eq!(doc.blocks.iter().filter(|b| matches!(b.kind, BlockKind::ListItem(_))).count(), 4);
+    }
+
+    #[test]
+    fn other_lone_markers_stay_what_they_were() {
+        // A setext underline, a marker not nested under an item, a marker after a blank line.
+        assert_eq!(item_flags("text\n-\n"), vec![("text\n-".into(), false)]);
+        assert_eq!(item_flags("text\n  -\n"), vec![("text\n  -".into(), false)]);
+        assert_eq!(item_flags("text\n*\n"), vec![("text\n*".into(), false)]);
+        assert_eq!(item_flags("- a\n *\n"), vec![("- a".into(), true), (" *".into(), true)]);
     }
 
     #[test]
