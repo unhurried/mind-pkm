@@ -842,18 +842,18 @@ impl Editor {
         let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: false, table: true };
         let mut grid = Column::new();
         for (r, cells) in t.rows.iter().enumerate() {
-            let mut line = Row::new();
+            let mut contents = Row::new();
+            let mut frames = Row::new();
             for (c, cell) in cells.iter().enumerate() {
                 let align = t.align.get(c).copied().unwrap_or_default();
                 let selected = state.range.is_some_and(|range| range.contains((r, c)));
-                let content: Element<EditorMsg> = if (r, c) == state.cell
-                    && let Some(live) = &a.live
-                {
-                    let base = TextBase {
-                        size: ctx.size(1.0),
-                        font: if r == 0 { bold(APP_FONT) } else { APP_FONT },
-                        color: p.text,
-                    };
+                let base = TextBase {
+                    size: ctx.size(1.0),
+                    font: if r == 0 { bold(APP_FONT) } else { APP_FONT },
+                    color: p.text,
+                };
+                let active = (r, c) == state.cell;
+                let content: Element<EditorMsg> = if active && let Some(live) = &a.live {
                     let editor = self
                         .live_text(live, base, ctx, cell_width - 16.0, Vec::new())
                         .key_binding(move |k| keys::binding(k, bind));
@@ -866,41 +866,36 @@ impl Editor {
                     let doc = crate::markdown::Document::parse(&table::cell_to_text(cell));
                     let inlines =
                         if doc.blocks.is_empty() { Vec::new() } else { content::inlines(&doc, doc.block_events(0)) };
-                    let base = TextBase {
-                        size: ctx.size(1.0),
-                        font: if r == 0 { bold(APP_FONT) } else { APP_FONT },
-                        color: p.text,
-                    };
-                    let shown: Element<EditorMsg> = inline_text(&inlines, base, ctx, None, usize::MAX);
-                    mouse_area(container(shown).width(Fill))
-                        .on_press(EditorMsg::CellPressed(r, c))
-                        .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
-                        .on_release(EditorMsg::Table(TableMsg::Released))
-                        .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)))
-                        .into()
+                    inline_text(&inlines, base, ctx, None, usize::MAX)
                 };
                 let align_x = match align {
                     table::Align::Center => Alignment::Center,
                     table::Align::Right => Alignment::End,
                     _ => Alignment::Start,
                 };
-                let header = r == 0;
                 let mut cell_box = container(content).width(cell_width).padding([4, 8]).align_x(align_x);
-                if (r, c) == state.cell {
+                if active {
                     cell_box = cell_box.id(self.id("active-cell"));
                 }
-                line = line.push(cell_box.style(move |_| {
-                    let bg = if selected {
-                        p.selection
-                    } else if header {
-                        p.header_bg
-                    } else {
-                        Color::TRANSPARENT
-                    };
-                    container::background(bg).border(border::color(p.border).width(1))
-                }));
+                contents = contents.push(cell_box);
+                let bg = if selected {
+                    p.selection
+                } else if r == 0 {
+                    p.header_bg
+                } else {
+                    Color::TRANSPARENT
+                };
+                // The whole cell (below its text too) takes the clicks.
+                let mut frame = mouse_area(cell_frame(cell_width, bg, p))
+                    .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
+                    .on_release(EditorMsg::Table(TableMsg::Released))
+                    .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)));
+                if !active {
+                    frame = frame.on_press(EditorMsg::CellPressed(r, c));
+                }
+                frames = frames.push(frame);
             }
-            grid = grid.push(line);
+            grid = grid.push(table_row(contents, frames));
         }
         column![self.table_toolbar(p), grid].spacing(4).into()
     }
@@ -1741,7 +1736,8 @@ fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize) -> Element<'a, Edi
     let mut grid = Column::new();
     let all_rows = std::iter::once(&t.header).chain(t.rows.iter());
     for (r, cells) in all_rows.enumerate() {
-        let mut line = Row::new();
+        let mut contents = Row::new();
+        let mut frames = Row::new();
         for c in 0..columns {
             let inlines = cells.get(c).cloned().unwrap_or_default();
             let header = r == 0;
@@ -1752,20 +1748,37 @@ fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize) -> Element<'a, Edi
                 Some(pulldown_cmark::Alignment::Right) => Alignment::End,
                 _ => Alignment::Start,
             };
-            line = line.push(
+            contents = contents.push(
                 container(inline_text(&inlines, base, ctx, None, block))
                     .width(Length::FillPortion(1))
                     .padding([4, 8])
-                    .align_x(align_x)
-                    .style(move |_| {
-                        container::background(if header { p.header_bg } else { Color::TRANSPARENT })
-                            .border(border::color(p.border).width(1))
-                    }),
+                    .align_x(align_x),
             );
+            frames = frames.push(cell_frame(
+                Length::FillPortion(1),
+                if header { p.header_bg } else { Color::TRANSPARENT },
+                p,
+            ));
         }
-        grid = grid.push(line);
+        grid = grid.push(table_row(contents, frames));
     }
     grid.into()
+}
+
+/// A table row: the cells' contents over their frames (background and
+/// border), which take the height of the row's tallest cell so that the
+/// borders of a row line up when a cell wraps.
+fn table_row<'a>(contents: Row<'a, EditorMsg>, frames: Row<'a, EditorMsg>) -> Element<'a, EditorMsg> {
+    Stack::new().push(contents).push_under(frames).into()
+}
+
+/// A table cell's background and border, as tall as its row.
+fn cell_frame<'a>(width: impl Into<Length>, bg: Color, p: Palette) -> Element<'a, EditorMsg> {
+    container(space())
+        .width(width)
+        .height(Fill)
+        .style(move |_| container::background(bg).border(border::color(p.border).width(1)))
+        .into()
 }
 
 fn dialog_view(dialog: &EditorDialog, p: Palette) -> Element<'_, EditorMsg> {
