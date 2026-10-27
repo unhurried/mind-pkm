@@ -8,6 +8,7 @@
 use super::flow::{self, Cluster, Flow, Measured};
 use super::keys::Bind;
 use super::{EditorCommand, EditorMsg};
+use crate::app::ime;
 use iced::advanced::Renderer as _;
 use iced::advanced::graphics::text::Paragraph;
 use iced::advanced::layout::{self, Layout};
@@ -203,6 +204,8 @@ struct State {
     keys: Vec<Option<ShapeKey>>,
     items: Vec<Measured>,
     flow: Flow,
+    /// The height above and below the baseline of an empty line.
+    empty: (f32, f32),
     /// The x Up and Down keep.
     preferred_x: Option<f32>,
     last_head: usize,
@@ -351,6 +354,7 @@ impl LiveText<'_> {
         // Forget shapes no run uses any more (the empty line's stays).
         state.cache.retain(|k, _| k.text == " " || keys.iter().any(|x| x.as_ref() == Some(k)));
         state.flow = flow::layout(&items, width, empty, self.len);
+        state.empty = empty;
         state.items = items;
         state.keys = keys;
     }
@@ -359,6 +363,15 @@ impl LiveText<'_> {
         let c = state.flow.caret(&state.items, self.sel.1);
         let line = &state.flow.lines[c.line];
         Rectangle::new(Point::new(origin.x + c.x, origin.y + line.top), Size::new(1.5, line.height))
+    }
+
+    /// The caret rectangle for the IME: the composed text lines up with the
+    /// line's base text (`ime::align`), not with the bottom of a taller line.
+    fn ime_cursor(&self, state: &State, origin: Point) -> Rectangle {
+        let rect = self.caret_rect(state, origin);
+        let line = &state.flow.lines[state.flow.caret(&state.items, self.sel.1).line];
+        let (ascent, descent) = state.empty;
+        ime::align(rect, origin.y + line.baseline + (descent - ascent) / 2.0, self.base.1)
     }
 }
 
@@ -457,7 +470,7 @@ impl Widget<EditorMsg, Theme, Renderer> for LiveText<'_> {
                 }
                 let method = match &state.focus {
                     Some(Focus { is_window_focused: true, .. }) => input_method::InputMethod::Enabled {
-                        cursor: self.caret_rect(state, bounds.position()),
+                        cursor: self.ime_cursor(state, bounds.position()),
                         purpose: input_method::Purpose::Normal,
                         preedit: state.preedit.as_ref().map(input_method::Preedit::as_ref),
                     },

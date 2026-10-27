@@ -16,6 +16,7 @@ mod doc;
 mod drag;
 mod editor;
 mod file;
+mod ime;
 mod keys;
 mod layout;
 mod search_panel;

@@ -14,6 +14,7 @@ use super::page::{Active, Live, TableState};
 use super::render::{RenderCache, RenderKey, Rendered};
 use super::{DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
 use crate::app::arrow_cursor::arrow_cursor;
+use crate::app::ime::ime_aligned;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Link, Node, SourceMap, Style, TableNode};
 use crate::markdown::edit::CodeBody;
@@ -608,7 +609,7 @@ impl Editor {
             .padding(0)
             .wrapping(Wrapping::WordOrGlyph)
             .style(move |_, _| editor_style(p, Color::TRANSPARENT));
-        container(editor).id(self.id("active-box")).into()
+        container(ime_aligned(editor)).id(self.id("active-box")).into()
     }
 
     /// The active region: its source in a text editor (or the table editor).
@@ -667,8 +668,8 @@ impl Editor {
             _ => None,
         };
         let shown: Element<EditorMsg> = match preview {
-            Some(preview) => column![editor, preview].spacing(8).into(),
-            None => editor.into(),
+            Some(preview) => column![ime_aligned(editor), preview].spacing(8).into(),
+            None => ime_aligned(editor).into(),
         };
         container(shown).id(self.id("active-box")).into()
     }
@@ -715,7 +716,7 @@ impl Editor {
                 value: p.text,
                 selection: p.selection,
             });
-        container(column![editor, row![space().width(Fill), language]].spacing(4))
+        container(column![ime_aligned(editor), row![space().width(Fill), language]].spacing(4))
             .id(self.id("active-box"))
             .padding(padding)
             .width(Fill)
