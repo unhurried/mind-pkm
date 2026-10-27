@@ -91,18 +91,20 @@ impl App {
         self.doc.as_ref()?.focus_rect()
     }
 
-    /// The focused node and where it is, for `keep_in_place` after a change.
-    pub(super) fn focus_anchor(&self) -> Option<(NodeId, Point)> {
+    /// The focused node, the node to keep in place after a change (the focused
+    /// node or its parent) and where that one is, for `keep_in_place`.
+    pub(super) fn focus_anchor(&self, parent: bool) -> Option<(NodeId, NodeId, Point)> {
         let doc = self.doc.as_ref()?;
-        Some((doc.focus, doc.focus_rect()?.position()))
+        let id = if parent { doc.map.parent(doc.focus)? } else { doc.focus };
+        Some((doc.focus, id, doc.layout.get(id)?.rect.position()))
     }
 
     /// Scrolls by as much as the anchored node moved in the layout, so that it
     /// stays in place on screen (unless the focus moved to another node).
-    pub(super) fn keep_in_place(&mut self, anchor: Option<(NodeId, Point)>) -> Task<Message> {
-        let Some((id, before)) = anchor else { return Task::none() };
+    pub(super) fn keep_in_place(&mut self, anchor: Option<(NodeId, NodeId, Point)>) -> Task<Message> {
+        let Some((focus, id, before)) = anchor else { return Task::none() };
         let Some(doc) = &self.doc else { return Task::none() };
-        if doc.focus != id {
+        if doc.focus != focus {
             return Task::none();
         }
         let Some(after) = doc.layout.get(id).map(|b| b.rect.position()) else { return Task::none() };
