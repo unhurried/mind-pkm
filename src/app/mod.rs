@@ -209,6 +209,9 @@ pub struct App {
     window: WindowGeometry,
     /// The map's scroll position, as last scrolled to or reported.
     scroll_offset: Vector,
+    /// Set by a move among siblings: the parent stays in place on screen
+    /// after the message, not the moved node.
+    keep_parent_in_place: bool,
     /// The size of the map's scrollable as last reported; None when it may have changed.
     viewport_size: Option<Size>,
     /// The map's zoom level, one of `viewport::ZOOM_STEPS`.
@@ -262,6 +265,7 @@ impl App {
             window_position: None,
             window: INITIAL_WINDOW,
             scroll_offset: Vector::ZERO,
+            keep_parent_in_place: false,
             viewport_size: None,
             zoom: 1.0,
             wheel_zoom: 0.0,
@@ -342,10 +346,12 @@ impl App {
             return self.handle(message);
         }
         let reveal = message.reveals_focus();
-        // Keep the focused node in place on screen when the layout shifts around it.
-        let anchor = self.focus_anchor();
+        // Keep the focused node (or, after a move among siblings, its parent)
+        // in place on screen when the layout shifts around it.
+        let (focus_anchor, parent_anchor) = (self.focus_anchor(false), self.focus_anchor(true));
         let task = self.handle(message);
         self.relayout();
+        let anchor = if std::mem::take(&mut self.keep_parent_in_place) { parent_anchor } else { focus_anchor };
         let mut tasks = vec![task, self.keep_in_place(anchor)];
         if reveal {
             tasks.push(self.reveal_focus());

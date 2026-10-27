@@ -126,6 +126,7 @@ impl App {
             Command::Paste => iced::clipboard::read().map(Message::ClipboardRead),
             Command::MoveUp | Command::MoveDown => {
                 doc.move_focus(cmd == Command::MoveUp);
+                self.keep_parent_in_place = true;
                 Task::none()
             }
             Command::ToggleFold => {

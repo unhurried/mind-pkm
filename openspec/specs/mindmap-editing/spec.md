@@ -89,6 +89,17 @@ The application SHALL support: a new child node (Tab or Insert), a new sibling a
 - **WHEN** Tab is pressed, the Next Steps refresh changes the map while the text dialog is open, and the dialog is cancelled
 - **THEN** the new node is gone and the refresh's changes stay, and Ctrl+Z returns to the map before the refresh without the new node
 
+### Requirement: View while moving a node among its siblings
+Moving a node up or down among its siblings SHALL NOT scroll the map while the moved node stays in view; when it would leave the view, the map SHALL scroll just enough to keep it in view.
+
+#### Scenario: Moving a node within the view
+- **WHEN** Ctrl+Down is pressed on a node whose next sibling is in view
+- **THEN** the node takes its sibling's place and the map does not scroll
+
+#### Scenario: Moving a node out of the view
+- **WHEN** Ctrl+Down is pressed on a node at the bottom edge of the view
+- **THEN** the map scrolls up just enough to keep the moved node in view
+
 ### Requirement: Clipboard
 Cut and copy (Ctrl+X / Ctrl+C) SHALL put the selected subtrees on an internal clipboard and their text, indented by depth, on the system clipboard. Paste (Ctrl+V) SHALL insert the internally copied subtrees under the selected node when the system clipboard still holds their text, and otherwise SHALL insert the clipboard text one node per line, nesting lines by indentation. Cut-and-pasted nodes SHALL keep their IDs (so node links to them keep working); a copy SHALL get new IDs.
 

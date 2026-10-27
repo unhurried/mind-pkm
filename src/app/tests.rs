@@ -344,3 +344,51 @@ fn only_edits_call_for_the_periodic_refresh() {
     press(&mut app, Named::F7);
     assert!(edited(&app));
 }
+
+fn press_ctrl(app: &mut App, key: Named) {
+    send(
+        app,
+        Message::Key(keyboard::Event::KeyPressed {
+            key: Key::Named(key),
+            modified_key: Key::Named(key),
+            physical_key: Physical::Unidentified(NativeCode::Unidentified),
+            location: Location::Standard,
+            modifiers: Modifiers::CTRL,
+            text: None,
+            repeat: false,
+        }),
+    );
+}
+
+#[test]
+fn moving_a_node_among_its_siblings_scrolls_only_to_keep_it_in_view() {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let kids: Vec<_> = (0..40).map(|i| m.add_child(root, &format!("node {i}"))).collect();
+    let mut app = app_with(m);
+    app.viewport_size = Some(iced::Size::new(800.0, 400.0));
+    let rect = |app: &App, n| app.doc.as_ref().unwrap().layout.get(n).unwrap().rect;
+
+    // Well inside the view: the map stays where it is and the node moves.
+    let n = kids[20];
+    app.doc.as_mut().unwrap().select(vec![n]);
+    let start = iced::Vector::new(0.0, rect(&app, n).center_y() - 200.0);
+    app.scroll_offset = start;
+    let before = rect(&app, n);
+    press_ctrl(&mut app, Named::ArrowDown);
+    assert_eq!(map(&app).index_in_parent(n), Some(21));
+    assert_eq!(app.scroll_offset, start);
+    assert!(rect(&app, n).y > before.y);
+    press_ctrl(&mut app, Named::ArrowUp);
+    press_ctrl(&mut app, Named::ArrowUp);
+    assert_eq!(map(&app).index_in_parent(n), Some(19));
+    assert_eq!(app.scroll_offset, start);
+
+    // At the bottom edge: scrolled just enough to keep the node in view.
+    let bottom = rect(&app, n).y + rect(&app, n).height;
+    app.scroll_offset = iced::Vector::new(0.0, bottom - 400.0 + 24.0);
+    press_ctrl(&mut app, Named::ArrowDown);
+    let r = rect(&app, n);
+    assert!(r.y + r.height > bottom);
+    assert_eq!(app.scroll_offset, iced::Vector::new(0.0, r.y + r.height + 24.0 - 400.0));
+}
