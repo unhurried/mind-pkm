@@ -61,6 +61,13 @@ impl History {
         Some(next)
     }
 
+    /// Forgets every change.
+    pub fn clear(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+        self.typing = None;
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

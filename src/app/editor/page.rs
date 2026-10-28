@@ -221,10 +221,17 @@ impl Page {
         Ok(())
     }
 
-    /// Follows a rename of the file (its text may have changed too).
+    /// Follows a rename of the file. If the rename changed the text (the
+    /// references to the old names), nothing before it can be undone: that
+    /// would bring the old names back into a page whose files are renamed.
     pub fn moved_to(&mut self, path: PathBuf) -> Result<(), String> {
         self.path = path;
-        self.reload()
+        let before = self.text.clone();
+        let result = self.reload();
+        if self.text != before {
+            self.history.clear();
+        }
+        result
     }
 
     fn reparse(&mut self) {

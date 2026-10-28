@@ -104,6 +104,14 @@ impl Doc {
         result
     }
 
+    /// Drops the undo and redo steps: after a change that also moved files,
+    /// which undoing can't take back, so no step may bring back a map that
+    /// names the files as they were.
+    pub(super) fn forget_undo(&mut self) {
+        self.undo.clear();
+        self.redo.clear();
+    }
+
     /// Applies the changes of a background refresh (`apply` tells whether it
     /// made any) as an undo step; unlike an edit, it doesn't call for another
     /// refresh.
