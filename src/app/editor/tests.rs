@@ -1539,3 +1539,15 @@ fn enter_reloads_a_page_changed_on_disk_and_closes_a_message() {
     editor(&mut app, id, enter());
     assert!(app.editors[&id].dialogs.is_empty());
 }
+
+#[test]
+fn the_diagram_being_edited_is_keyed_like_its_render() {
+    use super::render::{RenderKey, keys_of};
+    let (mut app, _f, _, _) = app_with_page("x\n\n```mermaid\ngraph TD\nA-->B\n```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "A-->B");
+    let e = &app.editors[&id];
+    let a = e.page.active.as_ref().unwrap();
+    let key = RenderKey::Mermaid(e.active_diagram(a));
+    assert!(keys_of(&e.page.doc, false).contains(&key), "{key:?}");
+}
