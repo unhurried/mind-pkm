@@ -209,7 +209,8 @@ impl App {
 
 impl App {
     /// Edit (F2) on a page or directory node: renames it with its files; open
-    /// pages are saved first and follow.
+    /// pages are saved first and follow. The files stay renamed, so the map's
+    /// undo history ends here.
     fn rename_doc(&mut self, id: NodeId, kind: DocType, name: &str) {
         if !self.doc.as_ref().is_some_and(|d| d.map.exists(id)) {
             return;
@@ -222,6 +223,9 @@ impl App {
         let Some(doc) = &mut self.doc else { return };
         let result = doc.try_change(|map| commands::rename(map, id, kind, name));
         let renamed = result.is_ok();
+        if renamed {
+            doc.forget_undo();
+        }
         self.report(result);
         if renamed && let (Some(old), Some(new)) = (old, self.doc_path_of(id)) {
             self.editors_renamed(&old, &new);
