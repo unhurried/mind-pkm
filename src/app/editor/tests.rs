@@ -1564,3 +1564,26 @@ fn the_diagram_being_edited_is_keyed_like_its_render() {
     let key = RenderKey::Mermaid(e.active_diagram(a));
     assert!(keys_of(&e.page.doc, false).contains(&key), "{key:?}");
 }
+
+#[test]
+fn only_moving_the_cursor_or_editing_scrolls_to_it() {
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    let prefs = app.editor_prefs.clone();
+    let update =
+        |app: &mut App, msg: EditorMsg| app.editors.get_mut(&id).unwrap().update(msg, &prefs, &mut Vec::new()).units();
+    // A key no binding moves the cursor with (a released key, a modifier):
+    // the page stays scrolled where the user left it.
+    let released = keyboard::Event::KeyReleased {
+        key: Key::Named(Named::Shift),
+        modified_key: Key::Named(Named::Shift),
+        physical_key: Physical::Unidentified(NativeCode::Unidentified),
+        location: Location::Left,
+        modifiers: Modifiers::empty(),
+    };
+    assert_eq!(update(&mut app, EditorMsg::Key(released)), 0);
+    assert_eq!(update(&mut app, EditorMsg::Key(keyboard::Event::ModifiersChanged(Modifiers::SHIFT))), 0);
+    // Moving the cursor brings it into view.
+    assert!(update(&mut app, EditorMsg::Bind(Bind::Down)) > 0);
+}

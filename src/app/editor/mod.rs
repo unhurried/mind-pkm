@@ -276,16 +276,15 @@ impl Editor {
     }
 
     pub fn update(&mut self, msg: EditorMsg, prefs: &EditorPrefs, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
-        // After typing and moving with keys, the cursor stays in view.
-        let reveals = matches!(
+        // After typing and moving with keys, the cursor stays in view; other
+        // messages of these kinds (a key release, a modifier, the wheel) leave
+        // the scrolling to the user.
+        let may_reveal = matches!(
             msg,
-            EditorMsg::Action(_)
-                | EditorMsg::Bind(_)
-                | EditorMsg::Command(_)
-                | EditorMsg::Key(_)
-                | EditorMsg::Find(_)
-                | EditorMsg::Live(_)
+            EditorMsg::Action(_) | EditorMsg::Bind(_) | EditorMsg::Key(_) | EditorMsg::Find(_) | EditorMsg::Live(_)
         );
+        let command = matches!(msg, EditorMsg::Command(_));
+        let before = self.cursor_state();
         let revision = self.page.revision;
         let shown = self.status.text().to_string();
         let task = self.handle(msg, prefs, effects);
@@ -297,7 +296,21 @@ impl Editor {
         if !self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
             (self.cell_drag, self.range_head, self.cell_menu, self.resize_fields) = (false, None, None, (None, None));
         }
+        let reveals = command || (may_reveal && self.cursor_state() != before);
         if reveals { Task::batch([task, self.reveal(prefs)]) } else { task }
+    }
+
+    /// What moving the cursor or editing changes: the selection (of the
+    /// source mode's editor too), the table cell, the text.
+    fn cursor_state(&self) -> CursorState {
+        CursorState {
+            sel: self.page.sel,
+            blocks: self.page.blocks,
+            revision: self.page.revision,
+            region: self.page.active.as_ref().map(|a| a.region.clone()),
+            cell: self.page.active.as_ref().and_then(|a| a.table.as_ref()).map(|t| (t.cell, t.cell_sel)),
+            source: self.source.as_ref().map(Content::cursor),
+        }
     }
 
     /// Scrolls the page to show the cursor.
@@ -1506,6 +1519,17 @@ pub fn files_markdown(page: &Path, text: &str, files: &[PathBuf], opts: &ImageOp
 fn cell_html(cell: &str) -> String {
     let html = html::fragment(&table::cell_to_text(cell).replace('\n', "  \n"));
     html.trim().trim_start_matches("<p>").trim_end_matches("</p>").to_string()
+}
+
+/// See [`Editor::cursor_state`].
+#[derive(PartialEq)]
+struct CursorState {
+    sel: Sel,
+    blocks: Option<(usize, usize)>,
+    revision: u64,
+    region: Option<std::ops::Range<usize>>,
+    cell: Option<((usize, usize), Sel)>,
+    source: Option<iced::widget::text_editor::Cursor>,
 }
 
 /// Pasted cells as a Markdown table, the first row its header.
