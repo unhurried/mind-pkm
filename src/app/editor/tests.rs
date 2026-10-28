@@ -1425,3 +1425,37 @@ fn an_item_indented_by_tab_is_an_empty_item_until_typed_into() {
         assert_eq!(page_text(&app, id), format!("a\n\n{marker} aaa\n  {marker} bbb\n    {marker} ccc\n"));
     }
 }
+
+#[test]
+fn enter_chooses_the_default_button_of_a_dialog() {
+    let (mut app, _f, _, page) = app_with_page("one\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    typing(&mut app, id, "!");
+    send(&mut app, Message::CloseRequest(id));
+    assert_eq!(app.editors[&id].dialogs.front(), Some(&EditorDialog::Unsaved));
+    // Other keys do nothing while the dialog is open.
+    editor(&mut app, id, EditorMsg::Key(key_event(Key::Character("x".into()), Modifiers::empty())));
+    assert_eq!(app.editors[&id].dialogs.front(), Some(&EditorDialog::Unsaved));
+    // Enter saves, and the window closes.
+    editor(&mut app, id, EditorMsg::Key(key_event(Key::Named(Named::Enter), Modifiers::empty())));
+    assert!(!app.editors.contains_key(&id));
+    assert_eq!(std::fs::read_to_string(page).unwrap(), "\u{feff}one!\n");
+}
+
+#[test]
+fn enter_reloads_a_page_changed_on_disk_and_closes_a_message() {
+    let (mut app, _f, _, page) = app_with_page("one\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    typing(&mut app, id, "!");
+    let enter = || EditorMsg::Key(key_event(Key::Named(Named::Enter), Modifiers::empty()));
+    app.editors.get_mut(&id).unwrap().dialogs.push_back(EditorDialog::ChangedOnDisk);
+    std::fs::write(&page, "\u{feff}two\n").unwrap();
+    editor(&mut app, id, enter());
+    assert!(app.editors[&id].dialogs.is_empty());
+    assert_eq!(page_text(&app, id), "two\n");
+    app.editors.get_mut(&id).unwrap().dialogs.push_back(EditorDialog::Message("oops".into()));
+    editor(&mut app, id, enter());
+    assert!(app.editors[&id].dialogs.is_empty());
+}

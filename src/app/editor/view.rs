@@ -10,6 +10,7 @@ use super::find::FindBar;
 use super::highlight::{self, MarkdownHighlighter};
 use super::keys::{self, BindContext, EditorCommand, MENUS, TABLE_MENU};
 use super::live_text::{LiveText, Run, RunKind, TextLook};
+use super::modal::modal;
 use super::page::{Active, Live, TableState};
 use super::render::{RenderCache, RenderKey, Rendered};
 use super::{DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
@@ -1813,7 +1814,12 @@ fn dialog_view(dialog: &EditorDialog, p: Palette) -> Element<'_, EditorMsg> {
         .padding(20)
         .max_width(560)
         .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(8)));
-    opaque(center(card).style(|_| container::background(Color::from_rgba(0.0, 0.0, 0.0, 0.25))))
+    // The page's text widget keeps its keyboard focus under the dialog; the
+    // dialog takes the keys, so that none of them edits the page.
+    modal(opaque(center(card).style(|_| container::background(Color::from_rgba(0.0, 0.0, 0.0, 0.25)))), |event| {
+        EditorMsg::Key(event)
+    })
+    .into()
 }
 
 #[cfg(test)]

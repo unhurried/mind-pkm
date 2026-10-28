@@ -11,6 +11,7 @@ mod flow;
 mod highlight;
 mod keys;
 mod live_text;
+mod modal;
 mod page;
 mod render;
 mod scroll;
@@ -155,6 +156,17 @@ pub enum EditorDialog {
     Unsaved,
     /// The file changed on disk while there are unsaved changes.
     ChangedOnDisk,
+}
+
+impl EditorDialog {
+    /// The answer of the highlighted button, which Enter chooses.
+    fn default_answer(&self) -> DialogAnswer {
+        match self {
+            EditorDialog::Message(_) => DialogAnswer::Ok,
+            EditorDialog::Unsaved => DialogAnswer::Save,
+            EditorDialog::ChangedOnDisk => DialogAnswer::Discard,
+        }
+    }
 }
 
 /// What an editor asks of the application.
@@ -422,9 +434,9 @@ impl Editor {
             _ => return Task::none(),
         };
         self.modifiers = modifiers;
-        if !self.dialogs.is_empty() {
+        if let Some(dialog) = self.dialogs.front() {
             return match key {
-                Key::Named(Named::Enter) => self.dialog_answered(DialogAnswer::Ok, effects),
+                Key::Named(Named::Enter) => self.dialog_answered(dialog.default_answer(), effects),
                 _ => Task::none(),
             };
         }
@@ -1005,7 +1017,6 @@ impl Editor {
     fn dialog_answered(&mut self, answer: DialogAnswer, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         let Some(dialog) = self.dialogs.front().cloned() else { return Task::none() };
         match (dialog, answer) {
-            (EditorDialog::Unsaved, DialogAnswer::Ok) => return Task::none(),
             (EditorDialog::Unsaved, DialogAnswer::Save) => {
                 self.dialogs.pop_front();
                 match self.page.save() {
