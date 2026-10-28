@@ -533,7 +533,17 @@ impl Editor {
                         (Entry::Active, None, None) => (BlockKind::Paragraph, Vec::new()),
                     }
                 };
+                // The source range an entry covers.
+                let covers = |e: &Entry| -> std::ops::Range<usize> {
+                    match (e, &page.pending, active) {
+                        (Entry::Block(i), _, _) => doc.blocks[*i].range.clone(),
+                        (Entry::Active, Some(pd), _) => pd.at..pd.at,
+                        (Entry::Active, None, Some(a)) => a.region.clone(),
+                        (Entry::Active, None, None) => 0..0,
+                    }
+                };
                 let mut previous: Option<Described> = None;
+                let mut previous_end = None;
                 for entry in &entries {
                     let (kind, outer) = describe(entry);
                     let space_above = gap(previous.as_ref().map(|p| &p.0), &kind);
@@ -549,7 +559,19 @@ impl Editor {
                                     .collect()
                             })
                             .unwrap_or_default();
-                        col = col.push(in_containers(space().height(space_above).into(), &shared, p, ctx.zoom));
+                        // A click in the gap goes to the nearer block: the upper
+                        // half to the end of the one above, the lower half to the
+                        // start of the one below.
+                        let half = |at: usize| -> Element<EditorMsg> {
+                            mouse_area(space().width(Fill).height(space_above / 2.0))
+                                .on_press(EditorMsg::PressedAt(at))
+                                .into()
+                        };
+                        let gap_view: Element<EditorMsg> = match previous_end {
+                            Some(end) => column![half(end), half(covers(entry).start)].into(),
+                            None => half(covers(entry).start),
+                        };
+                        col = col.push(in_containers(gap_view, &shared, p, ctx.zoom));
                     }
                     let kinds: Vec<ContainerKind> = outer.iter().map(|(k, _)| *k).collect();
                     let inner = inner_width(width, &kinds, ctx.zoom);
@@ -569,13 +591,17 @@ impl Editor {
                             } else {
                                 rendered
                             };
+                            // As wide as the page, so that a click beside the block's
+                            // content (an empty item, a line of math) reaches it too.
                             let boxed = container(in_containers(rendered, &kinds, p, ctx.zoom))
+                                .width(Fill)
                                 .id(self.id(&format!("block-{i}")));
                             mouse_area(boxed).on_press(EditorMsg::BlockPressed(i)).into()
                         }
                         (Entry::Active, None) => continue,
                     };
                     col = col.push(shown);
+                    previous_end = Some(covers(entry).end);
                     previous = Some((kind, outer));
                 }
                 // Room to click below the last block.
@@ -1220,6 +1246,7 @@ fn paragraph_view<'a>(
             }
             continue;
         }
+        let line_end = line.last().map(|i| i.source().end);
         let mut flow = Row::new().align_y(Alignment::Center);
         let mut texts: Vec<Inline> = Vec::new();
         let flush = |texts: &mut Vec<Inline>, flow: Row<'a, EditorMsg>| -> Row<'a, EditorMsg> {
@@ -1249,7 +1276,12 @@ fn paragraph_view<'a>(
             }
         }
         flow = flush(&mut texts, flow);
-        col = col.push(flow.wrap());
+        // A click to the right of the line puts the cursor at its end.
+        let line = container(flow.wrap()).width(Fill);
+        col = col.push(match line_end {
+            Some(end) => mouse_area(line).on_press(EditorMsg::PressedAt(end)).into(),
+            None => Element::from(line),
+        });
     }
     col.into()
 }

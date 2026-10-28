@@ -261,6 +261,50 @@ fn an_empty_template_item_is_typed_into() {
 }
 
 #[test]
+fn a_click_in_the_gap_between_blocks_goes_to_the_nearer_block() {
+    let (mut app, _f, _, _) = app_with_page("* one\n* two\n\nAfter\n");
+    let id = open_with_f1(&mut app);
+    let blocks = app.editors[&id].page.doc.blocks.clone();
+    // The upper half of the gap: the end of the block above.
+    editor(&mut app, id, EditorMsg::PressedAt(blocks[1].range.end));
+    typing(&mut app, id, "!");
+    assert_eq!(page_text(&app, id), "* one\n* two!\n\nAfter\n");
+    // The lower half: the start of the block below.
+    let below = app.editors[&id].page.doc.blocks[2].range.start;
+    editor(&mut app, id, EditorMsg::PressedAt(below));
+    typing(&mut app, id, "?");
+    assert_eq!(page_text(&app, id), "* one\n* two!\n\n?After\n");
+}
+
+#[test]
+fn a_click_right_of_a_line_with_math_puts_the_cursor_at_its_end() {
+    let (mut app, _f, _, _) = app_with_page("Inline $x^2+\\frac{1}{2}$ math\nnext $y$\n");
+    let id = open_with_f1(&mut app);
+    // The view reports the end of the clicked line: its last inline's end.
+    let end_of = |app: &App, line: usize| {
+        let editor = &app.editors[&id];
+        let doc = &editor.page.doc;
+        let inlines = crate::markdown::content::inlines(doc, doc.block_events(0));
+        inlines
+            .split(|i| matches!(i, crate::markdown::content::Inline::Break { .. }))
+            .nth(line)
+            .unwrap()
+            .last()
+            .unwrap()
+            .source()
+            .end
+    };
+    let first = end_of(&app, 0);
+    editor(&mut app, id, EditorMsg::PressedAt(first));
+    typing(&mut app, id, "!");
+    assert_eq!(page_text(&app, id), "Inline $x^2+\\frac{1}{2}$ math!\nnext $y$\n");
+    let second = end_of(&app, 1);
+    editor(&mut app, id, EditorMsg::PressedAt(second));
+    typing(&mut app, id, "?");
+    assert_eq!(page_text(&app, id), "Inline $x^2+\\frac{1}{2}$ math!\nnext $y$?\n");
+}
+
+#[test]
 fn arrows_cross_into_the_next_and_previous_blocks() {
     let (mut app, _f, _, _) = app_with_page("first line\n\nsecond\n");
     let id = open_with_f1(&mut app);
