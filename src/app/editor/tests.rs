@@ -510,6 +510,42 @@ fn a_spreadsheet_range_pasted_outside_a_table_becomes_a_table() {
 }
 
 #[test]
+fn tab_indented_text_is_pasted_as_text() {
+    let (mut app, _f, _, _) = app_with_page("x\n\n```\nfoo\n```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    pasted(&mut app, id, "def g():\n\treturn 1", None, false);
+    assert!(!page_text(&app, id).contains('|'), "{}", page_text(&app, id));
+    assert!(page_text(&app, id).starts_with("xdef g():\n"), "{}", page_text(&app, id));
+    // In a code block: verbatim, even a grid.
+    click_after(&mut app, id, "foo");
+    pasted(&mut app, id, "a\tb\n1\t2", None, false);
+    assert!(page_text(&app, id).ends_with("```\nfooa\tb\n1\t2\n```\n"), "{}", page_text(&app, id));
+}
+
+#[test]
+fn html_around_a_table_is_kept() {
+    let html = "<p>Hello <b>bold</b> and <a href=\"https://example.com\">site</a></p>\n\
+                <ul><li>one</li><li>two</li></ul>\n\
+                <table><tr><th>H1</th><th>H2</th></tr><tr><td>c1</td><td>c2</td></tr></table>";
+    let (mut app, _f, _, _) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    select(&mut app, id, "x");
+    pasted(&mut app, id, "Hello bold and site\none\ntwo\nH1\tH2\nc1\tc2", Some(html), false);
+    assert_eq!(
+        page_text(&app, id).trim_end(),
+        "Hello **bold** and [site](https://example.com)\n\n*   one\n*   two\n\n| H1  | H2  |\n| --- | --- |\n| c1  | c2  |"
+    );
+    // A table alone (with the head a spreadsheet adds) is still a table.
+    let (mut app, _f, _, _) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    select(&mut app, id, "x");
+    let sheet = "<html><head><style>td { color: red }</style></head><body><table><tr><td>a</td><td>b</td></tr></table></body></html>";
+    pasted(&mut app, id, "a\tb", Some(sheet), false);
+    assert_eq!(page_text(&app, id).trim(), "x\n\n| a   | b   |\n| --- | --- |\n|     |     |");
+}
+
+#[test]
 fn cutting_whole_blocks() {
     let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n");
     let id = open_with_f1(&mut app);

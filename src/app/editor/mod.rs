@@ -1268,13 +1268,24 @@ impl Editor {
                 return self.insert_image_data(image, prefs);
             }
             if !in_code && (self.copied.as_deref() != Some(text.as_str()) || text.is_empty()) {
-                // A table (from a spreadsheet or a web page).
-                let grid = content
+                // A table (from a spreadsheet or a web page), alone or with
+                // other content around it.
+                let parts = content
                     .html
                     .as_deref()
-                    .and_then(|h| table::parse_html_table(h, |cell| htmd::convert(cell).unwrap_or_default()))
-                    .or_else(|| table::parse_tsv(&text))
-                    .filter(|g| g.len() > 1 || g.first().is_some_and(|r| r.len() > 1));
+                    .map(|h| table::split_html_tables(h, |cell| htmd::convert(cell).unwrap_or_default()))
+                    .unwrap_or_default();
+                let has_table = parts.iter().any(|p| matches!(p, table::HtmlPart::Table(_)));
+                let content_parts: Vec<_> = parts
+                    .iter()
+                    .filter(|p| !matches!(p, table::HtmlPart::Html(h) if html::to_plain_text(h).trim().is_empty()))
+                    .collect();
+                let grid = match content_parts.as_slice() {
+                    [table::HtmlPart::Table(grid)] => Some(grid.clone()),
+                    _ if has_table => None,
+                    _ => table::parse_tsv(&text),
+                }
+                .filter(|g| g.len() > 1 || g.first().is_some_and(|r| r.len() > 1));
                 if let Some(grid) = grid {
                     if in_table {
                         self.page.change_table(|t, cell| {
@@ -1282,17 +1293,24 @@ impl Editor {
                             cell
                         });
                     } else {
-                        let mut t = table::Table::new(
-                            grid.len().saturating_sub(1),
-                            grid.iter().map(Vec::len).max().unwrap_or(1),
-                        );
-                        t.paste((0, 0), &grid);
-                        return self.insert_block(&t.to_markdown(), "");
+                        return self.insert_block(&grid_markdown(&grid), "");
                     }
                     return self.focus();
                 }
-                if let Some(html) = &content.html
-                    && let Ok(markdown) = htmd::convert(html)
+                let markdown = if has_table {
+                    let pieces: Vec<String> = content_parts
+                        .iter()
+                        .map(|p| match p {
+                            table::HtmlPart::Html(h) => htmd::convert(h).unwrap_or_default().trim().to_string(),
+                            table::HtmlPart::Table(grid) => grid_markdown(grid),
+                        })
+                        .filter(|m| !m.is_empty())
+                        .collect();
+                    Some(pieces.join("\n\n"))
+                } else {
+                    content.html.as_deref().and_then(|h| htmd::convert(h).ok())
+                };
+                if let Some(markdown) = markdown
                     && !markdown.trim().is_empty()
                 {
                     self.insert_text(markdown.trim());
@@ -1480,6 +1498,13 @@ pub fn files_markdown(page: &Path, text: &str, files: &[PathBuf], opts: &ImageOp
 fn cell_html(cell: &str) -> String {
     let html = html::fragment(&table::cell_to_text(cell).replace('\n', "  \n"));
     html.trim().trim_start_matches("<p>").trim_end_matches("</p>").to_string()
+}
+
+/// Pasted cells as a Markdown table, the first row its header.
+fn grid_markdown(grid: &[Vec<String>]) -> String {
+    let mut t = table::Table::new(grid.len().saturating_sub(1), grid.iter().map(Vec::len).max().unwrap_or(1));
+    t.paste((0, 0), grid);
+    t.to_markdown()
 }
 
 /// The selection of the source mode's text editor, as page offsets.
