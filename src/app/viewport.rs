@@ -1,5 +1,6 @@
 //! The visible part of the map: relayout, scrolling, panning, zooming.
 
+use super::search_panel::ROW_HEIGHT;
 use super::{App, MAP_SCROLL_ID, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
@@ -35,11 +36,18 @@ pub enum Pan {
 }
 
 impl App {
+    /// The height of the search panel: two fifths of the room between the
+    /// bars, less two result rows.
+    pub(super) fn search_panel_height(&self) -> f32 {
+        let body = (self.window_size.height - BARS_HEIGHT).max(0.0);
+        (body * 0.4 - 2.0 * ROW_HEIGHT).max(0.0)
+    }
+
     /// The size of the map's scrollable: as last measured, else estimated
     /// from the window size.
     pub(super) fn viewport(&self) -> Size {
         self.viewport_size.unwrap_or_else(|| {
-            let search = if self.search.open { self.window_size.height * 0.4 } else { 0.0 };
+            let search = if self.search.open { self.search_panel_height() } else { 0.0 };
             Size::new(self.window_size.width, (self.window_size.height - BARS_HEIGHT - search).max(100.0))
         })
     }
