@@ -18,8 +18,8 @@ use iced::widget::{
     rich_text, row, scrollable, space, stack, text, text_input, tooltip,
 };
 use iced::{
-    Alignment, Background, Color, Element, Fill, Font, Length, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector,
-    border, mouse,
+    Alignment, Background, Color, Element, Fill, Font, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector, border,
+    mouse,
 };
 use std::collections::HashMap;
 
@@ -180,8 +180,8 @@ impl App {
                 let map = self.map_view(doc);
                 if self.search.open {
                     column![
-                        container(map).height(Length::FillPortion(3)),
-                        container(self.search_view()).height(Length::FillPortion(2))
+                        container(map).height(Fill),
+                        container(self.search_view()).height(self.search_panel_height())
                     ]
                     .into()
                 } else {
