@@ -12,6 +12,20 @@ For every page node, the refresh SHALL make the node's children equal to the fir
 - **WHEN** a page's Next Steps lists `* One`, `- Two`, `* x`, `* Three`, `* Four`
 - **THEN** the page node's children are `One`, `Two`, `Three`
 
+### Requirement: Next Steps children are kept
+A child whose text is still one of the items SHALL be kept, with its icons and attributes, and moved into the items' order; only the other children SHALL be deleted and only the missing items added.
+
+#### Scenario: A checked step stays checked
+- **WHEN** the child `step A` of a page node is checked and `* step C` is added to the page's Next Steps after `step A` and `step B`
+- **THEN** after the refresh the children are `step A` (still checked, still the same node), `step B` and `step C`
+
+### Requirement: Nodes put under a page node
+Adding, pasting or dropping nodes under a page node SHALL show a warning in the status bar that the refresh replaces a page node's children with its Next Steps.
+
+#### Scenario: A node added under a page node
+- **WHEN** Tab is pressed on a page node
+- **THEN** the status bar warns that the page node's children are replaced by its Next Steps on the next refresh
+
 ### Requirement: Stale ToDo items
 The refresh SHALL delete the direct children of `root > ToDo` that link a page file `<docDir>/<page>.md` and whose text is no longer `<item> (<page>)` for any of that page's Next Steps items (all of them, not only the first three), or whose page cannot be read. ToDo children linking nothing or linking files outside the document directory, and nodes deeper under ToDo, SHALL be left alone.
 

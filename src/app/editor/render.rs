@@ -62,17 +62,22 @@ pub fn keys_of(doc: &Document, dark: bool) -> HashSet<RenderKey> {
     for (i, block) in doc.blocks.iter().enumerate() {
         match &block.kind {
             k if k.is_mermaid() => {
-                let source = content::nodes(doc, doc.block_events(i)).into_iter().find_map(|n| match n {
-                    Node::Code { text, .. } => Some(text),
-                    _ => None,
-                });
-                keys.insert(RenderKey::Mermaid(source.unwrap_or_else(|| code_of(doc, i))));
+                keys.insert(RenderKey::Mermaid(mermaid_source(doc, i)));
             }
             BlockKind::Code { .. } | BlockKind::FrontMatter | BlockKind::Other => {}
             _ => collect_math(&content::nodes(doc, doc.block_events(i)), dark, &mut keys),
         }
     }
     keys
+}
+
+/// The diagram source of a Mermaid block, as its render is keyed.
+pub fn mermaid_source(doc: &Document, block: usize) -> String {
+    let source = content::nodes(doc, doc.block_events(block)).into_iter().find_map(|n| match n {
+        Node::Code { text, .. } => Some(text),
+        _ => None,
+    });
+    source.unwrap_or_else(|| code_of(doc, block))
 }
 
 /// The code of a code block.

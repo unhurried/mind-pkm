@@ -42,13 +42,16 @@ use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use viewport::Pan;
 
 /// The periodic Next Steps / search index refresh runs at most this often, and
 /// only after the map changed.
 const UPDATE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const TICK: Duration = Duration::from_secs(20);
+/// How long a status bar message is shown at least (it goes on the first
+/// message, or tick, after that).
+const STATUS_TIME: Duration = Duration::from_secs(10);
 /// The window when none is remembered.
 const INITIAL_WINDOW: WindowGeometry =
     WindowGeometry { size: Size::new(1280.0, 800.0), position: None, maximized: false };
@@ -225,7 +228,7 @@ pub struct App {
     edges: iced::widget::canvas::Cache,
     clipboard: Option<Clipboard>,
     /// The status bar message.
-    status: String,
+    status: Status,
     pan: Option<Pan>,
     /// A node drag, armed by a press on a selected node.
     drag: Option<NodeDrag>,
@@ -273,7 +276,7 @@ impl App {
             measure_cache: HashMap::new(),
             edges: Default::default(),
             clipboard: None,
-            status: String::new(),
+            status: Status::default(),
             pan: None,
             drag: None,
         }
@@ -339,6 +342,10 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        self.status.expire();
+        for editor in self.editors.values_mut() {
+            editor.status.expire();
+        }
         let message = match self.route(message) {
             Ok(message) => message,
             Err(task) => return task,
@@ -507,5 +514,36 @@ impl App {
             doc.select(vec![id]);
         }
         self.drag_arm(id, click);
+    }
+}
+
+/// A status bar message, shown for a while ([`STATUS_TIME`]) or until it is
+/// replaced or cleared.
+#[derive(Debug, Default)]
+pub struct Status {
+    text: String,
+    since: Option<Instant>,
+}
+
+impl Status {
+    pub fn set(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+        self.since = Some(Instant::now());
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.since = None;
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Clears the message once it has been shown long enough.
+    fn expire(&mut self) {
+        if self.since.is_some_and(|t| t.elapsed() >= STATUS_TIME) {
+            self.clear();
+        }
     }
 }

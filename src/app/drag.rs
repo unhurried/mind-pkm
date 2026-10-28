@@ -153,6 +153,7 @@ impl App {
             }
         } else if let Some(target) = drag.target {
             doc.move_nodes(&drag.nodes, target);
+            self.warn_if_under_page(&drag.nodes);
         }
     }
 

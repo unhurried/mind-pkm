@@ -147,10 +147,14 @@ impl App {
             return Task::none();
         }
         let Some(doc) = &mut self.doc else { return Task::none() };
-        doc.checkpoint();
+        let before = doc.map.clone();
         let result = commands::delete_execute(&mut doc.map, targets, &mut |files| {
             trash::delete_all(files).map_err(|e| e.to_string())
         });
+        // An undo step only when a node went; the selection moves next to it.
+        if targets.iter().any(|&(n, _)| before.exists(n) && !doc.map.exists(n)) {
+            doc.record(before);
+        }
         self.report(result);
         self.close_deleted_editors(&paths)
     }

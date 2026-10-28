@@ -136,7 +136,7 @@ impl App {
     pub(super) fn index_updated(&mut self, result: Result<(), String>) {
         self.search.updating = false;
         if let Err(e) = result {
-            self.status = format!("search index update failed: {e}");
+            self.status.set(format!("search index update failed: {e}"));
         } else if self.search.status == UPDATING_INDEX_STATUS {
             self.search.status = "Ready".into();
         }

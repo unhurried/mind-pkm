@@ -418,7 +418,9 @@ impl Editor {
         let mode = if self.source.is_some() { "Source" } else { "" };
         container(
             row![
-                text(self.status.clone()).size(11).color(p.muted).width(Fill).wrapping(Wrapping::None),
+                container(text(self.status.text().to_string()).size(11).color(p.muted).wrapping(Wrapping::None))
+                    .width(Fill)
+                    .clip(true),
                 text(mode).size(11).color(p.muted),
                 text(counts).size(11).color(p.muted),
                 text(format!("Zoom: {:.0}%", prefs.zoom * 100.0)).size(11).color(p.muted),
@@ -684,14 +686,7 @@ impl Editor {
                 let tex = self.page.text[a.region.clone()].trim().trim_start_matches("$$").trim_end_matches("$$");
                 Some(math_view(tex.trim(), true, ctx))
             }
-            k if k.is_mermaid() => {
-                let src = &self.page.text[a.region.clone()];
-                let body = src.split_once('\n').map_or("", |(_, b)| b);
-                let body = body.rsplit_once('\n').map_or(body, |(b, last)| {
-                    if last.trim().starts_with("```") || last.trim().starts_with("~~~") { b } else { body }
-                });
-                Some(mermaid_view(body, ctx, width))
-            }
+            k if k.is_mermaid() => Some(mermaid_view(&self.active_diagram(a), ctx, width)),
             _ => None,
         };
         let shown: Element<EditorMsg> = match preview {
@@ -699,6 +694,21 @@ impl Editor {
             None => ime_aligned(editor).into(),
         };
         container(shown).id(self.id("active-box")).into()
+    }
+
+    /// The source of the Mermaid block being edited, keyed like the renders
+    /// requested for the page's blocks.
+    pub(super) fn active_diagram(&self, a: &Active) -> String {
+        let block = self.page.active_block().filter(|&b| self.page.doc.blocks[b].kind.is_mermaid());
+        if let Some(b) = block {
+            return super::render::mermaid_source(&self.page.doc, b);
+        }
+        let src = &self.page.text[a.region.clone()];
+        let body = src.split_once('\n').map_or("", |(_, b)| b);
+        let body = body.rsplit_once('\n').map_or(body, |(b, last)| {
+            if last.trim().starts_with("```") || last.trim().starts_with("~~~") { b } else { body }
+        });
+        format!("{body}\n")
     }
 
     /// The code block with the cursor: its code in its box, without the

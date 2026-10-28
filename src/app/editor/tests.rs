@@ -173,6 +173,19 @@ fn saving_keeps_the_bom_and_crlf() {
 }
 
 #[test]
+fn the_saved_message_names_the_file_and_goes_on_the_next_edit() {
+    let (mut app, _f, _, page) = app_with_page("some words\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "some");
+    typing(&mut app, id, "X");
+    editor(&mut app, id, EditorMsg::Command(super::EditorCommand::Save));
+    let name = page.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(app.editors[&id].status.text(), format!("saved {name}"));
+    typing(&mut app, id, "Y");
+    assert_eq!(app.editors[&id].status.text(), "");
+}
+
+#[test]
 fn closing_an_edited_page_asks_first() {
     let (mut app, _f, _, page) = app_with_page("one\n");
     let id = open_with_f1(&mut app);
@@ -507,6 +520,42 @@ fn a_spreadsheet_range_pasted_outside_a_table_becomes_a_table() {
     click_after(&mut app, id, "before");
     pasted(&mut app, id, "a\tb\n1\t2\n", None, false);
     assert_eq!(page_text(&app, id), "before\n\n| a   | b   |\n| --- | --- |\n| 1   | 2   |\n");
+}
+
+#[test]
+fn tab_indented_text_is_pasted_as_text() {
+    let (mut app, _f, _, _) = app_with_page("x\n\n```\nfoo\n```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "x");
+    pasted(&mut app, id, "def g():\n\treturn 1", None, false);
+    assert!(!page_text(&app, id).contains('|'), "{}", page_text(&app, id));
+    assert!(page_text(&app, id).starts_with("xdef g():\n"), "{}", page_text(&app, id));
+    // In a code block: verbatim, even a grid.
+    click_after(&mut app, id, "foo");
+    pasted(&mut app, id, "a\tb\n1\t2", None, false);
+    assert!(page_text(&app, id).ends_with("```\nfooa\tb\n1\t2\n```\n"), "{}", page_text(&app, id));
+}
+
+#[test]
+fn html_around_a_table_is_kept() {
+    let html = "<p>Hello <b>bold</b> and <a href=\"https://example.com\">site</a></p>\n\
+                <ul><li>one</li><li>two</li></ul>\n\
+                <table><tr><th>H1</th><th>H2</th></tr><tr><td>c1</td><td>c2</td></tr></table>";
+    let (mut app, _f, _, _) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    select(&mut app, id, "x");
+    pasted(&mut app, id, "Hello bold and site\none\ntwo\nH1\tH2\nc1\tc2", Some(html), false);
+    assert_eq!(
+        page_text(&app, id).trim_end(),
+        "Hello **bold** and [site](https://example.com)\n\n*   one\n*   two\n\n| H1  | H2  |\n| --- | --- |\n| c1  | c2  |"
+    );
+    // A table alone (with the head a spreadsheet adds) is still a table.
+    let (mut app, _f, _, _) = app_with_page("x\n");
+    let id = open_with_f1(&mut app);
+    select(&mut app, id, "x");
+    let sheet = "<html><head><style>td { color: red }</style></head><body><table><tr><td>a</td><td>b</td></tr></table></body></html>";
+    pasted(&mut app, id, "a\tb", Some(sheet), false);
+    assert_eq!(page_text(&app, id).trim(), "x\n\n| a   | b   |\n| --- | --- |\n|     |     |");
 }
 
 #[test]
@@ -1502,4 +1551,39 @@ fn enter_reloads_a_page_changed_on_disk_and_closes_a_message() {
     app.editors.get_mut(&id).unwrap().dialogs.push_back(EditorDialog::Message("oops".into()));
     editor(&mut app, id, enter());
     assert!(app.editors[&id].dialogs.is_empty());
+}
+
+#[test]
+fn the_diagram_being_edited_is_keyed_like_its_render() {
+    use super::render::{RenderKey, keys_of};
+    let (mut app, _f, _, _) = app_with_page("x\n\n```mermaid\ngraph TD\nA-->B\n```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "A-->B");
+    let e = &app.editors[&id];
+    let a = e.page.active.as_ref().unwrap();
+    let key = RenderKey::Mermaid(e.active_diagram(a));
+    assert!(keys_of(&e.page.doc, false).contains(&key), "{key:?}");
+}
+
+#[test]
+fn only_moving_the_cursor_or_editing_scrolls_to_it() {
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    let prefs = app.editor_prefs.clone();
+    let update =
+        |app: &mut App, msg: EditorMsg| app.editors.get_mut(&id).unwrap().update(msg, &prefs, &mut Vec::new()).units();
+    // A key no binding moves the cursor with (a released key, a modifier):
+    // the page stays scrolled where the user left it.
+    let released = keyboard::Event::KeyReleased {
+        key: Key::Named(Named::Shift),
+        modified_key: Key::Named(Named::Shift),
+        physical_key: Physical::Unidentified(NativeCode::Unidentified),
+        location: Location::Left,
+        modifiers: Modifiers::empty(),
+    };
+    assert_eq!(update(&mut app, EditorMsg::Key(released)), 0);
+    assert_eq!(update(&mut app, EditorMsg::Key(keyboard::Event::ModifiersChanged(Modifiers::SHIFT))), 0);
+    // Moving the cursor brings it into view.
+    assert!(update(&mut app, EditorMsg::Bind(Bind::Down)) > 0);
 }

@@ -71,7 +71,7 @@ Inline HTML SHALL be kept in the file as written. `<u>`, `<s>`, `<del>`, `<b>`, 
 - **THEN** a placeholder reading iframe with a link to that URL is shown, and the tag stays in the file unchanged
 
 ### Requirement: Mermaid diagrams
-A ` ```mermaid ` code block SHALL be shown as the diagram it describes. A diagram that cannot be rendered SHALL show the error below the block's source instead, keeping the source.
+A ` ```mermaid ` code block SHALL be shown as the diagram it describes. A diagram that cannot be rendered SHALL show the error below the block's source instead, keeping the source. While the block is being edited, its diagram (or the error) SHALL be shown below its source, following the source as it changes.
 
 #### Scenario: Flowchart
 - **WHEN** a block reads ` ```mermaid `, `flowchart LR`, `A --> B`, ` ``` `
@@ -80,6 +80,10 @@ A ` ```mermaid ` code block SHALL be shown as the diagram it describes. A diagra
 #### Scenario: Syntax error
 - **WHEN** a mermaid block contains `flowchart LR` and `A -->`
 - **THEN** its source is shown with an error message below it
+
+#### Scenario: Editing a diagram
+- **WHEN** the cursor is in a block reading ` ```mermaid `, `graph TD`, `A-->B`, ` ``` `
+- **THEN** the diagram with A and B is shown below the source being edited
 
 ### Requirement: Math
 Inline math (`$...$`) and math blocks (`$$` ... `$$`) SHALL be typeset from their LaTeX. An expression that cannot be typeset SHALL show its source with the error, inline as code-styled text and for blocks below the source.

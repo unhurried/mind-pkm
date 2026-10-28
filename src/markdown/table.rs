@@ -421,7 +421,9 @@ pub fn text_to_cell(text: &str) -> String {
 }
 
 /// Tab-separated text (as spreadsheets copy it) as a grid; quoted cells may
-/// hold tabs, line breaks and doubled quotes. None unless it has a tab.
+/// hold tabs, line breaks and doubled quotes. None unless it has a tab and
+/// reads as a grid: every row with the same number of cells, and not every
+/// row's first cell empty (tab-indented lines, such as code, are text).
 pub fn parse_tsv(text: &str) -> Option<Vec<Vec<String>>> {
     if !text.contains('\t') {
         return None;
@@ -455,15 +457,56 @@ pub fn parse_tsv(text: &str) -> Option<Vec<Vec<String>>> {
     }
     row.push(cell);
     grid.push(row);
+    let columns = grid[0].len();
+    if grid.iter().any(|r| r.len() != columns) || (grid.len() > 1 && grid.iter().all(|r| r[0].trim().is_empty())) {
+        return None;
+    }
     Some(grid.into_iter().map(|r| r.iter().map(|c| text_to_cell(c.trim())).collect()).collect())
+}
+
+/// A piece of pasted HTML: HTML between tables, or a table's cells.
+#[derive(Debug, PartialEq)]
+pub enum HtmlPart<'a> {
+    Html(&'a str),
+    Table(Vec<Vec<String>>),
+}
+
+/// HTML split into its tables and the HTML around them, in order; each
+/// cell's inner HTML turned into Markdown by `cell`. Empty pieces are left
+/// out.
+pub fn split_html_tables(html: &str, cell: impl Fn(&str) -> String) -> Vec<HtmlPart<'_>> {
+    let lower = html.to_ascii_lowercase();
+    let mut parts = Vec::new();
+    let mut pos = 0;
+    while let Some(start) = lower[pos..].find("<table").map(|p| p + pos) {
+        if start > pos {
+            parts.push(HtmlPart::Html(&html[pos..start]));
+        }
+        let end = lower[start..].find("</table").map_or(lower.len(), |e| start + e);
+        let grid = table_cells(html, &lower, start, end, &cell);
+        if !grid.is_empty() {
+            parts.push(HtmlPart::Table(grid));
+        }
+        pos = lower[end..].find('>').map_or(lower.len(), |p| end + p + 1);
+    }
+    if pos < html.len() {
+        parts.push(HtmlPart::Html(&html[pos..]));
+    }
+    parts
 }
 
 /// The cells of the first `<table>` of HTML, each cell's inner HTML turned
 /// into Markdown by `cell`. None without a table.
 pub fn parse_html_table(html: &str, cell: impl Fn(&str) -> String) -> Option<Vec<Vec<String>>> {
-    let lower = html.to_ascii_lowercase();
-    let start = lower.find("<table")?;
-    let end = lower[start..].find("</table").map_or(lower.len(), |e| start + e);
+    split_html_tables(html, cell).into_iter().find_map(|p| match p {
+        HtmlPart::Table(grid) => Some(grid),
+        HtmlPart::Html(_) => None,
+    })
+}
+
+/// The rows of the table from `start` (its `<table`) to `end` (its
+/// `</table`, or the end of the HTML).
+fn table_cells(html: &str, lower: &str, start: usize, end: usize, cell: &impl Fn(&str) -> String) -> Vec<Vec<String>> {
     let mut grid = Vec::new();
     let mut pos = start;
     while let Some(tr) = lower[pos..end].find("<tr").map(|p| p + pos) {
@@ -497,7 +540,7 @@ pub fn parse_html_table(html: &str, cell: impl Fn(&str) -> String) -> Option<Vec
         grid.push(row);
         pos = tr_end.max(tr + 3);
     }
-    (!grid.is_empty()).then_some(grid)
+    grid
 }
 
 #[cfg(test)]
@@ -638,5 +681,28 @@ mod tests {
         let grid = parse_html_table(html, |s| s.replace("<b>", "**").replace("</b>", "**")).unwrap();
         assert_eq!(grid, vec![vec!["A", "**B**"], vec!["1", "2\\|3"]]);
         assert_eq!(parse_html_table("<p>x</p>", |s| s.to_string()), None);
+    }
+
+    #[test]
+    fn tab_indented_text_is_no_grid() {
+        assert_eq!(parse_tsv("def g():\n\treturn 1"), None);
+        assert_eq!(parse_tsv("\tone\n\ttwo"), None);
+        assert_eq!(parse_tsv("a\tb\nc"), None);
+        assert_eq!(parse_tsv("a\tb"), Some(vec![vec!["a".into(), "b".into()]]));
+        assert_eq!(parse_tsv("\tb\nc\td").unwrap()[0], vec!["", "b"]);
+    }
+
+    #[test]
+    fn html_around_tables() {
+        let html = "<p>Hi</p><TABLE><tr><td>1</td></tr></TABLE><ul><li>x</li></ul><table><tr><td>2</td></tr></table>";
+        assert_eq!(
+            split_html_tables(html, |s| s.to_string()),
+            vec![
+                HtmlPart::Html("<p>Hi</p>"),
+                HtmlPart::Table(vec![vec!["1".into()]]),
+                HtmlPart::Html("<ul><li>x</li></ul>"),
+                HtmlPart::Table(vec![vec!["2".into()]]),
+            ]
+        );
     }
 }

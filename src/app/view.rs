@@ -295,8 +295,8 @@ impl App {
         };
         container(
             row![
-                text(path).size(11).color(MUTED).width(Fill).wrapping(Wrapping::None),
-                text(self.status.clone()).size(11).color(MUTED),
+                container(text(path).size(11).color(MUTED).wrapping(Wrapping::None)).width(Fill).clip(true),
+                text(self.status.text().to_string()).size(11).color(MUTED).wrapping(Wrapping::None),
                 text(filter).size(11).color(MUTED),
                 text(format!("Zoom: {:.0}%", self.zoom * 100.0)).size(11).color(MUTED),
             ]
