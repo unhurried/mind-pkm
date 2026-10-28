@@ -5,7 +5,7 @@ use super::keys::Bind;
 use super::{DialogAnswer, EditorDialog, EditorMsg, opens_in_editor};
 use crate::app::command::Command;
 use crate::app::dialog::Dialog;
-use crate::app::{App, Message};
+use crate::app::{AfterUnsaved, App, Message};
 use crate::mindmap::NodeId;
 use crate::pkm::testutil::Fixture;
 use iced::keyboard::key::{NativeCode, Physical};
@@ -205,6 +205,25 @@ fn exiting_with_unsaved_pages_asks_and_cancel_keeps_them() {
     send(&mut app, Message::DialogSave);
     assert_eq!(std::fs::read_to_string(page).unwrap(), "\u{feff}one!\n");
     assert!(app.dialogs.is_empty());
+}
+
+#[test]
+fn cancelling_the_pages_question_after_dont_save_keeps_the_map_unsaved() {
+    let (mut app, _f, _, _) = app_with_page("one\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    typing(&mut app, id, "!");
+    app.doc.as_mut().unwrap().checkpoint();
+    send(&mut app, Message::CloseRequested);
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
+    send(&mut app, Message::DialogDiscard);
+    assert!(matches!(app.dialogs.front(), Some(Dialog::UnsavedPages(_))));
+    send(&mut app, Message::DialogCancel);
+    assert!(app.dialogs.is_empty());
+    // Cancel aborts the whole exit: the map is still unsaved and is asked about again.
+    assert!(app.doc.as_ref().unwrap().dirty);
+    send(&mut app, Message::CloseRequested);
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
 }
 
 #[test]
