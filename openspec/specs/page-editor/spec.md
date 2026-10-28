@@ -250,6 +250,17 @@ Ctrl+C SHALL put the selection on the clipboard as HTML (rich text) together wit
 - **WHEN** a selection is copied in the editor and pasted elsewhere in it
 - **THEN** exactly the copied Markdown is inserted
 
+### Requirement: Pasting into code
+Inside a code block (and the other code-like blocks: math, front matter, HTML) Ctrl+V SHALL paste the clipboard's plain text as it is, without converting an HTML flavor to Markdown. A clipboard holding HTML only SHALL paste the text of that HTML, one line per block element.
+
+#### Scenario: Pasting code into a code block
+- **WHEN** code copied from VS Code (HTML and plain text) is pasted into a code block
+- **THEN** the plain text is inserted without backslash escapes or extra blank lines
+
+#### Scenario: Pasting HTML only into a code block
+- **WHEN** a clipboard holding only `<div><span>let a_b = c*d;</span></div><div><span>x &lt; y</span></div>` is pasted into a code block
+- **THEN** `let a_b = c*d;` and `x < y` are inserted on two lines
+
 ### Requirement: Links and task boxes in rendered blocks
 Ctrl+click on a rendered link SHALL follow it: a relative `.md` file opens in the editor, `#anchor` scrolls to the heading with that anchor, another file or directory opens with the default application, a URL in the browser. Clicking the box of a rendered task item SHALL check or uncheck it as one undoable change.
 

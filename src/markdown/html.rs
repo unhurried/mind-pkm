@@ -266,9 +266,116 @@ fn text_events(text: &str, in_link: bool, out: &mut Vec<Event<'static>>) {
     }
 }
 
+/// The text of an HTML fragment as it reads: tags dropped, the end of a block
+/// element or a `<br>` a line break, entities decoded (what a code block
+/// receives when the clipboard holds HTML only).
+pub fn to_plain_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        push_decoded(&mut out, &rest[..lt]);
+        rest = &rest[lt..];
+        if let Some(comment) = rest.strip_prefix("<!--") {
+            rest = comment.find("-->").map_or("", |e| &comment[e + 3..]);
+            continue;
+        }
+        let Some(gt) = rest.find('>') else {
+            // Not a tag after all.
+            push_decoded(&mut out, rest);
+            rest = "";
+            break;
+        };
+        let tag = rest[1..gt].trim_start_matches('/').split(|c: char| c.is_whitespace() || c == '/').next();
+        let name = tag.unwrap_or("").to_ascii_lowercase();
+        let closing = rest[1..].starts_with('/');
+        if name == "br" || (closing && is_block(&name)) {
+            out.push('\n');
+        }
+        rest = &rest[gt + 1..];
+        if matches!(name.as_str(), "style" | "script") && !closing {
+            let end = format!("</{name}");
+            rest = rest.to_ascii_lowercase().find(&end).map_or("", |e| &rest[e..]);
+        }
+    }
+    push_decoded(&mut out, rest);
+    out.trim_end_matches('\n').to_string()
+}
+
+fn is_block(name: &str) -> bool {
+    matches!(
+        name,
+        "div"
+            | "p"
+            | "li"
+            | "tr"
+            | "pre"
+            | "ul"
+            | "ol"
+            | "table"
+            | "blockquote"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+    )
+}
+
+/// Appends `text` with its character references decoded.
+fn push_decoded(out: &mut String, text: &str) {
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let decoded = rest.find(';').filter(|&semi| semi <= 10).and_then(|semi| {
+            let name = &rest[1..semi];
+            let c = match name {
+                "lt" => '<',
+                "gt" => '>',
+                "amp" => '&',
+                "quot" => '"',
+                "apos" => '\'',
+                "nbsp" => '\u{a0}',
+                _ => {
+                    let n = name.strip_prefix('#')?;
+                    let code = match n.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                        None => n.parse().ok()?,
+                    };
+                    char::from_u32(code)?
+                }
+            };
+            Some((c, semi + 1))
+        });
+        match decoded {
+            Some((c, len)) => {
+                out.push(c);
+                rest = &rest[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_as_plain_text() {
+        assert_eq!(
+            to_plain_text("<div><div><span>a_b = c*d;</span></div><div><span>x &lt; y</span></div></div>"),
+            "a_b = c*d;\nx < y"
+        );
+        assert_eq!(to_plain_text("a<br>b<!-- c -->&#x41;&#66;&amp;lt; &bogus; & x"), "a\nbAB&lt; &bogus; & x");
+        assert_eq!(to_plain_text("<style>p { x: y }</style><p>one</p><p>two</p>"), "one\ntwo");
+        assert_eq!(to_plain_text("1 < 2"), "1 < 2");
+    }
 
     fn html(md: &str) -> String {
         body(&Document::parse(md), &HtmlOptions::plain())
