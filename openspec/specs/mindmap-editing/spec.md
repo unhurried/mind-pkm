@@ -68,7 +68,7 @@ A folded node SHALL hide its subtree and show the number of its children next to
 - **THEN** the node is unfolded again
 
 ### Requirement: Selection and navigation
-Clicking a node SHALL select it; Ctrl+click SHALL toggle it in the selection and Shift+click add it. The arrow keys SHALL move the selection: Right to the child nearest the node's vertical center, Left to the parent, Up/Down to the previous/next shown node of the same depth; Home SHALL select the root. The view SHALL scroll to keep the selected node visible, and Esc SHALL center it. When a filter or fold hides a selected node, the selection SHALL move to its nearest shown ancestor. When the selected node is deleted, by Delete, Delete (F11), Undo or the Next Steps refresh, the selection SHALL move to its next sibling, else its previous sibling, else its parent.
+Clicking a node SHALL select it; Ctrl+click SHALL toggle it in the selection and Shift+click add it. The arrow keys SHALL move the selection: Right to the child nearest the node's vertical center, Left to the parent, Up/Down to the previous/next shown node of the same depth; Home SHALL select the root. The view SHALL scroll to keep the selected node visible, and Esc SHALL center it. When a filter or fold hides a selected node, the selection SHALL move to its nearest shown ancestor.
 
 #### Scenario: Moving down past the last sibling
 - **WHEN** the last child of a node is selected and Down is pressed
@@ -77,6 +77,9 @@ Clicking a node SHALL select it; Ctrl+click SHALL toggle it in the selection and
 #### Scenario: Moving right into a folded node
 - **WHEN** a folded node is selected and Right is pressed
 - **THEN** the node unfolds and stays selected
+
+### Requirement: Selection after deleting the selected node
+When the selected node is deleted, by Delete, Delete (F11), Undo or the Next Steps refresh, the selection SHALL move to its next sibling, else its previous sibling, else its parent.
 
 #### Scenario: The selected node is deleted
 - **WHEN** the selected directory node `B` between `A` and `C` is deleted with F11
@@ -112,19 +115,25 @@ Cut and copy (Ctrl+X / Ctrl+C) SHALL put the selected subtrees on an internal cl
 - **THEN** a node `a` with a child `b` is added under the selected node
 
 ### Requirement: Undo
-Every change to the map, including changes made by PKM commands, SHALL be undoable with Ctrl+Z and redoable with Ctrl+Y (or Ctrl+Shift+Z), at least 100 steps back, and Undo and Redo SHALL select the nodes that were selected at that point. The Next Steps refresh SHALL NOT be an undo step: its changes SHALL be kept by Undo and Redo, which take back the user's own changes only. A command that changes nothing, such as New Page or New Directory that fail, SHALL add no undo step and SHALL NOT mark the map as changed. Changes to files in the document directory are not undone; renaming a page or directory with Edit (F2) therefore ends the undo history, so that Undo and Redo never bring back a map naming the files as they were.
+Every change to the map, including changes made by PKM commands, SHALL be undoable with Ctrl+Z and redoable with Ctrl+Y (or Ctrl+Shift+Z), at least 100 steps back, and Undo and Redo SHALL select the nodes that were selected at that point. Changes to files in the document directory are not undone; renaming a page or directory with Edit (F2) therefore ends the undo history, so that Undo and Redo never bring back a map naming the files as they were.
+
+#### Scenario: Undo after renaming a page
+- **WHEN** a page node is renamed with F2 and Ctrl+Z is pressed
+- **THEN** the node, its link and the ToDo items keep the new name, matching the renamed files
+
+### Requirement: Undo and the Next Steps refresh
+The Next Steps refresh SHALL NOT be an undo step: its changes SHALL be kept by Undo and Redo, which take back the user's own changes only.
 
 #### Scenario: Undoing a refresh
 - **WHEN** a node is pasted, the Next Steps refresh then changes the map, and Ctrl+Z is pressed
 - **THEN** the paste is taken back, the refresh's changes stay, and the node selected before the paste is selected
 
+### Requirement: Commands that change nothing
+A command that changes nothing, such as New Page or New Directory that fail, SHALL add no undo step and SHALL NOT mark the map as changed.
+
 #### Scenario: A command that fails
 - **WHEN** F9 is pressed on a node whose text is not a valid page name
 - **THEN** the error is shown, the map is not marked as changed, and Ctrl+Z does not take back anything older
-
-#### Scenario: Undo after renaming a page
-- **WHEN** a page node is renamed with F2 and Ctrl+Z is pressed
-- **THEN** the node, its link and the ToDo items keep the new name, matching the renamed files
 
 ### Requirement: Following links
 Clicking a node's link marker SHALL open a linked Markdown (`.md`) file in the built-in editor (with the default application when Use Built-in Editor is unchecked), open another linked file or directory with its default application, open a URL in the default browser, or, for a node link, select and center the linked node (unfolding its ancestors).
