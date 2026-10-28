@@ -468,3 +468,37 @@ fn moving_a_node_among_its_siblings_scrolls_only_to_keep_it_in_view() {
     assert!(r.y + r.height > bottom);
     assert_eq!(app.scroll_offset, iced::Vector::new(0.0, r.y + r.height + 24.0 - 400.0));
 }
+
+#[test]
+fn esc_centers_a_node_near_the_edge_and_the_room_goes_once_out_of_view() {
+    let mut app = app_with(MindMap::new("root"));
+    app.viewport_size = Some(iced::Size::new(800.0, 400.0));
+    let root = map(&app).root();
+    let center = |app: &App| app.doc.as_ref().unwrap().layout.get(root).unwrap().rect.center() - app.scroll_offset;
+    // The small map sits at the top left; Esc moves the root to the middle.
+    send(&mut app, Message::Escape);
+    let c = center(&app);
+    assert!((c.x - 400.0).abs() < 0.5 && (c.y - 200.0).abs() < 0.5, "{c:?}");
+    // Scrolled back to the map's own area, the room left of and above it,
+    // now out of view, is taken away again without moving what is shown.
+    assert!(app.room.before.x > 0.0 && app.room.before.y > 0.0);
+    app.scroll_offset = app.room.before;
+    let shown = center(&app);
+    let _ = app.trim_room();
+    assert_eq!(app.room.before, iced::Vector::ZERO);
+    assert_eq!(center(&app), shown);
+}
+
+#[test]
+fn the_map_can_be_panned_past_its_edges() {
+    let mut app = app_with(MindMap::new("root"));
+    app.viewport_size = Some(iced::Size::new(800.0, 400.0));
+    let root = map(&app).root();
+    let on_screen = |app: &App| app.doc.as_ref().unwrap().layout.get(root).unwrap().rect.position() - app.scroll_offset;
+    let before = on_screen(&app);
+    send(&mut app, Message::PanStart);
+    send(&mut app, Message::PanMove(iced::Point::new(100.0, 100.0)));
+    send(&mut app, Message::PanMove(iced::Point::new(200.0, 150.0)));
+    send(&mut app, Message::PanEnd);
+    assert_eq!(on_screen(&app) - before, iced::Vector::new(100.0, 50.0));
+}

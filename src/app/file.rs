@@ -58,6 +58,7 @@ impl App {
         }
         self.doc = Some(doc);
         self.search = SearchPanel::default();
+        self.room = super::viewport::Room::default();
         self.relayout();
         match view {
             Some(view) => self.scroll_to(Vector::new(view.scroll.0.max(0.0), view.scroll.1.max(0.0))),
@@ -72,7 +73,9 @@ impl App {
         // The focused node last.
         let nodes = doc.selection.iter().copied().filter(|&n| n != doc.focus).chain([doc.focus]);
         let selection = nodes.map(|n| doc.map.freeplane_id(n).to_string()).collect();
-        let scroll = (self.scroll_offset.x, self.scroll_offset.y);
+        // Where the map area without the room around it was scrolled to.
+        let scroll = self.scroll_offset - self.room.before;
+        let scroll = (scroll.x.max(0.0), scroll.y.max(0.0));
         Some((path, MapView { zoom: self.zoom, scroll, selection }))
     }
 

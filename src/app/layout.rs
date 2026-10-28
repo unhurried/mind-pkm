@@ -146,12 +146,12 @@ impl Ctx<'_> {
 }
 
 /// Lays out the visible part of the map. `measure` gives a node's box size
-/// (at the zoom), the gaps are scaled by `zoom`, and `margin` is added around
-/// the map on every side.
+/// (at the zoom), the gaps are scaled by `zoom`, and the margins are added
+/// around the map: `before` left and above it, `after` right and below it.
 pub fn layout(
     map: &MindMap,
     visible: &HashSet<NodeId>,
-    margin: Size,
+    (before, after): (Size, Size),
     zoom: f32,
     measure: &mut dyn FnMut(NodeId) -> Size,
 ) -> MapLayout {
@@ -180,15 +180,15 @@ pub fn layout(
         max_y = max_y.max(b.rect.y + b.rect.height);
     }
     for b in &mut boxes {
-        b.rect.x += margin.width - min_x;
-        b.rect.y += margin.height - min_y;
+        b.rect.x += before.width - min_x;
+        b.rect.y += before.height - min_y;
     }
     let index = boxes.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
     MapLayout {
         boxes,
         index,
         children: ctx.children,
-        size: Size::new(max_x - min_x + 2.0 * margin.width, max_y - min_y + 2.0 * margin.height),
+        size: Size::new(max_x - min_x + before.width + after.width, max_y - min_y + before.height + after.height),
     }
 }
 
@@ -205,7 +205,8 @@ mod tests {
         let a1 = map.create_child(a, None);
         let a2 = map.create_child(a, None);
         let visible: HashSet<NodeId> = map.preorder(r).into_iter().collect();
-        let l = layout(&map, &visible, Size::new(10.0, 10.0), 1.0, &mut |_| Size::new(50.0, 20.0));
+        let l =
+            layout(&map, &visible, (Size::new(10.0, 10.0), Size::new(10.0, 10.0)), 1.0, &mut |_| Size::new(50.0, 20.0));
         assert_eq!(l.boxes.len(), 5);
         let root = l.get(r).unwrap().rect;
         let (ra, rb) = (l.get(a).unwrap().rect, l.get(b).unwrap().rect);
@@ -215,14 +216,15 @@ mod tests {
         assert!(r1.x > ra.x + ra.width && r1.y + r1.height <= r2.y);
         assert!(l.boxes.iter().all(|b| b.rect.x >= 10.0 && b.rect.y >= 10.0));
         // The gaps grow with the zoom.
-        let l2 = layout(&map, &visible, Size::new(10.0, 10.0), 2.0, &mut |_| Size::new(50.0, 20.0));
+        let l2 =
+            layout(&map, &visible, (Size::new(10.0, 10.0), Size::new(10.0, 10.0)), 2.0, &mut |_| Size::new(50.0, 20.0));
         let (root2, ra2) = (l2.get(r).unwrap().rect, l2.get(a).unwrap().rect);
         let (r12, r22) = (l2.get(a1).unwrap().rect, l2.get(a2).unwrap().rect);
         assert_eq!(ra2.x - (root2.x + root2.width), 2.0 * H_GAP);
         assert_eq!(r22.y - (r12.y + r12.height), 2.0 * V_GAP);
         // Folding hides the children.
         map.set_folded(a, true);
-        let l = layout(&map, &visible, Size::ZERO, 1.0, &mut |_| Size::new(50.0, 20.0));
+        let l = layout(&map, &visible, (Size::ZERO, Size::ZERO), 1.0, &mut |_| Size::new(50.0, 20.0));
         assert!(!l.contains(a1) && l.get(a).unwrap().folded);
     }
 
@@ -238,7 +240,7 @@ mod tests {
         let a11 = map.create_child(a1, None);
         let visible: HashSet<NodeId> = map.preorder(r).into_iter().collect();
         for zoom in [1.0, 2.0] {
-            let l = layout(&map, &visible, Size::ZERO, zoom, &mut |_| Size::new(50.0, 20.0) * zoom);
+            let l = layout(&map, &visible, (Size::ZERO, Size::ZERO), zoom, &mut |_| Size::new(50.0, 20.0) * zoom);
             let rect = |id| l.get(id).unwrap().rect;
             // The child node itself, not its subtree's block, is raised.
             assert_eq!(rect(a).y - rect(a1).y, SINGLE_CHILD_RISE * zoom);
@@ -250,7 +252,7 @@ mod tests {
         }
         // A folded node shows no child to raise.
         map.set_folded(a, true);
-        let l = layout(&map, &visible, Size::ZERO, 1.0, &mut |_| Size::new(50.0, 20.0));
+        let l = layout(&map, &visible, (Size::ZERO, Size::ZERO), 1.0, &mut |_| Size::new(50.0, 20.0));
         let (ra, rb2) = (l.get(a).unwrap().rect, l.get(b2).unwrap().rect);
         assert_eq!(ra.y, rb2.y + rb2.height + V_GAP);
     }
@@ -269,7 +271,7 @@ mod tests {
         .unwrap();
         let r = map.root();
         let visible: HashSet<NodeId> = map.preorder(r).into_iter().collect();
-        let l = layout(&map, &visible, Size::ZERO, 1.0, &mut |_| Size::new(50.0, 20.0));
+        let l = layout(&map, &visible, (Size::ZERO, Size::ZERO), 1.0, &mut |_| Size::new(50.0, 20.0));
         let root = l.get(r).unwrap().rect;
         assert!(map.children(r).iter().all(|&c| l.get(c).unwrap().rect.x > root.x + root.width));
         assert_eq!(l.visible_children(r), map.children(r).as_slice());
@@ -282,7 +284,7 @@ mod tests {
         let a = map.create_child(r, None);
         let a1 = map.create_child(a, None);
         let visible: HashSet<NodeId> = [r, a1].into_iter().collect();
-        let l = layout(&map, &visible, Size::ZERO, 1.0, &mut |_| Size::new(50.0, 20.0));
+        let l = layout(&map, &visible, (Size::ZERO, Size::ZERO), 1.0, &mut |_| Size::new(50.0, 20.0));
         assert!(!l.contains(a));
         assert_eq!(l.get(a1).unwrap().parent, Some(r));
     }

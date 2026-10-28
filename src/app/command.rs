@@ -142,7 +142,7 @@ impl App {
                 let link = doc.map.link(focus).unwrap_or("").to_string();
                 self.open_input(LINK_PROMPT, link, InputAction::SetLink(focus))
             }
-            Command::CenterSelected => self.center_on_focus(),
+            Command::CenterSelected => self.center_focus_freely(),
             // The relayout after the command keeps the focused node in place.
             Command::ZoomIn | Command::ZoomOut | Command::ZoomReset => {
                 let zoom = match cmd {

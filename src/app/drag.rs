@@ -204,7 +204,7 @@ mod tests {
     fn drop_position_by_part_of_the_target() {
         let (map, [r, a, a1, _, b, _]) = sample();
         let visible: HashSet<NodeId> = map.preorder(r).into_iter().collect();
-        let l = layout(&map, &visible, Size::ZERO, 1.0, &mut |_| Size::new(40.0, 20.0));
+        let l = layout(&map, &visible, (Size::ZERO, Size::ZERO), 1.0, &mut |_| Size::new(40.0, 20.0));
         let rb = l.get(b).unwrap().rect;
         let at = |y: f32| Point::new(rb.x + 5.0, rb.y + y);
         let target = |p| drop_target(&map, &l, &[a], p).map(|t| t.place);
