@@ -855,8 +855,30 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, loose: bool) -> E
     // Text after the cursor moves into the new item, without leading spaces.
     let rest_start = c + (text[c..region.end].len() - text[c..region.end].trim_start_matches(' ').len());
     let insert = format!("{separator}{indent}{marker}{task}");
-    let t = splice(text, c..rest_start, &insert);
+    let t = splice(text, c..below_empty_item(text, region.end, rest_start, m.indent), &insert);
     Edited::new(t, c + insert.len())
+}
+
+/// Where the text after a new empty item starts, for the item ending at `end`
+/// (its marker indented by `indent`), `rest` if it moves text into the new
+/// item: an empty item can't have a blank line before its first block, so the
+/// blank lines between the item and the blocks it has below it (nested items,
+/// paragraphs) go, and those blocks stay the new item's.
+fn below_empty_item(text: &str, end: usize, rest: usize, indent: usize) -> usize {
+    if rest < end {
+        return rest;
+    }
+    let mut pos = end;
+    while text[pos..].starts_with('\n') {
+        let next = line_range(text, pos + 1);
+        let line = &text[next.clone()];
+        if !line.trim().is_empty() {
+            let nested = line.len() - line.trim_start().len() > indent;
+            return if nested { pos } else { rest };
+        }
+        pos = next.end;
+    }
+    rest
 }
 
 /// The indentation of the list item a nested item at `start` (indented by
@@ -1199,6 +1221,23 @@ mod tests {
         assert_eq!(enter_at("- on‸e"), "- on\n- ‸e");
         assert_eq!(enter_at("- a\n  - b‸"), "- a\n  - b\n  - ‸");
         assert_eq!(enter_at("- a\n\n- b‸"), "- a\n\n- b\n\n- ‸");
+    }
+
+    #[test]
+    fn enter_keeps_the_items_below_nested() {
+        // The children of the item stay children, of the new item.
+        assert_eq!(enter_at("* a‸\n  * b"), "* a\n* ‸\n  * b");
+        assert_eq!(enter_at("* a\n  * b‸\n    * c"), "* a\n  * b\n  * ‸\n    * c");
+        // An empty item can't have a blank line before its blocks: the blank
+        // line goes before the new item.
+        assert_eq!(enter_at("* a‸\n\n  * b"), "* a\n\n* ‸\n  * b");
+        assert_eq!(enter_at("* x\n\n  * a‸\n\n    * b"), "* x\n\n  * a\n\n  * ‸\n    * b");
+        assert_eq!(enter_at("- a‸\n\n  more"), "- a\n\n- ‸\n  more");
+        assert_eq!(enter_at("> * a‸\n>\n>   * b"), "> * a\n>\n> * ‸\n>   * b");
+        // With text moving into the new item, the blank line stays.
+        assert_eq!(enter_at("* a‸b\n\n  * c"), "* a\n\n* ‸b\n\n  * c");
+        // Not the next item at the same level.
+        assert_eq!(enter_at("- a‸\n\n- b"), "- a\n\n- ‸\n\n- b");
     }
 
     #[test]
