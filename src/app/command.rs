@@ -77,6 +77,9 @@ impl Clipboard {
     }
 }
 
+/// Shown when nodes are put under a page node.
+pub(super) const UNDER_PAGE_WARNING: &str = "a page node's children are replaced by its Next Steps on the next refresh";
+
 impl App {
     pub(super) fn run_command(&mut self, cmd: Command) -> Task<Message> {
         match cmd {
@@ -107,10 +110,12 @@ impl App {
             }
             Command::NewChild => {
                 let (n, serial) = doc.new_child();
+                self.warn_if_under_page(&[n]);
                 self.open_input(NEW_TEXT_PROMPT, String::new(), InputAction::NewNode(n, serial))
             }
             Command::NewSibling => {
                 let (n, serial) = doc.new_sibling();
+                self.warn_if_under_page(&[n]);
                 self.open_input(NEW_TEXT_PROMPT, String::new(), InputAction::NewNode(n, serial))
             }
             Command::EditText => {
@@ -264,8 +269,25 @@ impl App {
             Some(subtrees) => subtrees.iter().map(|s| doc.map.insert_subtree(focus, None, s)).collect(),
             None => insert_outline(&mut doc.map, focus, text.as_deref().unwrap_or_default()),
         };
-        doc.select(pasted);
+        doc.select(pasted.clone());
+        self.warn_if_under_page(&pasted);
         Task::none()
+    }
+
+    /// Tells that nodes just put under a page node don't stay there: the
+    /// Next Steps refresh makes a page node's children its Next Steps items.
+    pub(super) fn warn_if_under_page(&mut self, nodes: &[NodeId]) {
+        let Some(doc_dir) = self.doc_dir(false) else { return };
+        let Some(doc) = &self.doc else { return };
+        let map = &doc.map;
+        let under_page = nodes
+            .iter()
+            .filter(|&&n| map.exists(n))
+            .filter_map(|&n| map.parent(n))
+            .any(|p| pkm::doc_type(map, p, &doc_dir) == Some(pkm::DocType::Page));
+        if under_page {
+            self.status.set(UNDER_PAGE_WARNING);
+        }
     }
 
     /// Edit (F2): renames a page or directory node with its file, else edits the text.
@@ -290,7 +312,7 @@ impl App {
         let template = settings::page_template();
         let today = Local::now().date_naive();
         let selection = doc.sorted_selection();
-        doc.checkpoint();
+        let before = doc.map.clone();
         let results: Vec<Result<PathBuf, String>> = selection
             .into_iter()
             .map(|n| {
@@ -301,6 +323,10 @@ impl App {
                 }
             })
             .collect();
+        // An undo step only when something was created.
+        if results.iter().any(Result::is_ok) {
+            doc.record(before);
+        }
         let mut tasks = Vec::new();
         for result in results {
             if let Some(path) = self.report(result) {

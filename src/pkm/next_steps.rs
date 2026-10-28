@@ -152,10 +152,7 @@ pub fn apply(map: &mut MindMap, update: &Update) -> bool {
             continue;
         }
         if map.child_texts(*node) != *lines {
-            map.delete_children(*node);
-            for line in lines {
-                map.add_child(*node, line);
-            }
+            sync_children(map, *node, lines.iter().map(|l| (l.as_str(), None)));
             changed = true;
         }
     }
@@ -191,14 +188,39 @@ fn apply_due_items(map: &mut MindMap, update: &Update) -> bool {
         if map.child_texts(holder).iter().eq(pending.iter().map(|(text, _)| text)) {
             continue;
         }
-        map.delete_children(holder);
-        for (text, page) in &pending {
-            let c = map.add_child(holder, text);
-            map.set_link_file(c, page);
-        }
+        sync_children(map, holder, pending.iter().map(|(text, page)| (text.as_str(), Some(page.as_path()))));
         changed = true;
     }
     changed
+}
+
+/// Makes the children of `parent` the given texts, in order: a child whose
+/// text is wanted stays (with its id, icons and attributes) and is moved into
+/// place, the others are deleted, and the missing texts are added (linking
+/// the file given).
+fn sync_children<'a>(map: &mut MindMap, parent: NodeId, wanted: impl Iterator<Item = (&'a str, Option<&'a Path>)>) {
+    let mut old = map.children(parent);
+    for (index, (text, file)) in wanted.enumerate() {
+        let child = match old.iter().position(|&c| map.text(c) == text) {
+            Some(i) => {
+                let c = old.remove(i);
+                map.move_node(c, parent, Some(index));
+                c
+            }
+            None => {
+                let c = map.create_child(parent, Some(index));
+                map.set_text(c, text);
+                if let Some(file) = file {
+                    map.set_link_file(c, file);
+                }
+                c
+            }
+        };
+        debug_assert_eq!(map.index_in_parent(child), Some(index));
+    }
+    for c in old {
+        map.delete(c);
+    }
 }
 
 /// The whole refresh, synchronously.
@@ -282,6 +304,20 @@ mod tests {
         let child = f.map.children(n)[0];
         refresh_fixture(&mut f);
         assert_eq!(f.map.children(n), vec![child]);
+    }
+
+    #[test]
+    fn children_still_wanted_keep_their_nodes() {
+        let mut f = Fixture::new();
+        let n = page(&mut f, "Task", "### Next Steps\n* step B\n* step C\n* step A\n", &["step A", "old", "step B"]);
+        let [a, old, b] = f.map.children(n)[..] else { panic!() };
+        f.map.add_icon(a, "button_ok");
+        refresh_fixture(&mut f);
+        assert_eq!(f.texts(n), vec!["step B", "step C", "step A"]);
+        let children = f.map.children(n);
+        assert_eq!((children[0], children[2]), (b, a));
+        assert!(f.map.has_icon(a, "button_ok"));
+        assert!(!f.map.exists(old));
     }
 
     #[test]

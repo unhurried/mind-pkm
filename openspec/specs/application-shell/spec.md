@@ -150,3 +150,10 @@ Ending the application while editor windows have unsaved changes SHALL ask, afte
 #### Scenario: Cancelling the exit after discarding the map's changes
 - **WHEN** the map and a page have unsaved changes, the map window is closed, Don't Save is answered for the map and Cancel for the pages
 - **THEN** the application stays open, the map is still shown as having unsaved changes and closing the window again asks about the map
+
+### Requirement: Status bar messages
+Messages in the map window's status bar, such as `saved <file name>` after saving, SHALL name a file by its name only, SHALL be cut off rather than drawn over the rest of the status bar, and SHALL disappear after about ten seconds.
+
+#### Scenario: Saving the map
+- **WHEN** the map `notes.mm` is saved with Ctrl+S
+- **THEN** the status bar shows `saved notes.mm`, and some ten seconds later no message

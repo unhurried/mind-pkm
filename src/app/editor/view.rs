@@ -418,7 +418,9 @@ impl Editor {
         let mode = if self.source.is_some() { "Source" } else { "" };
         container(
             row![
-                text(self.status.clone()).size(11).color(p.muted).width(Fill).wrapping(Wrapping::None),
+                container(text(self.status.text().to_string()).size(11).color(p.muted).wrapping(Wrapping::None))
+                    .width(Fill)
+                    .clip(true),
                 text(mode).size(11).color(p.muted),
                 text(counts).size(11).color(p.muted),
                 text(format!("Zoom: {:.0}%", prefs.zoom * 100.0)).size(11).color(p.muted),

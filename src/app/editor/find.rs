@@ -169,7 +169,7 @@ impl Editor {
             self.page.deactivate();
             self.refresh_source();
         }
-        self.status = format!("{n} replaced");
+        self.status.set(format!("{n} replaced"));
         self.refresh_find();
         Task::none()
     }

@@ -173,6 +173,19 @@ fn saving_keeps_the_bom_and_crlf() {
 }
 
 #[test]
+fn the_saved_message_names_the_file_and_goes_on_the_next_edit() {
+    let (mut app, _f, _, page) = app_with_page("some words\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "some");
+    typing(&mut app, id, "X");
+    editor(&mut app, id, EditorMsg::Command(super::EditorCommand::Save));
+    let name = page.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(app.editors[&id].status.text(), format!("saved {name}"));
+    typing(&mut app, id, "Y");
+    assert_eq!(app.editors[&id].status.text(), "");
+}
+
+#[test]
 fn closing_an_edited_page_asks_first() {
     let (mut app, _f, _, page) = app_with_page("one\n");
     let id = open_with_f1(&mut app);

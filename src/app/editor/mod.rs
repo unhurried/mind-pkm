@@ -21,7 +21,8 @@ mod view;
 #[cfg(test)]
 mod tests;
 
-use super::{App, Message, blocking, settings};
+use super::file::file_name;
+use super::{App, Message, Status, blocking, settings};
 use crate::markdown::count;
 use crate::markdown::edit::{self, Sel};
 use crate::markdown::format::{self, InlineStyle};
@@ -198,7 +199,8 @@ pub struct Editor {
     source: Option<Content>,
     outline: bool,
     fullscreen: bool,
-    status: String,
+    /// The status bar message.
+    pub(super) status: Status,
     modifiers: Modifiers,
     /// The rendered text under the pointer and the pointer's position in it.
     pointer: Option<(Arc<HitInfo>, Point)>,
@@ -241,7 +243,7 @@ impl Editor {
             source: None,
             outline: false,
             fullscreen: false,
-            status: String::new(),
+            status: Status::default(),
             modifiers: Modifiers::default(),
             pointer: None,
             window_size: DEFAULT_WINDOW,
@@ -284,7 +286,13 @@ impl Editor {
                 | EditorMsg::Find(_)
                 | EditorMsg::Live(_)
         );
+        let revision = self.page.revision;
+        let shown = self.status.text().to_string();
         let task = self.handle(msg, prefs, effects);
+        // An edit clears the message about what came before it.
+        if self.page.revision != revision && self.status.text() == shown {
+            self.status.clear();
+        }
         self.refresh_find();
         if !self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
             (self.cell_drag, self.range_head, self.cell_menu, self.resize_fields) = (false, None, None, (None, None));
@@ -410,7 +418,7 @@ impl Editor {
             EditorMsg::ExportTo(pdf, out) => self.export_to(pdf, out),
             EditorMsg::Exported(result) => {
                 match result {
-                    Ok(out) => self.status = format!("exported {}", out.display()),
+                    Ok(out) => self.status.set(format!("exported {}", file_name(&out))),
                     Err(e) => self.dialogs.push_back(EditorDialog::Message(e)),
                 }
                 Task::none()
@@ -979,7 +987,7 @@ impl Editor {
     fn export_to(&mut self, pdf: bool, out: Option<PathBuf>) -> Task<EditorMsg> {
         let Some(out) = out else { return Task::none() };
         let (page, text) = (self.page.path.clone(), self.page.text.clone());
-        self.status = format!("exporting {}", out.display());
+        self.status.set(format!("exporting {}", file_name(&out)));
         Task::perform(
             blocking(move || {
                 let css = settings::export_css().unwrap_or_else(|| html::DEFAULT_CSS.to_string());
@@ -997,7 +1005,7 @@ impl Editor {
 
     pub fn save(&mut self) -> Task<EditorMsg> {
         match self.page.save() {
-            Ok(()) => self.status = format!("saved {}", self.page.path.display()),
+            Ok(()) => self.status.set(format!("saved {}", file_name(&self.page.path))),
             Err(e) => self.dialogs.push_back(EditorDialog::Message(e)),
         }
         Task::none()

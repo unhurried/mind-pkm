@@ -67,6 +67,9 @@ fn cancelling_a_new_node_leaves_the_map_as_it_was() {
     send(&mut app, Message::Escape);
     assert!(app.dialogs.is_empty());
     assert_eq!(map(&app).to_xml(), before);
+    // Still saved, and no refresh is called for.
+    let doc = app.doc.as_ref().unwrap();
+    assert!(!doc.dirty && !doc.edited_since_refresh);
     // Leaving the text empty removes it too.
     press(&mut app, Named::Enter);
     send(&mut app, Message::DialogOk);
@@ -87,10 +90,83 @@ fn a_refresh_landing_while_a_new_node_is_named_is_kept() {
     send(&mut app, Message::Escape);
     assert_eq!(map(&app).child_texts(page), vec!["One"]);
     assert_eq!(root_texts(&app), vec!["config", "ToDo", "Task"]);
-    // Undo goes back to before the refresh, without the new node.
+    // The refresh is no undo step, and no undo step brings the new node back.
     send(&mut app, Message::Command(Command::Undo));
-    assert!(map(&app).child_texts(page).is_empty());
+    assert_eq!(map(&app).child_texts(page), vec!["One"]);
     assert_eq!(root_texts(&app), vec!["config", "ToDo", "Task"]);
+}
+
+#[test]
+fn a_new_page_that_fails_changes_nothing() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    f.add_child(root, "bad/name");
+    let mut app = app_with(f.map.clone());
+    let bad = map(&app).find_child_by_text(root, "bad/name").unwrap();
+    app.doc.as_mut().unwrap().select(vec![bad]);
+    for command in [Command::NewPage, Command::NewDirectory] {
+        send(&mut app, Message::Command(command));
+    }
+    let doc = app.doc.as_ref().unwrap();
+    assert!(!doc.dirty && !doc.edited_since_refresh);
+    // No empty undo step either: Undo has nothing to take back.
+    let before = map(&app).to_xml();
+    send(&mut app, Message::Command(Command::Undo));
+    assert_eq!(map(&app).to_xml(), before);
+    assert!(!app.doc.as_ref().unwrap().dirty);
+}
+
+#[test]
+fn undo_selects_what_was_selected_before_the_change() {
+    let mut app = app_with(MindMap::new("root"));
+    press(&mut app, Named::Tab);
+    send(&mut app, Message::DialogInput("a".into()));
+    press(&mut app, Named::Enter);
+    let a = app.doc.as_ref().unwrap().focus;
+    press(&mut app, Named::Tab);
+    send(&mut app, Message::DialogInput("b".into()));
+    press(&mut app, Named::Enter);
+    send(&mut app, Message::Command(Command::Undo));
+    assert_eq!(app.doc.as_ref().unwrap().focus, a);
+}
+
+#[test]
+fn a_refresh_keeps_matching_children_and_the_selection() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    f.write_page("Task", "### Next Steps\n* step A\n* step B\n");
+    let page = f.add_page_node(root, "Task");
+    let a = f.add_child(page, "step A");
+    f.add_child(page, "step B");
+    f.map.add_icon(a, "button_ok");
+    let mut app = app_with(f.map.clone());
+    app.doc.as_mut().unwrap().select(vec![a]);
+    f.write_page("Task", "### Next Steps\n* step A\n* step B\n* step C\n");
+    let update = next_steps::compute(&next_steps::snapshot(map(&app), &f.doc_dir), chrono::Local::now().date_naive());
+    let generation = app.doc.as_ref().unwrap().generation;
+    send(&mut app, Message::NextStepsComputed(generation, Box::new(update)));
+    assert_eq!(map(&app).child_texts(page), vec!["step A", "step B", "step C"]);
+    assert_eq!(map(&app).children(page)[0], a);
+    assert!(map(&app).has_icon(a, "button_ok"));
+    assert_eq!(app.doc.as_ref().unwrap().focus, a);
+}
+
+#[test]
+fn a_node_added_under_a_page_node_is_warned_about() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    f.write_page("Task", "### Next Steps\n* One\n");
+    let page = f.add_page_node(root, "Task");
+    let mut app = app_with(f.map.clone());
+    app.doc.as_mut().unwrap().select(vec![page]);
+    press(&mut app, Named::Tab);
+    assert_eq!(app.status.text(), super::command::UNDER_PAGE_WARNING);
+    send(&mut app, Message::Escape);
+    // Not under a page node: no warning.
+    app.status.clear();
+    app.doc.as_mut().unwrap().select(vec![root]);
+    press(&mut app, Named::Tab);
+    assert_eq!(app.status.text(), "");
 }
 
 fn edited_app() -> App {
