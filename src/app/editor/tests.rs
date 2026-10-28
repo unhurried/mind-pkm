@@ -711,6 +711,20 @@ fn ranges_are_cleared_copied_and_pasted() {
 }
 
 #[test]
+fn clicking_a_cell_of_an_inactive_table_puts_the_cursor_in_that_cell() {
+    let (mut app, _f, _, _) = app_with_page(&format!("Intro\n\n{TABLE}"));
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "Intro");
+    let table = app.editors[&id].page.doc.blocks.iter().position(|b| b.kind == crate::markdown::BlockKind::Table);
+    editor(&mut app, id, EditorMsg::TableCellPressed(table.unwrap(), 2, 1));
+    assert_eq!(cell(&app, id), (2, 1));
+    typing(&mut app, id, "Q");
+    let text = page_text(&app, id);
+    let table = crate::markdown::table::Table::parse(&text[text.find('|').unwrap()..]).unwrap();
+    assert_eq!(table.rows, strings(&[&["a", "b"], &["1", "2"], &["3", "4Q"]]), "typed after the cell's text");
+}
+
+#[test]
 fn rows_and_columns_from_the_cell_menu() {
     let (mut app, _f, _, _) = app_with_page(TABLE);
     let id = open_with_f1(&mut app);
