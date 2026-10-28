@@ -125,16 +125,15 @@ impl App {
         self.save(Some(after))
     }
 
-    /// Unsaved changes: discard them and go on.
+    /// Unsaved changes: discard them and go on. The map stays marked as
+    /// unsaved: going on may still be cancelled (the unsaved pages question),
+    /// and a new or opened map replaces it anyway.
     pub(super) fn dialog_discard(&mut self) -> Task<Message> {
         if matches!(self.dialogs.front(), Some(Dialog::UnsavedPages(_))) {
             self.dialogs.pop_front();
             return self.exit();
         }
         let Some(after) = self.take_unsaved_dialog() else { return Task::none() };
-        if let Some(doc) = &mut self.doc {
-            doc.dirty = false;
-        }
         self.after_unsaved(after)
     }
 
