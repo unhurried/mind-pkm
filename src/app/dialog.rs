@@ -9,7 +9,6 @@ use crate::pkm::{DocType, filter::Filter};
 use chrono::Local;
 use iced::Task;
 use iced::widget::operation;
-use iced::widget::text_editor::{self, Action, Motion};
 
 #[derive(Debug, Clone)]
 pub enum Dialog {
@@ -46,13 +45,6 @@ pub enum InputAction {
     SetLink(NodeId),
 }
 
-impl InputAction {
-    /// Whether the value is a node's text, which may have several lines.
-    pub fn multiline(&self) -> bool {
-        matches!(self, InputAction::EditText(_) | InputAction::NewNode(..))
-    }
-}
-
 impl App {
     /// Shows a message to the user.
     pub(super) fn message(&mut self, text: impl Into<String>) {
@@ -70,7 +62,7 @@ impl App {
 
     pub(super) fn open_input(&mut self, prompt: &str, value: String, action: InputAction) -> Task<Message> {
         self.dialogs.push_back(Dialog::Input { prompt: prompt.into(), value, action });
-        if self.dialogs.len() == 1 { self.after_dialog() } else { Task::none() }
+        if self.dialogs.len() == 1 { focus_dialog_input() } else { Task::none() }
     }
 
     /// Closes the unsaved changes question, if it is the shown dialog.
@@ -80,40 +72,17 @@ impl App {
         Some(after)
     }
 
-    /// Focus for the next dialog in the queue, if it has an input; a node
-    /// text dialog's field gets its text, with the cursor at the end.
-    fn after_dialog(&mut self) -> Task<Message> {
+    /// Focus for the next dialog in the queue, if it has an input.
+    fn after_dialog(&self) -> Task<Message> {
         match self.dialogs.front() {
-            Some(Dialog::Input { value, action, .. }) if action.multiline() => {
-                self.dialog_text = text_editor::Content::with_text(value);
-                self.dialog_text.perform(Action::Move(Motion::DocumentEnd));
-                operation::focus(DIALOG_INPUT_ID)
-            }
             Some(Dialog::Input { .. }) => focus_dialog_input(),
             _ => Task::none(),
         }
     }
 
     pub(super) fn dialog_input(&mut self, value: String) {
-        if let Some(Dialog::Input { value: v, action, .. }) = self.dialogs.front_mut() {
-            if action.multiline() {
-                self.dialog_text = text_editor::Content::with_text(&value);
-                self.dialog_text.perform(Action::Move(Motion::DocumentEnd));
-            }
+        if let Some(Dialog::Input { value: v, .. }) = self.dialogs.front_mut() {
             *v = value;
-        }
-    }
-
-    /// An edit in a node text dialog's field.
-    pub(super) fn dialog_edit(&mut self, action: Action) {
-        let Some(Dialog::Input { value, action: input, .. }) = self.dialogs.front_mut() else { return };
-        if !input.multiline() {
-            return;
-        }
-        let edit = action.is_edit();
-        self.dialog_text.perform(action);
-        if edit {
-            *value = self.dialog_text.text();
         }
     }
 

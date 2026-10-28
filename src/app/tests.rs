@@ -502,25 +502,3 @@ fn the_map_can_be_panned_past_its_edges() {
     send(&mut app, Message::PanEnd);
     assert_eq!(on_screen(&app) - before, iced::Vector::new(100.0, 50.0));
 }
-
-#[test]
-fn a_node_with_several_lines_is_edited_whole() {
-    use iced::widget::text_editor::{Action, Edit, Motion};
-    let mut m = MindMap::new("root");
-    let n = m.add_child(m.root(), "line one\nline two\nline three");
-    let mut app = app_with(m);
-    app.doc.as_mut().unwrap().select(vec![n]);
-    send(&mut app, Message::Command(Command::EditText));
-    assert_eq!(app.dialog_text.text().trim_end(), "line one\nline two\nline three");
-    // The cursor is at the end of the last line; Shift+Enter (a new line) and typing.
-    send(&mut app, Message::DialogEdit(Action::Edit(Edit::Insert('X'))));
-    send(&mut app, Message::DialogEdit(Action::Edit(Edit::Enter)));
-    send(&mut app, Message::DialogEdit(Action::Edit(Edit::Insert('Y'))));
-    // A line taken away.
-    send(&mut app, Message::DialogEdit(Action::Move(Motion::DocumentStart)));
-    send(&mut app, Message::DialogEdit(Action::Move(Motion::Down)));
-    send(&mut app, Message::DialogEdit(Action::Select(Motion::Down)));
-    send(&mut app, Message::DialogEdit(Action::Edit(Edit::Delete)));
-    send(&mut app, Message::DialogOk);
-    assert_eq!(map(&app).text(n), "line one\nline threeX\nY");
-}

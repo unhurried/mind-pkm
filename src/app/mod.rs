@@ -36,7 +36,7 @@ use drag::NodeDrag;
 use editor::{Editor, EditorMsg, EditorPrefs, RenderCache, RenderKey};
 use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
-use iced::widget::{scrollable, text_editor};
+use iced::widget::scrollable;
 use iced::{Point, Size, Subscription, Task, Vector, window};
 use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
@@ -140,8 +140,6 @@ pub enum Message {
     CloseRequested,
     Tick,
     DialogInput(String),
-    /// An edit in the text field of a node text dialog (several lines).
-    DialogEdit(text_editor::Action),
     DialogOk,
     DialogCancel,
     /// Unsaved changes: save first.
@@ -213,8 +211,6 @@ pub struct App {
     window_position: Option<Point>,
     /// The window as it is to be restored on the next start.
     window: WindowGeometry,
-    /// The text of the shown node text dialog, which may have several lines.
-    dialog_text: text_editor::Content,
     /// The map's scroll position, as last scrolled to or reported.
     scroll_offset: Vector,
     /// Room around the map beyond its margin, for centering and panning.
@@ -277,7 +273,6 @@ impl App {
             window_size: INITIAL_WINDOW.size,
             window_position: None,
             window: INITIAL_WINDOW,
-            dialog_text: text_editor::Content::new(),
             scroll_offset: Vector::ZERO,
             room: viewport::Room::default(),
             view_placed: false,
@@ -481,10 +476,6 @@ impl App {
                     .as_ref()
                     .is_some_and(|d| d.edited_since_refresh && d.last_refresh.elapsed() >= UPDATE_INTERVAL);
                 Task::batch([pages, if due { self.start_update(false) } else { Task::none() }])
-            }
-            Message::DialogEdit(action) => {
-                self.dialog_edit(action);
-                Task::none()
             }
             Message::DialogInput(value) => {
                 self.dialog_input(value);

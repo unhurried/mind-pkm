@@ -253,9 +253,7 @@ pub fn find_node_for_file(nodes_by_file: &HashMap<String, NodeId>, file: &Path, 
 
 /// "root > ... > text" for a node.
 pub fn node_path_text(map: &MindMap, id: NodeId) -> String {
-    // On one line: a node's lines are joined by spaces.
-    let one_line = |n| map.text(n).lines().collect::<Vec<_>>().join(" ");
-    let mut parts: Vec<String> = std::iter::once(id).chain(map.ancestors(id)).map(one_line).collect();
+    let mut parts: Vec<String> = std::iter::once(id).chain(map.ancestors(id)).map(|n| map.text(n)).collect();
     parts.reverse();
     parts.join(" > ")
 }
@@ -454,8 +452,6 @@ mod tests {
         let b = f.add_child(a, "b");
         let c = f.add_child(root, "c");
         assert_eq!(node_path_text(&f.map, b), "root > a > b");
-        f.map.set_text(b, "line one\nline two");
-        assert_eq!(node_path_text(&f.map, b), "root > a > line one line two");
         assert_eq!(sorted_selection(&f.map, &[c, b, a]), vec![a, c]);
     }
 

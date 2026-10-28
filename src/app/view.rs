@@ -11,16 +11,15 @@ use crate::mindmap::{ICON_CHECKMARK, MindMap, NodeId};
 use crate::pkm;
 use crate::search::{self, SearchHit, Snippet};
 use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
-use iced::keyboard::key::Named;
 use iced::widget::canvas::{self, Cache, Path, Stroke};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::{
     Column, Stack, button, canvas as canvas_widget, center, column, container, mouse_area, opaque, pick_list, pin,
-    rich_text, row, scrollable, space, stack, text, text_editor, text_input, tooltip,
+    rich_text, row, scrollable, space, stack, text, text_input, tooltip,
 };
 use iced::{
     Alignment, Background, Color, Element, Fill, Font, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector, border,
-    keyboard, mouse,
+    mouse,
 };
 use std::collections::HashMap;
 
@@ -504,38 +503,20 @@ impl App {
             Dialog::Confirm { text: question, .. } => {
                 (text(question.clone()).size(13).into(), vec![ok("Yes"), cancel("No")])
             }
-            Dialog::Input { prompt, value, action } => {
-                let field: Element<Message> = if action.multiline() {
-                    // A node's text: Enter confirms, Shift+Enter starts a new line.
-                    text_editor(&self.dialog_text)
-                        .id(DIALOG_INPUT_ID)
-                        .on_action(Message::DialogEdit)
-                        .key_binding(|press| match press.key.as_ref() {
-                            keyboard::Key::Named(Named::Enter) if !press.modifiers.shift() => {
-                                Some(text_editor::Binding::Custom(Message::DialogOk))
-                            }
-                            _ => text_editor::Binding::from_key_press(press),
-                        })
-                        .size(13)
-                        .padding(6)
-                        .max_height(240)
-                        .wrapping(Wrapping::WordOrGlyph)
-                        .into()
-                } else {
+            Dialog::Input { prompt, value, .. } => (
+                column![
+                    text(prompt.clone()).size(13).font(if prompt.contains('\n') { Font::MONOSPACE } else { APP_FONT }),
                     text_input("", value)
                         .id(DIALOG_INPUT_ID)
                         .on_input(Message::DialogInput)
                         .on_submit(Message::DialogOk)
                         .size(13)
-                        .padding(6)
-                        .into()
-                };
-                let font = if prompt.contains('\n') { Font::MONOSPACE } else { APP_FONT };
-                (
-                    column![text(prompt.clone()).size(13).font(font), field].spacing(12).into(),
-                    vec![ok("OK"), cancel("Cancel")],
-                )
-            }
+                        .padding(6),
+                ]
+                .spacing(12)
+                .into(),
+                vec![ok("OK"), cancel("Cancel")],
+            ),
             Dialog::UnsavedPages(pages) => (
                 text(format!("These pages have unsaved changes: {}. Save them?", pages.join(", "))).size(13).into(),
                 vec![
