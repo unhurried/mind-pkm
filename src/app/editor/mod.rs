@@ -432,11 +432,26 @@ impl Editor {
         if self.page.blocks.is_some() {
             return self.blocks_key(&key, modifiers, text.as_deref());
         }
-        // Nothing active: arrow keys and typing start at the cursor.
-        let starts = matches!(key, Key::Named(Named::ArrowUp | Named::ArrowDown | Named::Enter))
-            || text.as_deref().is_some_and(|t| t.chars().any(|c| !c.is_control()));
+        // Nothing active: arrow keys and typing start at the cursor, and
+        // what was typed goes in.
+        let typed: Option<String> = text
+            .as_deref()
+            .map(|t| t.chars().filter(|c| !c.is_control()).collect::<String>())
+            .filter(|t| !t.is_empty() && !(modifiers.control() || modifiers.alt()));
+        let starts =
+            matches!(key, Key::Named(Named::ArrowUp | Named::ArrowDown | Named::Enter | Named::Home | Named::End))
+                || typed.is_some();
         if starts && self.page.active.is_none() && self.source.is_none() {
             self.page.place(self.page.sel);
+            self.page.snap_to_shown();
+            match key {
+                Key::Named(Named::Home) => self.page.perform(Action::Move(Motion::Home)),
+                Key::Named(Named::End) => self.page.perform(Action::Move(Motion::End)),
+                _ => {}
+            }
+            for c in typed.iter().flat_map(|t| t.chars()) {
+                let _ = self.on_action(Action::Edit(Edit::Insert(c)));
+            }
             return self.focus();
         }
         Task::none()

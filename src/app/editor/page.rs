@@ -651,6 +651,15 @@ impl Page {
         self.history.break_typing();
     }
 
+    /// Puts a cursor placed in a block's hidden source (before a heading's
+    /// `#`, say) where it shows: typing goes into the block's content.
+    pub fn snap_to_shown(&mut self) {
+        let Some(l) = self.live() else { return };
+        if l.sel.is_empty() {
+            self.live_move_to(l.sel.head, false);
+        }
+    }
+
     /// Selects the shown range (all of it when None).
     pub fn live_select_shown(&mut self, range: Option<Range<usize>>) {
         let Some(l) = self.live() else { return };

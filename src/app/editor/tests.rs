@@ -114,6 +114,39 @@ fn keys_go_to_the_window_they_were_typed_in() {
     assert!(app.doc.as_ref().unwrap().dirty);
 }
 
+/// A key typed with `text` in the editor window.
+fn type_key(app: &mut App, id: window::Id, c: char) {
+    let keyboard::Event::KeyPressed { key, modified_key, physical_key, location, modifiers, repeat, .. } =
+        key_event(Key::Character(c.to_string().into()), Modifiers::empty())
+    else {
+        unreachable!()
+    };
+    let text = Some(c.to_string().into());
+    let event = keyboard::Event::KeyPressed { key, modified_key, physical_key, location, modifiers, text, repeat };
+    send(app, Message::KeyIn(id, event));
+}
+
+#[test]
+fn typing_with_nothing_active_types_into_the_first_block() {
+    let (mut app, _f, _, _) = app_with_page("# Page1\n\nHello world.\n");
+    let id = open_with_f1(&mut app);
+    assert!(app.editors[&id].page.active.is_none());
+    // The first key starts editing and is typed too; then the widget has the keys.
+    type_key(&mut app, id, 'a');
+    typing(&mut app, id, "bc");
+    assert_eq!(page_text(&app, id), "# abcPage1\n\nHello world.\n");
+}
+
+#[test]
+fn end_with_nothing_active_goes_to_the_end_of_the_first_block() {
+    let (mut app, _f, _, _) = app_with_page("# Page1\n\nHello world.\n");
+    let id = open_with_f1(&mut app);
+    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::End), Modifiers::empty())));
+    // The block is active: the widget has the keys.
+    typing(&mut app, id, " unsaved");
+    assert_eq!(page_text(&app, id), "# Page1 unsaved\n\nHello world.\n");
+}
+
 #[test]
 fn typing_enter_and_undo() {
     let (mut app, _f, _, _) = app_with_page("- one\n");
