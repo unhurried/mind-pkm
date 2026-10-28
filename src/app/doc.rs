@@ -308,15 +308,15 @@ impl Doc {
 
     // --- Layout ---
 
-    /// Lays out the shown part of the map at the zoom, with the margins
-    /// around it (left and above, right and below); text sizes are measured
-    /// once and kept in `measure_cache`, which holds sizes at this zoom only.
-    pub(super) fn relayout(&mut self, margins: (Size, Size), zoom: f32, measure_cache: &mut HashMap<String, Size>) {
+    /// Lays out the shown part of the map at the zoom, with `margin` around it;
+    /// text sizes are measured once and kept in `measure_cache`, which holds
+    /// sizes at this zoom only.
+    pub(super) fn relayout(&mut self, margin: Size, zoom: f32, measure_cache: &mut HashMap<String, Size>) {
         self.fix_selection();
         let visible = self.filter.visible(&self.map);
         let map = &self.map;
         self.layout =
-            layout::layout(map, &visible, margins, zoom, &mut |id| view::node_size(measure_cache, map, id, zoom));
+            layout::layout(map, &visible, margin, zoom, &mut |id| view::node_size(measure_cache, map, id, zoom));
         self.select_shown();
     }
 
@@ -501,7 +501,7 @@ mod tests {
         let b = doc.map.add_child(root, "b");
         let b1 = doc.map.add_child(b, "b1");
         let c = doc.map.add_child(root, "c");
-        let relayout = |doc: &mut Doc| doc.relayout((Size::ZERO, Size::ZERO), 1.0, &mut HashMap::new());
+        let relayout = |doc: &mut Doc| doc.relayout(Size::ZERO, 1.0, &mut HashMap::new());
         doc.select(vec![b]);
         relayout(&mut doc);
         doc.map.delete(b);

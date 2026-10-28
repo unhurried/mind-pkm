@@ -213,11 +213,6 @@ pub struct App {
     window: WindowGeometry,
     /// The map's scroll position, as last scrolled to or reported.
     scroll_offset: Vector,
-    /// Room around the map beyond its margin, for centering and panning.
-    room: viewport::Room,
-    /// Set when a message placed the view itself (adding room around the
-    /// map): the focused node is not kept in place nor revealed after it.
-    view_placed: bool,
     /// Set by a move among siblings: the parent stays in place on screen
     /// after the message, not the moved node.
     keep_parent_in_place: bool,
@@ -274,8 +269,6 @@ impl App {
             window_position: None,
             window: INITIAL_WINDOW,
             scroll_offset: Vector::ZERO,
-            room: viewport::Room::default(),
-            view_placed: false,
             keep_parent_in_place: false,
             viewport_size: None,
             zoom: 1.0,
@@ -367,9 +360,6 @@ impl App {
         let task = self.handle(message);
         self.relayout();
         let anchor = if std::mem::take(&mut self.keep_parent_in_place) { parent_anchor } else { focus_anchor };
-        if std::mem::take(&mut self.view_placed) {
-            return task;
-        }
         let mut tasks = vec![task, self.keep_in_place(anchor)];
         if reveal {
             tasks.push(self.reveal_focus());
@@ -447,7 +437,10 @@ impl App {
                 Task::none()
             }
             Message::PanMove(position) => self.pan_move(position),
-            Message::PanEnd => self.pan_end(),
+            Message::PanEnd => {
+                self.pan_end();
+                Task::none()
+            }
             Message::NodeDragMove(position) => {
                 self.drag_move(position);
                 Task::none()
@@ -460,7 +453,10 @@ impl App {
                 self.drag = None;
                 Task::none()
             }
-            Message::MapScrolled(viewport) => self.map_scrolled(viewport),
+            Message::MapScrolled(viewport) => {
+                self.map_scrolled(viewport);
+                Task::none()
+            }
             Message::ZoomWheel(delta, at) => self.zoom_wheel(delta, at),
             Message::WindowResized(size) => self.window_resized(size),
             Message::WindowMoved(position) => self.window_moved(position),

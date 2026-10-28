@@ -26,16 +26,6 @@ pub fn zoom_step(zoom: f32, steps: i32) -> f32 {
     ZOOM_STEPS[(i as i64 + i64::from(steps)).clamp(0, last as i64) as usize]
 }
 
-/// Room added around the map beyond its margin, so that a node near an edge
-/// can be centered and the map panned past its edges (`before`: left and
-/// above, `after`: right and below). It goes again as it is scrolled out of
-/// view.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Room {
-    pub before: Vector,
-    pub after: Vector,
-}
-
 /// Panning by dragging empty map space.
 #[derive(Debug, Clone, Copy)]
 pub enum Pan {
@@ -65,12 +55,7 @@ impl App {
     /// Recomputes the layout.
     pub(super) fn relayout(&mut self) {
         let Some(doc) = &mut self.doc else { return };
-        let (before, after) = (self.room.before, self.room.after);
-        let margins = (
-            Size::new(MAP_MARGIN + before.x, MAP_MARGIN + before.y),
-            Size::new(MAP_MARGIN + after.x, MAP_MARGIN + after.y),
-        );
-        doc.relayout(margins, self.zoom, &mut self.measure_cache);
+        doc.relayout(Size::new(MAP_MARGIN, MAP_MARGIN), self.zoom, &mut self.measure_cache);
         self.edges.clear();
     }
 
@@ -102,8 +87,8 @@ impl App {
         if self.doc.is_none() || !self.set_zoom(zoom_step(old, steps as i32)) {
             return Task::none();
         }
-        // The layout is the margin (and room) plus the map scaled by the zoom.
-        let margin = Vector::new(MAP_MARGIN, MAP_MARGIN) + self.room.before;
+        // The layout is the margin plus the map scaled by the zoom.
+        let margin = Vector::new(MAP_MARGIN, MAP_MARGIN);
         self.relayout();
         let point = self.scroll_offset + Vector::new(at.x, at.y) - margin;
         let moved = margin + point * (self.zoom / old) - Vector::new(at.x, at.y);
@@ -144,46 +129,10 @@ impl App {
         operation::scroll_to(MAP_SCROLL_ID, scrollable::AbsoluteOffset { x: offset.x, y: offset.y })
     }
 
-    /// Scrolls the focused node to the center as far as the map area allows
-    /// (opening a map, following a node link, Select Node).
     pub(super) fn center_on_focus(&mut self) -> Task<Message> {
         let Some(r) = self.focus_rect() else { return Task::none() };
         let vp = self.viewport();
         self.scroll_to(Vector::new((r.center_x() - vp.width / 2.0).max(0.0), (r.center_y() - vp.height / 2.0).max(0.0)))
-    }
-
-    /// Scrolls the focused node to the center, adding room around the map
-    /// where it is needed (Esc).
-    pub(super) fn center_focus_freely(&mut self) -> Task<Message> {
-        let Some(r) = self.focus_rect() else { return Task::none() };
-        let vp = self.viewport();
-        self.scroll_with_room(Vector::new(r.center_x() - vp.width / 2.0, r.center_y() - vp.height / 2.0))
-    }
-
-    /// Scrolls to `offset`, which may lie beyond the map area: room is added
-    /// on the sides where it is needed (the map then moves by the room added
-    /// before it, which the offset accounts for).
-    fn scroll_with_room(&mut self, offset: Vector) -> Task<Message> {
-        let Some(doc) = &self.doc else { return Task::none() };
-        let size = doc.layout.size;
-        let vp = self.viewport();
-        let grow_before = Vector::new((-offset.x).max(0.0), (-offset.y).max(0.0));
-        let offset = offset + grow_before;
-        let grow_after = Vector::new(
-            (offset.x + vp.width - (size.width + grow_before.x)).max(0.0),
-            (offset.y + vp.height - (size.height + grow_before.y)).max(0.0),
-        );
-        if grow_before != Vector::ZERO || grow_after != Vector::ZERO {
-            self.room.before += grow_before;
-            self.room.after += grow_after;
-            if let Some(Pan::Dragging { start, .. }) = &mut self.pan {
-                *start += grow_before;
-            }
-            self.relayout();
-            // The view is placed; nothing is to be kept in place around it.
-            self.view_placed = true;
-        }
-        self.scroll_to(offset)
     }
 
     /// Scrolls just enough to bring the focused node into view.
@@ -204,7 +153,7 @@ impl App {
         if new == o { Task::none() } else { self.scroll_to(new) }
     }
 
-    pub(super) fn map_scrolled(&mut self, viewport: scrollable::Viewport) -> Task<Message> {
+    pub(super) fn map_scrolled(&mut self, viewport: scrollable::Viewport) {
         let o = viewport.absolute_offset();
         self.scroll_offset = Vector::new(o.x, o.y);
         let size = viewport.bounds().size();
@@ -212,28 +161,6 @@ impl App {
             self.viewport_size = Some(size);
             self.relayout();
         }
-        self.trim_room()
-    }
-
-    /// Takes away the room around the map that is out of view (not while
-    /// panning), keeping what is shown in place.
-    pub(super) fn trim_room(&mut self) -> Task<Message> {
-        let Some(doc) = &self.doc else { return Task::none() };
-        if self.pan.is_some() || self.room == Room::default() {
-            return Task::none();
-        }
-        let (o, size, vp, room) = (self.scroll_offset, doc.layout.size, self.viewport(), self.room);
-        let cut_before = Vector::new(room.before.x.min(o.x.max(0.0)), room.before.y.min(o.y.max(0.0)));
-        let cut_after = Vector::new(
-            room.after.x.min((size.width - o.x - vp.width).max(0.0)),
-            room.after.y.min((size.height - o.y - vp.height).max(0.0)),
-        );
-        if cut_before == Vector::ZERO && cut_after == Vector::ZERO {
-            return Task::none();
-        }
-        self.room = Room { before: room.before - cut_before, after: room.after - cut_after };
-        self.relayout();
-        self.scroll_to(o - cut_before)
     }
 
     pub(super) fn window_resized(&mut self, size: Size) -> Task<Message> {
@@ -272,14 +199,16 @@ impl App {
                 self.pan = Some(Pan::Dragging { anchor: position, start: self.scroll_offset });
                 Task::none()
             }
-            // The map moves with the pointer, past its edges too.
-            Some(Pan::Dragging { anchor, start }) => self.scroll_with_room(start - (position - anchor)),
+            // The map moves with the pointer; the scrollable clamps the far edges.
+            Some(Pan::Dragging { anchor, start }) => self.scroll_to(Vector::new(
+                (start.x - (position.x - anchor.x)).max(0.0),
+                (start.y - (position.y - anchor.y)).max(0.0),
+            )),
         }
     }
 
-    pub(super) fn pan_end(&mut self) -> Task<Message> {
+    pub(super) fn pan_end(&mut self) {
         self.pan = None;
-        self.trim_room()
     }
 }
 
