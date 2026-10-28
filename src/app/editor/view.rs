@@ -1754,11 +1754,15 @@ fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize) -> Element<'a, Edi
                     .padding([4, 8])
                     .align_x(align_x),
             );
-            frames = frames.push(cell_frame(
-                Length::FillPortion(1),
-                if header { p.header_bg } else { Color::TRANSPARENT },
-                p,
-            ));
+            // The whole cell (beside and below its text too) takes the clicks.
+            frames = frames.push(
+                mouse_area(cell_frame(
+                    Length::FillPortion(1),
+                    if header { p.header_bg } else { Color::TRANSPARENT },
+                    p,
+                ))
+                .on_press(EditorMsg::TableCellPressed(block, r, c)),
+            );
         }
         grid = grid.push(table_row(contents, frames));
     }

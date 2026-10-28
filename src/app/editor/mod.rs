@@ -112,6 +112,8 @@ pub enum EditorMsg {
     CodeLanguage(String),
     /// A press on a cell of the table being edited.
     CellPressed(usize, usize),
+    /// A press on a cell (row, column) of a rendered table: the table block, the cell.
+    TableCellPressed(usize, usize, usize),
     /// A press on a source offset of a rendered block (a link, a task box...).
     PressedAt(usize),
     /// A link clicked: its destination and where its text is in the source.
@@ -367,6 +369,7 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::CellPressed(r, c) => self.cell_pressed((r, c)),
+            EditorMsg::TableCellPressed(block, r, c) => self.table_cell_pressed(block, (r, c)),
             EditorMsg::PressedAt(offset) => {
                 self.menu = None;
                 self.page.place(Sel::caret(offset));

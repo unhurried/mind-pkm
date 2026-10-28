@@ -3,6 +3,7 @@
 
 use super::keys::{Bind, EditorCommand, TableMenuItem};
 use super::{Editor, EditorMsg, Effect};
+use crate::markdown::edit::Sel;
 use crate::markdown::table::{Align, CellRange, Table};
 use iced::widget::text_editor::{Action, Edit, Motion};
 use iced::{Point, Task};
@@ -263,6 +264,23 @@ impl Editor {
         }
         self.page.go_to_cell(cell);
         self.cell_drag = true;
+        self.focus()
+    }
+
+    /// A press on a cell of a rendered table outside its text: the cursor goes
+    /// to the end of that cell's text.
+    pub(super) fn table_cell_pressed(&mut self, block: usize, cell: (usize, usize)) -> Task<EditorMsg> {
+        self.menu = None;
+        self.cell_menu = None;
+        if self.shift_selects(block) {
+            return Task::none();
+        }
+        // A table inside another block (a footnote...): as a press on that block.
+        let Some(b) = self.page.doc.blocks.get(block).filter(|b| b.kind == crate::markdown::BlockKind::Table) else {
+            return self.block_pressed(block);
+        };
+        self.page.place(Sel::caret(b.range.start));
+        self.page.go_to_cell_at(cell, true);
         self.focus()
     }
 
