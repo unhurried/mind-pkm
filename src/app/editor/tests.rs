@@ -441,6 +441,22 @@ fn html_from_other_applications_is_pasted_as_markdown() {
 }
 
 #[test]
+fn html_pasted_into_a_code_block_is_inserted_as_plain_text() {
+    // What VS Code puts on the clipboard.
+    let html = "<div><div><span>let a_b = c*d;</span></div><div><span>x &lt; y</span></div></div>";
+    let (mut app, _f, _, _) = app_with_page("```\nfoo\n```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "foo");
+    // Both flavors: the text one.
+    pasted(&mut app, id, "let a_b = c*d;\nx < y", Some(html), false);
+    assert_eq!(page_text(&app, id), "```\nfoolet a_b = c*d;\nx < y\n```\n");
+    // The HTML flavor only: its text.
+    let content = super::clipboard::ClipboardContent { html: Some(html.into()), ..Default::default() };
+    editor(&mut app, id, EditorMsg::Pasted(content, false));
+    assert_eq!(page_text(&app, id), "```\nfoolet a_b = c*d;\nx < ylet a_b = c*d;\nx < y\n```\n");
+}
+
+#[test]
 fn a_spreadsheet_range_pasted_outside_a_table_becomes_a_table() {
     let (mut app, _f, _, _) = app_with_page("before\n");
     let id = open_with_f1(&mut app);

@@ -1235,9 +1235,19 @@ impl Editor {
     }
 
     /// Pastes what the clipboard held: files and images inserted, HTML
-    /// converted to Markdown (a table as a table), text as it is.
+    /// converted to Markdown (a table as a table), text as it is. In code
+    /// (a code block, math, ...) the text is inserted as it is, never the
+    /// HTML converted.
     fn pasted(&mut self, content: ClipboardContent, plain: bool, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        let text = content.text.clone().unwrap_or_default().replace("\r\n", "\n");
+        let mut text = content.text.clone().unwrap_or_default().replace("\r\n", "\n");
+        let in_code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
+        if in_code
+            && text.is_empty()
+            && let Some(html) = &content.html
+        {
+            // Code is code: with no text flavor, what the HTML says.
+            text = html::to_plain_text(html).replace("\r\n", "\n");
+        }
         let in_table = self.page.active.as_ref().is_some_and(|a| a.table.is_some());
         if !plain {
             if !content.files.is_empty() {
@@ -1246,7 +1256,7 @@ impl Editor {
             if let Some(image) = content.image.filter(|_| text.trim().is_empty()) {
                 return self.insert_image_data(image, prefs);
             }
-            if self.copied.as_deref() != Some(text.as_str()) || text.is_empty() {
+            if !in_code && (self.copied.as_deref() != Some(text.as_str()) || text.is_empty()) {
                 // A table (from a spreadsheet or a web page).
                 let grid = content
                     .html
