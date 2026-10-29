@@ -45,7 +45,32 @@ const QUOTE_BAR: f32 = 4.0;
 const QUOTE_PADDING: f32 = 14.0;
 const CODE_PADDING: f32 = 10.0;
 const OUTLINE_WIDTH: f32 = 220.0;
-const MENU_BUTTON_WIDTH: f32 = 82.0;
+const MENU_FONT_SIZE: f32 = 12.0;
+/// The padding on each side of a menu bar label: the gap between two labels
+/// is twice this, the same for every pair.
+const MENU_PADDING: f32 = 12.0;
+const MENU_BAR_HEIGHT: f32 = 30.0;
+
+/// The width of a menu bar label's button: the text and its padding.
+fn menu_button_width(label: &str) -> f32 {
+    let paragraph = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
+        content: label,
+        bounds: Size::new(f32::INFINITY, f32::INFINITY),
+        size: MENU_FONT_SIZE.into(),
+        line_height: LineHeight::default(),
+        font: APP_FONT,
+        align_x: iced::advanced::text::Alignment::Default,
+        align_y: iced::alignment::Vertical::Top,
+        shaping: Shaping::Basic,
+        wrapping: Wrapping::None,
+    });
+    paragraph.min_bounds().width.ceil() + 2.0 * MENU_PADDING
+}
+
+/// Where a menu's button starts in the menu bar (and its dropdown opens).
+fn menu_x(index: usize) -> f32 {
+    MENUS.iter().take(index).map(|(label, _)| menu_button_width(label)).sum()
+}
 
 /// The editor's colors in a theme.
 #[derive(Debug, Clone, Copy)]
@@ -297,9 +322,8 @@ impl Editor {
         for (i, (label, _)) in MENUS.iter().enumerate() {
             let open = self.menu == Some(i);
             bar = bar.push(
-                button(text(*label).size(12).color(p.text))
-                    .width(MENU_BUTTON_WIDTH)
-                    .padding([4, 12])
+                button(text(*label).size(MENU_FONT_SIZE).color(p.text))
+                    .padding([4.0, MENU_PADDING])
                     .style(move |_: &Theme, status| button::Style {
                         background: (open || matches!(status, button::Status::Hovered))
                             .then_some(Background::Color(p.hover)),
@@ -356,7 +380,7 @@ impl Editor {
         });
         stack![
             mouse_area(container(space()).width(Fill).height(Fill)).on_press(EditorMsg::Menu(None)),
-            pin(dropdown).position(Point::new(index as f32 * MENU_BUTTON_WIDTH, 30.0)),
+            pin(dropdown).position(Point::new(menu_x(index), MENU_BAR_HEIGHT)),
         ]
         .into()
     }

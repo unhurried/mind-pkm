@@ -332,6 +332,10 @@ An editor window SHALL have a menu bar with File, Edit, Paragraph, Format, Table
 - **WHEN** the Format menu is opened
 - **THEN** Bold is listed with Ctrl+B
 
+#### Scenario: Even spacing
+- **WHEN** the menu bar is shown
+- **THEN** the gap between each two neighbouring menu names is the same, whatever their lengths
+
 ### Requirement: Saving pages
 Ctrl+S SHALL write the page as UTF-8 with a byte-order mark, keeping the file's line endings (CRLF when the file used CRLF); nothing SHALL be written before. Only the text the user changed SHALL differ in the saved file.
 
