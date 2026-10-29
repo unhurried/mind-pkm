@@ -598,7 +598,10 @@ impl Editor {
                             let boxed = container(in_containers(rendered, &kinds, p, ctx.zoom))
                                 .width(Fill)
                                 .id(self.id(&format!("block-{i}")));
-                            mouse_area(boxed).on_press(EditorMsg::BlockPressed(i)).into()
+                            mouse_area(boxed)
+                                .on_press(EditorMsg::BlockPressed(i))
+                                .on_enter(EditorMsg::BlockEntered(i))
+                                .into()
                         }
                         (Entry::Active, None) => continue,
                     };
