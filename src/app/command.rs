@@ -28,7 +28,6 @@ pub enum Command {
     NewChild,
     NewSibling,
     EditText,
-    DeleteNode,
     Cut,
     Copy,
     Paste,
@@ -52,6 +51,7 @@ pub enum Command {
     NewPage,
     NewDirectory,
     PkmDelete,
+    PkmDeleteNow,
     Update,
     AddAssets,
     FindUnlinked,
@@ -122,10 +122,6 @@ impl App {
                 let text = doc.map.text(focus);
                 self.open_input(NEW_TEXT_PROMPT, text, InputAction::EditText(focus))
             }
-            Command::DeleteNode => {
-                doc.delete_selected();
-                Task::none()
-            }
             Command::Cut => self.cut_or_copy(true),
             Command::Copy => self.cut_or_copy(false),
             Command::Paste => iced::clipboard::read().map(Message::ClipboardRead),
@@ -189,14 +185,16 @@ impl App {
             }
             Command::NewPage => self.create_documents(true),
             Command::NewDirectory => self.create_documents(false),
-            Command::PkmDelete => {
-                match commands::delete_targets(&doc.map, &doc.sorted_selection()) {
-                    Ok(targets) => {
-                        let text = commands::delete_question(&doc.map, &targets);
-                        self.ask(text, ConfirmAction::DeleteDocs(targets));
-                    }
-                    Err(e) => self.message(e),
+            Command::PkmDelete | Command::PkmDeleteNow => {
+                let targets = commands::delete_targets(&doc.map, &doc.sorted_selection());
+                if targets.is_empty() {
+                    return Task::none();
                 }
+                if cmd == Command::PkmDeleteNow {
+                    return self.delete_docs(&targets);
+                }
+                let text = commands::delete_question(&doc.map, &targets);
+                self.ask(text, ConfirmAction::DeleteDocs(targets));
                 Task::none()
             }
             Command::Update => self.start_update(true),

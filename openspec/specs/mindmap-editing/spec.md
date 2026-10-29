@@ -79,14 +79,14 @@ Clicking a node SHALL select it; Ctrl+click SHALL toggle it in the selection and
 - **THEN** the node unfolds and stays selected
 
 ### Requirement: Selection after deleting the selected node
-When the selected node is deleted, by Delete, Delete (F11), Undo or the Next Steps refresh, the selection SHALL move to its next sibling, else its previous sibling, else its parent.
+When the selected node is deleted, by Delete (F11), Undo or the Next Steps refresh, the selection SHALL move to its next sibling, else its previous sibling, else its parent.
 
 #### Scenario: The selected node is deleted
 - **WHEN** the selected directory node `B` between `A` and `C` is deleted with F11
 - **THEN** `C` is selected
 
 ### Requirement: Structural editing
-The application SHALL support: a new child node (Tab or Insert), a new sibling after the selected node (Enter), editing node text (Ctrl+E), deleting the selected nodes without touching files (Delete), moving a node up or down among its siblings (Ctrl+Up / Ctrl+Down), and setting or removing a node's link (Ctrl+K). A new node SHALL ask for its text at once; cancelling, or leaving the text empty, SHALL remove it again and leave the map's unsaved state as it was.
+The application SHALL support: a new child node (Tab or Insert), a new sibling after the selected node (Enter), editing node text (Ctrl+E), deleting the selected nodes (Delete, see Delete (F11)), moving a node up or down among its siblings (Ctrl+Up / Ctrl+Down), and setting or removing a node's link (Ctrl+K). A new node SHALL ask for its text at once; cancelling, or leaving the text empty, SHALL remove it again and leave the map's unsaved state as it was.
 
 #### Scenario: Cancelling a new node
 - **WHEN** Tab is pressed on a saved map and the text dialog is cancelled

@@ -74,7 +74,8 @@ The PKM menu holds the commands of the former add-on, with the same function key
 | F8 | Add to ToDo |
 | F9 / Ctrl+N | New Page |
 | F10 / Ctrl+Shift+N | New Directory |
-| F11 | Delete |
+| F11 / Delete | Delete |
+| Ctrl+F11 / Ctrl+Delete | Delete without Confirmation |
 | F12 | Update Next Steps and Search Index |
 | | Add Assets |
 | | Find Unlinked |
@@ -89,7 +90,8 @@ The PKM menu holds the commands of the former add-on, with the same function key
 - **Add to ToDo**: copies the selected items (children of page nodes) to the top of `root > ToDo` as `<item> (<page>)`, linked to the page.
 - **New Page**: creates `<docDir>/<text>.md` from the page template and the page's `.assets` directory, links the node to it and opens the page in the editor. The built-in template can be replaced by a `template.md` in `%APPDATA%\mind-pkm\` (`${page_assets_name}` and `${today}` are substituted). Settings left in `%APPDATA%\freeplane-pkm\` by versions under the former name are still read.
 - **New Directory**: creates `<docDir>/<text>/`, links the node to it and opens it.
-- **Delete**: deletes the selected page and directory nodes, after one confirmation listing them all, and moves their files to the Recycle Bin (where they can be restored from). A page or directory whose files can't be moved there keeps its node. It never touches the document directory itself or anything outside it. Open editors of deleted pages are saved first and close.
+- **Delete**: deletes the selected nodes, after one confirmation listing them all, and moves the files of page and directory nodes to the Recycle Bin (where they can be restored from); any other node is deleted without touching files. A page or directory whose files can't be moved there keeps its node. It never touches the document directory itself or anything outside it. Open editors of deleted pages are saved first and close.
+- **Delete without Confirmation**: Delete, but without the confirmation (hold Ctrl with F11 or Delete).
 - **Update Next Steps and Search Index**: syncs up to 3 list items under each page's `### Next Steps` heading into the page node's children, drops the ToDo items whose task is gone from their page, fills ToDo > Due Today / Past Due, and updates the search index. This also runs automatically every few minutes while the map is being changed.
 - **Add Assets**: creates the page's `.assets` directory and links it from the top of the page (an open editor of the page is saved first and shows the link afterwards).
 - **Find Unlinked**: lists the pages, directories and orphaned `.assets` directories of the document directory that no node links, under `root > unlinked`.
@@ -98,7 +100,7 @@ The PKM menu holds the commands of the former add-on, with the same function key
 
 Page and directory names can't be empty, `.` or `..`, contain control characters or `\ / : * ? " < > |`, or be Windows device names (`CON`, `AUX`, `NUL`, `COM1`, ...); directory names can't end with a dot or a space either.
 
-With several nodes selected, Open, Delete and Add to ToDo act on all of them (Delete asks once, listing every target), Toggle Checkmark, Fold/Unfold, New Page and New Directory run on each, and Edit and Add Assets ask for a single node to be selected.
+With several nodes selected, Open, Delete and Add to ToDo act on all of them (Delete asks once, listing every target, unless Ctrl is held), Toggle Checkmark, Fold/Unfold, New Page and New Directory run on each, and Edit and Add Assets ask for a single node to be selected.
 
 ## Editing the Map
 
@@ -112,7 +114,7 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 | Tab / Insert | New child node |
 | Enter | New sibling node |
 | Ctrl+E | Edit node text |
-| Delete | Delete the selected nodes (the files are kept; see F11) |
+| Delete / Ctrl+Delete | Delete the selected nodes and the files of pages and directories, with / without a confirmation (as F11) |
 | Space | Fold / unfold |
 | Ctrl+Up / Ctrl+Down | Move the node up / down among its siblings |
 | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste nodes (text from other applications is pasted one node per line) |
