@@ -27,6 +27,17 @@ While the cursor is in a table, the table SHALL be shown as a grid of rendered c
 - **WHEN** the cursor is in a cell holding `**done** today`, after `today`
 - **THEN** `done` is shown in bold without asterisks
 
+### Requirement: Tables in quotes and list items
+A table inside a quote or a list item SHALL be edited cell by cell like any other table, its lines keeping the quote's `>` and the item's indentation.
+
+#### Scenario: A table in a list item
+- **WHEN** `x` is typed into the first body cell of a table that is a block of a list item
+- **THEN** the table's lines keep the item's indentation and the table stays in the item
+
+#### Scenario: A table in a quote
+- **WHEN** `y` is typed into a body cell of the table `> | a | b |` / `> | --- | --- |` / `> |  |  |`
+- **THEN** the cell holds `y` and every line of the table still starts with `> `
+
 ### Requirement: Moving between cells
 Tab SHALL move to the next cell, from a row's last cell to the next row's first; Shift+Tab SHALL move back the same way. Tab in the last cell of the last row SHALL add a row and move to its first cell. Enter SHALL move to the cell below, adding a row from the last row. The cell moved to SHALL have its whole text selected.
 
