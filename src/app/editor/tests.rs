@@ -1625,3 +1625,53 @@ fn only_moving_the_cursor_or_editing_scrolls_to_it() {
     // Moving the cursor brings it into view.
     assert!(update(&mut app, EditorMsg::Bind(Bind::Down)) > 0);
 }
+
+#[test]
+fn blocks_typed_under_a_list_item() {
+    // Enter, then Backspace in the new empty item: a paragraph of the item above.
+    let (mut app, _f, _, _) = app_with_page("* aaa\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "aaa");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    assert_eq!(page_text(&app, id), "* aaa\n* \n");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "* aaa\n");
+    let pending = app.editors[&id].page.pending.clone().expect("a new paragraph");
+    assert_eq!(pending.outer, vec![crate::markdown::parse::ContainerKind::Item { depth: 0, indent: 2 }]);
+    type_keys(&mut app, id, "| bbb | ccc |");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    assert_eq!(page_text(&app, id), "* aaa\n\n  | bbb | ccc |\n  | --- | --- |\n  |  |  |\n");
+    assert_eq!(active_kind(&app, id), crate::markdown::BlockKind::Table);
+    let doc = crate::markdown::parse::Document::parse(&page_text(&app, id));
+    assert_eq!(doc.blocks[1].kind, crate::markdown::BlockKind::Table);
+    assert_eq!(doc.blocks[1].outer, vec![0]);
+    // Typing into a cell keeps the table in the item.
+    type_keys(&mut app, id, "x");
+    assert_eq!(page_text(&app, id), "* aaa\n\n  | bbb | ccc |\n  | --- | --- |\n  | x   |     |\n");
+    // A code block the same way, between the item and the next one.
+    let (mut app, _f, _, _) = app_with_page("- a\n- b\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "a");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    type_keys(&mut app, id, "```");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    typing(&mut app, id, "x");
+    assert_eq!(page_text(&app, id), "- a\n\n  ```\n  x\n  ```\n\n- b\n");
+    // A table in a quote keeps its `>` the same way.
+    let (mut app, _f, _, _) = app_with_page("> | a | b |\n> | --- | --- |\n> |  |  |\n");
+    let id = open_with_f1(&mut app);
+    let cell = page_text(&app, id).rfind("> |").unwrap() + 3;
+    editor(&mut app, id, EditorMsg::PressedAt(cell));
+    type_keys(&mut app, id, "y");
+    assert_eq!(page_text(&app, id), "> | a   | b   |\n> | --- | --- |\n> | y   |     |\n");
+    // Backspace again takes the new paragraph back, to the end of the item.
+    let (mut app, _f, _, _) = app_with_page("* aaa\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "aaa");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    typing(&mut app, id, "!");
+    assert_eq!(page_text(&app, id), "* aaa!\n");
+}
