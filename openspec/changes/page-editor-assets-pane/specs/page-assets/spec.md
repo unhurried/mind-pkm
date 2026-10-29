@@ -98,7 +98,7 @@ Dragging an item from the pane onto the page SHALL insert a link to it, written 
 - **THEN** the page does not change
 
 ### Requirement: Where a dragged asset is inserted
-While an item is dragged over the page, the place it would go SHALL be marked. A drop into text SHALL insert the link at the text position under the pointer; a drop beside a block's text, or on a code-like block, SHALL insert it as a paragraph after that block; in source mode it SHALL go at the cursor.
+While an item is dragged over the page, the place it would go SHALL be marked. A drop into text SHALL insert the link at the text position under the pointer; a drop beside a block's text, or on a code-like block, SHALL insert it as a paragraph after that block (at the end of the block's text, after a space, for a list item or a block in a quote); in source mode it SHALL go at the cursor.
 
 #### Scenario: Image dropped into a paragraph
 - **WHEN** `map.png` is dragged from the pane of `Trip.md` and dropped between `see` and `here` in the paragraph `see here`
@@ -107,3 +107,7 @@ While an item is dragged over the page, the place it would go SHALL be marked. A
 #### Scenario: PDF dropped beside a block
 - **WHEN** `report 1.pdf` is dropped right of the text of the paragraph `Summary`
 - **THEN** a paragraph `[report 1.pdf](Trip.assets/report 1.pdf)` follows `Summary`
+
+#### Scenario: Dropped beside a list item
+- **WHEN** `a.txt` is dropped right of the text of the list item `- one`
+- **THEN** the item becomes `- one [a.txt](Trip.assets/a.txt)`

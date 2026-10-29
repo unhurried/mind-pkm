@@ -232,6 +232,21 @@ pub struct App {
     pan: Option<Pan>,
     /// A node drag, armed by a press on a selected node.
     drag: Option<NodeDrag>,
+    /// Removes what the editors' assets panes delete: to the Recycle Bin.
+    asset_remover: fn(&[PathBuf]) -> Result<(), String>,
+}
+
+/// Moves files to the Recycle Bin; in tests, which work in temporary
+/// directories, removes them.
+fn recycle(files: &[PathBuf]) -> Result<(), String> {
+    if cfg!(test) {
+        for f in files {
+            let removed = if f.is_dir() { std::fs::remove_dir_all(f) } else { std::fs::remove_file(f) };
+            removed.map_err(|e| e.to_string())?;
+        }
+        return Ok(());
+    }
+    trash::delete_all(files).map_err(|e| e.to_string())
 }
 
 impl App {
@@ -279,6 +294,7 @@ impl App {
             status: Status::default(),
             pan: None,
             drag: None,
+            asset_remover: recycle,
         }
     }
 
@@ -342,6 +358,11 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.update_message(message);
+        Task::batch([task, self.read_assets()])
+    }
+
+    fn update_message(&mut self, message: Message) -> Task<Message> {
         self.status.expire();
         for editor in self.editors.values_mut() {
             editor.status.expire();

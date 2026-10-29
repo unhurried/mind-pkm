@@ -6,6 +6,7 @@
 //! widget that reports where the pointer is in it, so that a click can be
 //! mapped back to the source (`hit_test`).
 
+use super::assets::{DropTarget, content_end};
 use super::find::FindBar;
 use super::highlight::{self, MarkdownHighlighter};
 use super::keys::{self, BindContext, EditorCommand, MENUS, TABLE_MENU};
@@ -13,7 +14,7 @@ use super::live_text::{LiveText, Run, RunKind, TextLook};
 use super::modal::modal;
 use super::page::{Active, Live, TableState};
 use super::render::{RenderCache, RenderKey, Rendered};
-use super::{DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
+use super::{AssetsMsg, DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
 use crate::app::arrow_cursor::arrow_cursor;
 use crate::app::ime::ime_aligned;
 use crate::app::view::APP_FONT;
@@ -175,12 +176,12 @@ pub struct HitRun {
     pub map: Option<SourceMap>,
 }
 
-/// The source offset a point in a piece of text stands for.
-pub fn hit_test(info: &HitInfo, p: Point) -> Option<usize> {
+/// A piece of text laid out as the rendered text widget lays it out.
+fn hit_paragraph(info: &HitInfo) -> iced::advanced::graphics::text::Paragraph {
     let spans: Vec<Span<'_, (), Font>> =
         info.runs.iter().map(|r| Span::new(r.text.as_str()).size(r.size).font(r.font)).collect();
     let size = info.runs.first().map_or(BODY_SIZE, |r| r.size);
-    let paragraph = iced::advanced::graphics::text::Paragraph::with_spans(iced::advanced::Text {
+    iced::advanced::graphics::text::Paragraph::with_spans(iced::advanced::Text {
         content: spans.as_slice(),
         bounds: Size::new(info.width, f32::INFINITY),
         size: size.into(),
@@ -190,7 +191,39 @@ pub fn hit_test(info: &HitInfo, p: Point) -> Option<usize> {
         align_y: iced::alignment::Vertical::Top,
         shaping: Shaping::Advanced,
         wrapping: Wrapping::WordOrGlyph,
-    });
+    })
+}
+
+/// Which piece of rendered text this is: its block and where its source starts.
+pub fn piece_key(info: &HitInfo) -> (usize, usize) {
+    let start = info.runs.iter().find_map(|r| r.map.as_ref().map(|m| m.source_range().start));
+    (info.block, start.unwrap_or(usize::MAX))
+}
+
+/// The caret between the characters nearest a point in a piece of text
+/// (where something dropped there goes).
+pub fn caret_in(info: &HitInfo, p: Point) -> Option<iced::Rectangle> {
+    let paragraph = hit_paragraph(info);
+    let buffer = paragraph.buffer();
+    let cursor = buffer.hit(p.x, p.y)?;
+    let run = buffer
+        .layout_runs()
+        .filter(|r| r.line_i == cursor.line)
+        .find(|r| p.y < r.line_top + r.line_height)
+        .or_else(|| buffer.layout_runs().filter(|r| r.line_i == cursor.line).last())?;
+    let x = run
+        .glyphs
+        .iter()
+        .find(|g| g.start >= cursor.index)
+        .map(|g| g.x)
+        .or_else(|| run.glyphs.last().map(|g| g.x + g.w))
+        .unwrap_or(0.0);
+    Some(iced::Rectangle::new(Point::new(x - 1.0, run.line_top), Size::new(2.0, run.line_height)))
+}
+
+/// The source offset a point in a piece of text stands for.
+pub fn hit_test(info: &HitInfo, p: Point) -> Option<usize> {
+    let paragraph = hit_paragraph(info);
     let iced::advanced::text::Hit::CharOffset(index) = paragraph.hit_test(p)?;
     let mut start = 0;
     let mut last = None;
@@ -259,11 +292,15 @@ impl Editor {
         // The outline and the find bar keep their places when hidden, so that
         // the page's widgets (its scroll position) stay where they are.
         let outline: Element<EditorMsg> = if self.outline { self.outline_view(&ctx) } else { space().into() };
+        let assets: Element<EditorMsg> = match &self.assets {
+            Some(pane) => self.assets_view(pane, p),
+            None => space().into(),
+        };
         let find: Element<EditorMsg> = match &self.find {
             Some(bar) => self.find_bar(bar, p),
             None => space().into(),
         };
-        let body = row![outline, document];
+        let body = row![outline, document, assets];
         let main = column![self.menu_bar(p), find, container(body).height(Fill), self.status_bar(p, prefs)];
         let main = container(main).style(move |_| container::background(p.bg).color(p.text));
         let mut layers: Stack<EditorMsg> = stack![main].width(Fill).height(Fill);
@@ -273,13 +310,22 @@ impl Editor {
         if let Some(at) = self.cell_menu {
             layers = layers.push(self.cell_menu_view(at, p));
         }
-        if let Some(dialog) = self.dialogs.front() {
-            layers = layers.push(dialog_view(dialog, p));
+        if let Some(pane) = &self.assets {
+            if let Some(menu) = &pane.menu {
+                layers = layers.push(self.asset_menu_view(menu, p));
+            }
+            if let Some(drag) = pane.drag.as_ref().filter(|d| d.dragging) {
+                layers = layers.push(self.drag_label(drag, p));
+            }
         }
-        // While a table is edited, where the pointer is (a cell's menu opens there).
+        if let Some(dialog) = self.dialogs.front() {
+            layers = layers.push(dialog_view(dialog, p, self.id("rename")));
+        }
+        // While a table is edited or the assets pane is shown, where the
+        // pointer is (a menu opens there, a dragged item follows it).
         let mut root = mouse_area(layers);
-        if self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
-            root = root.on_move(|p| EditorMsg::Table(TableMsg::PointerAt(p)));
+        if self.page.active.as_ref().is_some_and(|a| a.table.is_some()) || self.assets.is_some() {
+            root = root.on_move(EditorMsg::PointerAt);
         }
         arrow_cursor(root).into()
     }
@@ -348,6 +394,7 @@ impl Editor {
                 keys::EditorCommand::DarkTheme => Some(prefs.dark),
                 keys::EditorCommand::SourceMode => Some(self.source.is_some()),
                 keys::EditorCommand::Outline => Some(self.outline),
+                keys::EditorCommand::Assets => Some(self.assets.is_some()),
                 keys::EditorCommand::FullScreen => Some(self.fullscreen),
                 _ => None,
             };
@@ -486,11 +533,13 @@ impl Editor {
     /// The width of the page's column in the window.
     fn column_width(&self, zoom: f32) -> f32 {
         let outline = if self.outline { OUTLINE_WIDTH } else { 0.0 };
-        (self.window_size.width - outline - 2.0 * PAGE_PADDING[1]).clamp(120.0, PAGE_WIDTH * zoom)
+        let assets = if self.assets.is_some() { super::assets::ASSETS_WIDTH } else { 0.0 };
+        (self.window_size.width - outline - assets - 2.0 * PAGE_PADDING[1]).clamp(120.0, PAGE_WIDTH * zoom)
     }
 
     fn document<'a>(&'a self, ctx: &Ctx<'a>, prefs: &EditorPrefs) -> Element<'a, EditorMsg> {
         let width = self.column_width(ctx.zoom);
+        let dragging = self.asset_dragging();
         let p = ctx.p;
         let content: Element<EditorMsg> = match &self.source {
             Some(source) => self.source_view(source, ctx, prefs),
@@ -588,10 +637,14 @@ impl Editor {
                         // A click in the gap goes to the nearer block: the upper
                         // half to the end of the one above, the lower half to the
                         // start of the one below.
+                        let after = previous_end.map_or(0, |end| content_end(&page.text, 0..end));
                         let half = |at: usize| -> Element<EditorMsg> {
-                            mouse_area(space().width(Fill).height(space_above / 2.0))
-                                .on_press(EditorMsg::PressedAt(at))
-                                .into()
+                            let mut area = mouse_area(space().width(Fill).height(space_above / 2.0))
+                                .on_press(EditorMsg::PressedAt(at));
+                            if dragging {
+                                area = area.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(after)));
+                            }
+                            area.into()
                         };
                         let gap_view: Element<EditorMsg> = match previous_end {
                             Some(end) => column![half(end), half(covers(entry).start)].into(),
@@ -622,27 +675,49 @@ impl Editor {
                             let boxed = container(in_containers(rendered, &kinds, p, ctx.zoom))
                                 .width(Fill)
                                 .id(self.id(&format!("block-{i}")));
-                            mouse_area(boxed)
+                            let mut area = mouse_area(boxed)
                                 .on_press(EditorMsg::BlockPressed(i))
-                                .on_enter(EditorMsg::BlockEntered(i))
-                                .into()
+                                .on_enter(EditorMsg::BlockEntered(i));
+                            if dragging {
+                                area = area.on_move(move |_| EditorMsg::Assets(AssetsMsg::BlockHovered(i)));
+                            }
+                            area.into()
                         }
                         (Entry::Active, None) => continue,
                     };
                     col = col.push(shown);
+                    // Where a dragged item would go as a paragraph of its own.
+                    if let Some(DropTarget::Paragraph { at }) = ctx.editor.drop_target()
+                        && content_end(&page.text, covers(entry)) == *at
+                    {
+                        col = col.push(
+                            container(space().height(2)).width(Fill).style(move |_| container::background(p.link)),
+                        );
+                    }
                     previous_end = Some(covers(entry).end);
                     previous = Some((kind, outer));
                 }
                 // Room to click below the last block.
-                col = col.push(
-                    mouse_area(container(space()).width(Fill).height(120.0 * ctx.zoom))
-                        .on_press(EditorMsg::PressedAt(page.text.len())),
-                );
+                let last = previous_end.map_or(0, |end| content_end(&page.text, 0..end));
+                let mut room = mouse_area(container(space()).width(Fill).height(120.0 * ctx.zoom))
+                    .on_press(EditorMsg::PressedAt(page.text.len()));
+                if dragging {
+                    room = room.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(last)));
+                }
+                col = col.push(room);
                 col.into()
             }
         };
         let padded = container(content).padding(PAGE_PADDING).center_x(Fill);
-        scrollable(padded).id(self.id("doc")).on_scroll(EditorMsg::Scrolled).width(Fill).height(Fill).into()
+        let page = scrollable(padded).id(self.id("doc")).on_scroll(EditorMsg::Scrolled).width(Fill).height(Fill);
+        // While an item of the assets pane is dragged, the page tells where it is.
+        let mut area = mouse_area(page);
+        if dragging {
+            area = area
+                .on_move(|_| EditorMsg::Assets(AssetsMsg::PageHovered))
+                .on_exit(EditorMsg::Assets(AssetsMsg::LeftPage));
+        }
+        area.into()
     }
 
     fn source_view<'a>(
@@ -1453,7 +1528,19 @@ fn text_line<'a>(
         rich = rich.width(w);
     }
     let info = Arc::new(HitInfo { block, runs: hits, width: width.unwrap_or(f32::INFINITY) });
-    mouse_area(rich).on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt)).on_press(EditorMsg::TextPressed).into()
+    // Where an item dragged from the assets pane would go, in this text.
+    let mark = ctx.editor.drop_mark_in(&info);
+    let area =
+        mouse_area(rich).on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt)).on_press(EditorMsg::TextPressed);
+    match mark {
+        Some(r) => stack![
+            area,
+            pin(container(space()).width(r.width).height(r.height).style(move |_| container::background(p.link)))
+                .position(r.position())
+        ]
+        .into(),
+        None => area.into(),
+    }
 }
 
 /// The size and font of a run's style.
@@ -1855,7 +1942,7 @@ fn cell_frame<'a>(width: impl Into<Length>, bg: Color, p: Palette) -> Element<'a
         .into()
 }
 
-fn dialog_view(dialog: &EditorDialog, p: Palette) -> Element<'_, EditorMsg> {
+fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::widget::Id) -> Element<'_, EditorMsg> {
     let answer = |label: &'static str, a: DialogAnswer, primary: bool| -> Element<'_, EditorMsg> {
         button(text(label).size(13).center())
             .width(110)
@@ -1863,8 +1950,29 @@ fn dialog_view(dialog: &EditorDialog, p: Palette) -> Element<'_, EditorMsg> {
             .on_press(EditorMsg::Dialog(a))
             .into()
     };
+    let file_name =
+        |path: &std::path::Path| path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut input = None;
     let (body, buttons): (String, Vec<Element<EditorMsg>>) = match dialog {
         EditorDialog::Message(m) => (m.clone(), vec![answer("OK", DialogAnswer::Ok, true)]),
+        EditorDialog::RenameAsset { path, name } => {
+            input = Some(
+                iced::widget::text_input("New name", name)
+                    .id(input_id)
+                    .on_input(|s| EditorMsg::Assets(AssetsMsg::NewName(s)))
+                    .on_submit(EditorMsg::Dialog(DialogAnswer::Ok))
+                    .size(13)
+                    .padding([4, 6]),
+            );
+            (
+                format!("Rename {} to:", file_name(path)),
+                vec![answer("Rename", DialogAnswer::Ok, true), answer("Cancel", DialogAnswer::Cancel, false)],
+            )
+        }
+        EditorDialog::DeleteAsset(path) => (
+            format!("Delete {}?", file_name(path)),
+            vec![answer("Delete", DialogAnswer::Ok, true), answer("Cancel", DialogAnswer::Cancel, false)],
+        ),
         EditorDialog::Unsaved => (
             "The page has unsaved changes. Save them?".into(),
             vec![
@@ -1879,7 +1987,11 @@ fn dialog_view(dialog: &EditorDialog, p: Palette) -> Element<'_, EditorMsg> {
         ),
     };
     let buttons = row![space().width(Fill)].extend(buttons).spacing(8);
-    let card = container(column![text(body).size(13).color(p.text), buttons].spacing(16))
+    let mut content = column![text(body).size(13).color(p.text)].spacing(16);
+    if let Some(input) = input {
+        content = content.push(input);
+    }
+    let card = container(content.push(buttons))
         .padding(20)
         .max_width(560)
         .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(8)));
