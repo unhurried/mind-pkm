@@ -5,8 +5,8 @@ use super::keys::{Bind, EditorCommand, TableMenuItem};
 use super::{Editor, EditorMsg, Effect};
 use crate::markdown::edit::Sel;
 use crate::markdown::table::{Align, CellRange, Table};
+use iced::Task;
 use iced::widget::text_editor::{Action, Edit, Motion};
-use iced::{Point, Task};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableMsg {
@@ -17,8 +17,6 @@ pub enum TableMsg {
     /// A right click on a cell: its menu.
     Menu(usize, usize),
     MenuItem(TableMenuItem),
-    /// The pointer moved, in the window (where a cell's menu opens).
-    PointerAt(Point),
     /// The toolbar's size fields.
     Rows(String),
     Columns(String),
@@ -332,10 +330,6 @@ impl Editor {
                     }
                 }
                 self.focus()
-            }
-            TableMsg::PointerAt(p) => {
-                self.pointer_at = p;
-                Task::none()
             }
             TableMsg::Rows(s) => {
                 self.resize_fields.0 = Some(s);

@@ -5,6 +5,7 @@
 //! - Page node: text links `<docDir>/<text>.md`; directory node: `<docDir>/<text>/`;
 //!   attachments live in `<docDir>/<text>.assets/`. Pages are UTF-8 with a BOM.
 
+pub mod assets;
 pub mod commands;
 pub mod filter;
 pub mod next_steps;

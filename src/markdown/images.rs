@@ -173,6 +173,88 @@ pub fn local_path(page: &Path, dest: &str, root_url: Option<&str>) -> Option<Pat
     paths::link_to_path(file, dir)
 }
 
+/// The text of the page at `page` with every inline link and image whose
+/// destination is `old` or lies inside it pointing at `old` renamed to
+/// `new_name`, and how many changed. Only the renamed segment of a
+/// destination is rewritten, escaped when the destination is: `./`, `<...>`,
+/// the other segments and any `#anchor` stay as they are written.
+pub fn rename_destinations(page: &Path, text: &str, old: &Path, new_name: &str) -> (String, usize) {
+    use pulldown_cmark::{Event, Tag};
+    let doc = super::parse::Document::parse(text);
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for (event, range) in &doc.events {
+        let dest = match event {
+            Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => dest_url.as_ref(),
+            _ => continue,
+        };
+        let src = &text[range.clone()];
+        // The destination is what follows the last `](` (with a `<` or spaces).
+        let Some(at) = src
+            .rmatch_indices(dest)
+            .map(|(i, _)| i)
+            .find(|&i| !dest.is_empty() && src[..i].trim_end_matches(['<', ' ', '\t', '\n', '\r']).ends_with("]("))
+        else {
+            continue;
+        };
+        let Some(renamed) = renamed_destination(page, dest, old, new_name) else { continue };
+        let start = range.start + at;
+        edits.push((start..start + dest.len(), renamed));
+    }
+    edits.sort_by_key(|(r, _)| r.start);
+    edits.dedup_by_key(|(r, _)| r.start);
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    for (r, with) in &edits {
+        out.push_str(&text[pos..r.start]);
+        out.push_str(with);
+        pos = r.end;
+    }
+    out.push_str(&text[pos..]);
+    (out, edits.len())
+}
+
+/// `dest` with the segment naming `old` replaced by `new_name`, when it
+/// points at `old` or inside it.
+fn renamed_destination(page: &Path, dest: &str, old: &Path, new_name: &str) -> Option<String> {
+    let resolved = local_path(page, dest, None)?;
+    let (resolved, old_key) = (paths::key(&resolved), paths::key(old));
+    let below = if resolved == old_key {
+        0
+    } else {
+        let rest = resolved.strip_prefix(&old_key)?.strip_prefix(std::path::MAIN_SEPARATOR)?;
+        rest.split(std::path::MAIN_SEPARATOR).count()
+    };
+    let (path, anchor) = match dest.find('#') {
+        Some(i) if !dest.to_ascii_lowercase().starts_with("file:") => dest.split_at(i),
+        _ => (dest, ""),
+    };
+    let mut segments: Vec<&str> = path.split('/').collect();
+    // The segment `below` real ones before the end (trailing `/` and `.` skipped).
+    let mut seen = 0;
+    let mut index = None;
+    for (i, s) in segments.iter().enumerate().rev() {
+        match *s {
+            "" | "." => continue,
+            ".." => return None,
+            _ if seen == below => {
+                index = Some(i);
+                break;
+            }
+            _ => seen += 1,
+        }
+    }
+    let index = index?;
+    let decoded = |s: &str| percent_encoding::percent_decode_str(s).decode_utf8_lossy().into_owned();
+    let old_name = old.file_name()?.to_string_lossy();
+    if !paths::same_file(Path::new(&decoded(segments[index])), Path::new(old_name.as_ref())) {
+        return None;
+    }
+    let escaped = decoded(path) != path;
+    let new_segment = if escaped { escape_path(new_name) } else { new_name.to_string() };
+    segments[index] = &new_segment;
+    Some(format!("{}{anchor}", segments.join("/")))
+}
+
 /// The local file an image source names, using the page's `typora-root-url`.
 pub fn image_path(page: &Path, text: &str, src: &str) -> Option<PathBuf> {
     let root = front_matter_value(text, "typora-root-url");
@@ -283,5 +365,43 @@ mod tests {
         assert_eq!(front_matter_value(text, "typora-copy-images-to").as_deref(), Some("img"));
         assert_eq!(front_matter_value(text, "title").as_deref(), Some("x"));
         assert_eq!(front_matter_value("no front matter", "title"), None);
+    }
+
+    #[test]
+    fn renaming_rewrites_the_destinations_naming_the_item() {
+        let dir = paths::normalize(Path::new("/docs"));
+        let page = dir.join("Trip.md");
+        let map = dir.join("Trip.assets").join("map.png");
+        let rename = |text: &str, old: &Path, new: &str| rename_destinations(&page, text, old, new);
+        assert_eq!(
+            rename("![](Trip.assets/map.png) and [map](./Trip.assets/map.png#top)\n", &map, "route.png"),
+            ("![](Trip.assets/route.png) and [map](./Trip.assets/route.png#top)\n".into(), 2)
+        );
+        // Escaped and angle-bracketed destinations keep their form.
+        let raw = dir.join("Trip.assets").join("raw");
+        assert_eq!(
+            rename("[raw](./Trip.assets/raw/a%20b.txt)\n", &raw, "source files"),
+            ("[raw](./Trip.assets/source%20files/a%20b.txt)\n".into(), 1)
+        );
+        assert_eq!(
+            rename("[r](<Trip.assets/raw/a b.txt> \"raw\")\n", &raw, "source"),
+            ("[r](<Trip.assets/source/a b.txt> \"raw\")\n".into(), 1)
+        );
+        assert_eq!(rename("[r](Trip.assets/raw/)\n", &raw, "src"), ("[r](Trip.assets/src/)\n".into(), 1));
+        // A link around an image: both destinations.
+        assert_eq!(
+            rename("[![m](Trip.assets/map.png)](Trip.assets/map.png)\n", &map, "r.png"),
+            ("[![m](Trip.assets/r.png)](Trip.assets/r.png)\n".into(), 2)
+        );
+        // Code, other files, a name that only starts the same, URLs: untouched.
+        let untouched = "`![](Trip.assets/map.png)`\n\n![](Trip.assets/map.png.bak) [x](Trip.assets/other.png)\n\n\
+                         [u](https://x.org/Trip.assets/map.png) [r][ref]\n\n[ref]: Trip.assets/map.png\n";
+        assert_eq!(rename(untouched, &map, "route.png"), (untouched.to_string(), 0));
+        // Renaming the assets folder itself.
+        let assets = dir.join("Trip.assets");
+        assert_eq!(
+            rename("![](Trip.assets/map.png)\n", &assets, "Old.assets"),
+            ("![](Old.assets/map.png)\n".into(), 1)
+        );
     }
 }

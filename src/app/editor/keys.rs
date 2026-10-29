@@ -1,7 +1,7 @@
 //! The page editor's commands, its menus and their keyboard shortcuts.
 
 use super::EditorMsg;
-use iced::keyboard::key::{Named, Physical};
+use iced::keyboard::key::{Code, Named, Physical};
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::text_editor::{Binding, KeyPress, Status};
 
@@ -70,6 +70,7 @@ pub enum EditorCommand {
     // View
     SourceMode,
     Outline,
+    Assets,
     FullScreen,
     ZoomIn,
     ZoomOut,
@@ -172,6 +173,7 @@ pub const MENUS: &[Menu] = &[
         &[
             ("Source Mode", "Ctrl+/", C::SourceMode),
             ("Outline", "Ctrl+Shift+1", C::Outline),
+            ("Assets", "Ctrl+Shift+2", C::Assets),
             ("Full Screen", "F11", C::FullScreen),
             ("Zoom In", "Ctrl+Shift+=", C::ZoomIn),
             ("Zoom Out", "Ctrl+Shift+-", C::ZoomOut),
@@ -239,6 +241,11 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
             _ => return None,
         });
     }
+    // Ctrl+Shift+2 by its key: the character there is `@` on US keyboards,
+    // which (where `` ` `` is on Japanese ones) means Code.
+    if ctrl && shift && !alt && physical == Physical::Code(Code::Digit2) {
+        return Some(C::Assets);
+    }
     let c = shortcut_char(key, physical)?;
     if alt && shift && !ctrl {
         return (c == "5" || c == "%").then_some(C::Strikethrough);
@@ -281,6 +288,7 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
         ("i", true) => C::Image,
         ("/", false) => C::SourceMode,
         ("1" | "!", true) => C::Outline,
+        ("2" | "\"", true) => C::Assets,
         ("=" | ";" | "+", true) => C::ZoomIn,
         ("-" | "_", true) => C::ZoomOut,
         ("0" | ")", true) => C::ZoomReset,
@@ -437,5 +445,20 @@ mod tests {
         assert_eq!(ch("@", ctrl_shift), Some(C::Code));
         assert_eq!(ch("¥", ctrl), Some(C::ClearFormatting));
         assert_eq!(ch("b", Modifiers::empty()), None);
+        assert_eq!(ch("\"", ctrl_shift), Some(C::Assets));
+    }
+
+    #[test]
+    fn assets_by_the_key_of_2() {
+        let digit2 = Physical::Code(Code::Digit2);
+        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
+        // US: Shift+2 is `@`; Japanese: `"`.
+        for c in ["@", "\"", "2"] {
+            assert_eq!(command_for_key(&Key::Character(c.into()), digit2, ctrl_shift), Some(C::Assets), "{c}");
+        }
+        // `@` on its own key (Japanese) stays Code.
+        let at = Physical::Code(Code::BracketLeft);
+        assert_eq!(command_for_key(&Key::Character("@".into()), at, ctrl_shift), Some(C::Code));
+        assert_eq!(command_for_key(&Key::Character("2".into()), digit2, Modifiers::CTRL), Some(C::Heading(2)));
     }
 }

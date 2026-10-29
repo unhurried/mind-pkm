@@ -5,6 +5,7 @@
 //! `page` holds the page and its editing state, `keys` the commands and key
 //! bindings, `highlight` the styling of the source, `view` the rendering.
 
+mod assets;
 pub mod clipboard;
 mod find;
 mod flow;
@@ -29,6 +30,7 @@ use crate::markdown::format::{self, InlineStyle};
 use crate::markdown::images::{self, ImageOptions};
 use crate::markdown::{export, html, table};
 use crate::pkm;
+pub use assets::AssetsMsg;
 use clipboard::ClipboardContent;
 pub use find::FindMsg;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
@@ -106,6 +108,8 @@ pub enum EditorMsg {
     Menu(Option<usize>),
     /// The pointer moved over a piece of rendered text, to this position in it.
     PointerOver(Arc<HitInfo>, Point),
+    /// The pointer moved, in the window (where a menu opens, a dragged item is).
+    PointerAt(Point),
     /// A press on the piece of text the pointer is over.
     TextPressed,
     /// A press on a rendered block outside its text.
@@ -137,6 +141,7 @@ pub enum EditorMsg {
     Inserted(Result<Vec<String>, String>),
     Find(FindMsg),
     Table(TableMsg),
+    Assets(AssetsMsg),
     /// From the widget editing a block in its rendered form.
     Live(LiveMsg),
     /// Where to export to (as PDF when `true`), as chosen in the save dialog.
@@ -161,13 +166,22 @@ pub enum EditorDialog {
     Unsaved,
     /// The file changed on disk while there are unsaved changes.
     ChangedOnDisk,
+    /// The new name of an item of the assets pane, as typed.
+    RenameAsset {
+        path: PathBuf,
+        name: String,
+    },
+    /// Deleting an item of the assets pane.
+    DeleteAsset(PathBuf),
 }
 
 impl EditorDialog {
     /// The answer of the highlighted button, which Enter chooses.
     fn default_answer(&self) -> DialogAnswer {
         match self {
-            EditorDialog::Message(_) => DialogAnswer::Ok,
+            EditorDialog::Message(_) | EditorDialog::RenameAsset { .. } | EditorDialog::DeleteAsset(_) => {
+                DialogAnswer::Ok
+            }
             EditorDialog::Unsaved => DialogAnswer::Save,
             EditorDialog::ChangedOnDisk => DialogAnswer::Discard,
         }
@@ -190,6 +204,10 @@ pub enum Effect {
     },
     /// Read the clipboard to paste (as plain text when `true`).
     ReadClipboard(bool),
+    /// Open the right-click menu of an item of the assets pane, saying whether it may be changed.
+    AssetMenu(PathBuf),
+    RenameAsset(PathBuf, String),
+    DeleteAsset(PathBuf),
 }
 
 pub struct Editor {
@@ -202,6 +220,8 @@ pub struct Editor {
     /// The whole page in a text editor, in source mode.
     source: Option<Content>,
     outline: bool,
+    /// The assets pane, when shown.
+    assets: Option<assets::AssetsPane>,
     fullscreen: bool,
     /// The status bar message.
     pub(super) status: Status,
@@ -249,6 +269,7 @@ impl Editor {
             dialogs: VecDeque::new(),
             source: None,
             outline: false,
+            assets: None,
             fullscreen: false,
             status: Status::default(),
             modifiers: Modifiers::default(),
@@ -396,6 +417,7 @@ impl Editor {
                         let text = format!("{}{}", if recent { "\n" } else { "" }, pieces.join("\n"));
                         self.insert_text(&text);
                         self.last_insert = Some((std::time::Instant::now(), self.page.sel.head));
+                        self.assets_stale();
                     }
                     Ok(_) => {}
                     Err(e) => self.dialogs.push_back(EditorDialog::Message(e)),
@@ -414,11 +436,22 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::PointerOver(info, p) => {
+                if self.asset_dragging() {
+                    self.drag_over_text(&info, p);
+                }
                 self.pointer = Some((info, p));
+                Task::none()
+            }
+            EditorMsg::PointerAt(p) => {
+                self.pointer_at = p;
+                self.assets_pointer(p);
                 Task::none()
             }
             EditorMsg::TextPressed => self.text_pressed(),
             EditorMsg::BlockPressed(block) => self.block_pressed(block),
+            EditorMsg::BlockEntered(block) if self.asset_dragging() => {
+                self.assets_message(AssetsMsg::BlockHovered(block), effects)
+            }
             EditorMsg::BlockEntered(block) => {
                 if let Some(anchor) = self.block_drag
                     && (block != anchor || self.page.blocks.is_some())
@@ -430,7 +463,7 @@ impl Editor {
             }
             EditorMsg::Released => {
                 (self.cell_drag, self.block_drag) = (false, None);
-                Task::none()
+                self.assets_released(prefs)
             }
             EditorMsg::CodeLanguage(language) => {
                 self.page.set_code_language(&language);
@@ -463,6 +496,7 @@ impl Editor {
             EditorMsg::Find(msg) => self.find_message(msg),
             EditorMsg::Live(msg) => self.live_message(msg),
             EditorMsg::Table(msg) => self.table_message(msg, effects),
+            EditorMsg::Assets(msg) => self.assets_message(msg, effects),
             EditorMsg::ExportTo(pdf, out) => self.export_to(pdf, out),
             EditorMsg::Exported(result) => {
                 match result {
@@ -531,9 +565,15 @@ impl Editor {
     fn on_escape(&mut self) -> Task<EditorMsg> {
         if !self.dialogs.is_empty() {
             self.dialogs.pop_front();
-        } else if self.menu.is_some() || self.cell_menu.is_some() {
+        } else if self.menu.is_some()
+            || self.cell_menu.is_some()
+            || self.assets.as_ref().is_some_and(|a| a.menu.is_some())
+        {
             self.menu = None;
             self.cell_menu = None;
+            if let Some(pane) = &mut self.assets {
+                pane.menu = None;
+            }
         } else if self.find.is_some() {
             return self.close_find();
         } else if self.page.blocks.is_some() {
@@ -990,6 +1030,10 @@ impl Editor {
                 self.outline = !self.outline;
                 Task::none()
             }
+            C::Assets => {
+                self.toggle_assets();
+                Task::none()
+            }
             C::FullScreen => {
                 self.fullscreen = !self.fullscreen;
                 let mode = if self.fullscreen { window::Mode::Fullscreen } else { window::Mode::Windowed };
@@ -1090,6 +1134,14 @@ impl Editor {
                     self.dialogs.push_back(EditorDialog::Message(e));
                 }
                 self.refresh_source();
+            }
+            (EditorDialog::RenameAsset { path, name }, DialogAnswer::Ok) => {
+                self.dialogs.pop_front();
+                effects.push(Effect::RenameAsset(path, name));
+            }
+            (EditorDialog::DeleteAsset(path), DialogAnswer::Ok) => {
+                self.dialogs.pop_front();
+                effects.push(Effect::DeleteAsset(path));
             }
             (EditorDialog::ChangedOnDisk, _) => {
                 self.dialogs.pop_front();
@@ -1630,7 +1682,7 @@ pub fn opens_in_editor(path: &Path, builtin: bool) -> bool {
 /// The subscription of the editor windows: nothing of their own yet.
 pub fn subscription(editors: &BTreeMap<window::Id, Editor>) -> Subscription<Message> {
     // Dragging over cells or blocks ends where the button is released, wherever that is.
-    if editors.values().any(|e| e.cell_drag || e.block_drag.is_some()) {
+    if editors.values().any(|e| e.cell_drag || e.block_drag.is_some() || e.asset_pressed()) {
         iced::event::listen_with(|event, _status, window| match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 Some(Message::Editor(window, EditorMsg::Released))
@@ -1649,6 +1701,7 @@ impl App {
         let Some(editor) = self.editors.get_mut(&id) else { return Task::none() };
         if focused {
             editor.check_disk();
+            editor.assets_stale();
             return Task::none();
         }
         let mut effects = Vec::new();
@@ -1689,7 +1742,68 @@ impl App {
                     move |content| Message::Editor(id, EditorMsg::Pasted(content, plain)),
                 )
             }
+            Effect::AssetMenu(path) => {
+                let can_change = self.asset_doc_dir(&path).is_ok();
+                if let Some(editor) = self.editors.get_mut(&id) {
+                    editor.show_asset_menu(path, can_change);
+                }
+                Task::none()
+            }
+            Effect::RenameAsset(path, name) => {
+                let result = self.asset_doc_dir(&path).and_then(|d| pkm::assets::rename(&path, &name, &d));
+                if let Some(editor) = self.editors.get_mut(&id) {
+                    match result {
+                        Ok(Some(new)) => editor.asset_renamed(&path, &new),
+                        Ok(None) => {}
+                        Err(e) => editor.dialogs.push_back(EditorDialog::Message(e)),
+                    }
+                }
+                Task::none()
+            }
+            Effect::DeleteAsset(path) => {
+                let remove = self.asset_remover;
+                let result = self.asset_doc_dir(&path).and_then(|d| pkm::assets::delete(&path, &d, &mut |f| remove(f)));
+                if let Some(editor) = self.editors.get_mut(&id) {
+                    match result {
+                        Ok(()) => editor.asset_deleted(&path),
+                        Err(e) => editor.dialogs.push_back(EditorDialog::Message(e)),
+                    }
+                }
+                Task::none()
+            }
         }
+    }
+
+    /// The document directory, when the assets pane may rename or delete
+    /// `path`: inside it, and holding no file open in an editor window.
+    fn asset_doc_dir(&self, path: &Path) -> Result<PathBuf, String> {
+        let name = file_name(path);
+        let doc = self.doc.as_ref().ok_or_else(|| format!("{name} is not in the document directory."))?;
+        let doc_dir = pkm::load_doc_dir(&doc.map)?;
+        if !pkm::assets::can_change(path, &doc_dir) {
+            return Err(format!("{name} is not in the document directory."));
+        }
+        if !self.editors_of(path).is_empty() {
+            return Err(format!("{name} is open in an editor."));
+        }
+        Ok(doc_dir)
+    }
+
+    /// Reads the folders the assets panes ask for, in the background.
+    pub(super) fn read_assets(&mut self) -> Task<Message> {
+        let mut tasks = Vec::new();
+        for (&id, editor) in self.editors.iter_mut() {
+            if let Some(dir) = editor.start_assets_read() {
+                tasks.push(Task::perform(
+                    blocking(move || {
+                        let tree = pkm::assets::read_tree(&dir);
+                        (dir, tree)
+                    }),
+                    move |(dir, tree)| Message::Editor(id, EditorMsg::Assets(AssetsMsg::Read(dir, tree))),
+                ));
+            }
+        }
+        Task::batch(tasks)
     }
 
     pub(super) fn set_editor_prefs(&mut self, prefs: EditorPrefs) {
