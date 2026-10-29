@@ -182,11 +182,15 @@ Ctrl+/ SHALL switch between the live preview and a source mode that shows the wh
 - **THEN** the clipboard holds the Markdown of exactly the selected text
 
 ### Requirement: Selecting several blocks
-Outside source mode, a selection reaching beyond a block SHALL select whole blocks: Shift+Up/Down at the first/last line of a block, Shift+click on another block, and Ctrl+A pressed a second time (the first selects the active block's text) SHALL select a range of blocks, shown highlighted. Copy, Cut, Delete and typing SHALL act on all selected blocks.
+Outside source mode, a selection reaching beyond a block SHALL select whole blocks: Shift+Up/Down at the first/last line of a block, Shift+click on another block, dragging the mouse from a block onto another, and Ctrl+A pressed a second time (the first selects the active block's text) SHALL select a range of blocks, shown highlighted. Copy, Cut, Delete and typing SHALL act on all selected blocks.
 
 #### Scenario: Deleting three blocks
 - **WHEN** three paragraphs are selected with Shift+Down and Delete is pressed
 - **THEN** the three paragraphs are removed and the cursor is in the block that followed them
+
+#### Scenario: Dragging over blocks
+- **WHEN** the mouse button is pressed in the text of the second of four paragraphs and the pointer is dragged onto the fourth
+- **THEN** the second to fourth paragraphs are selected, and moving the pointer back onto the third leaves the second and third selected until the button is released
 
 ### Requirement: Paragraph shortcuts
 Ctrl+1 to Ctrl+6 SHALL make the active block a heading of that level and Ctrl+0 a paragraph; Ctrl+= and Ctrl+- SHALL raise and lower the heading level (a paragraph becomes a level-6 heading with Ctrl+=, a level-6 heading a paragraph with Ctrl+-). Ctrl+Shift+K SHALL insert a code block, Ctrl+Shift+M a math block, Ctrl+T a table; Ctrl+Shift+Q SHALL toggle a quote, Ctrl+Shift+[ an ordered list and Ctrl+Shift+] a bullet list on the selected blocks or the active one.
