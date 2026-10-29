@@ -957,6 +957,11 @@ pub fn backspace(text: &str, doc: &Document, region: Range<usize>, c: usize) -> 
         && let Some(m) = line_marker(&text[first.clone()])
         && c == first.start + m.end
     {
+        if m.task.is_none()
+            && let Some(e) = into_previous_item(text, doc, &region, first.clone(), &m)
+        {
+            return Some(e);
+        }
         // A task item loses its box first, then its bullet.
         let remove = match &m.task {
             Some(task) => first.start + task.start..first.start + task.end,
@@ -980,6 +985,52 @@ pub fn backspace(text: &str, doc: &Document, region: Range<usize>, c: usize) -> 
     } else {
         Some(Edited::new(text.to_string(), prev.range.end))
     }
+}
+
+/// Backspace at the start of the text of the list item at `region` (`m`
+/// the marker on its first line `first`): the item becomes a block of the
+/// item before it at its level, or of the item its list is nested in - its
+/// text a paragraph after a blank line, an empty item a new empty paragraph.
+/// None when there is no such item (the first item of a list at the top).
+fn into_previous_item(
+    text: &str,
+    doc: &Document,
+    region: &Range<usize>,
+    first: Range<usize>,
+    m: &Marker,
+) -> Option<Edited> {
+    let i = doc.blocks.iter().position(|b| b.range.start == region.start)?;
+    let BlockKind::ListItem(item) = &doc.blocks[i].kind else { return None };
+    let (owner, o) = doc.blocks[..i].iter().rev().find_map(|b| match &b.kind {
+        BlockKind::ListItem(o) if o.depth <= item.depth => Some((b, o)),
+        _ => None,
+    })?;
+    let sibling = o.depth == item.depth && o.list == item.list;
+    let parent = o.depth + 1 == item.depth && o.subtree_end >= doc.blocks[i].range.end;
+    if !(sibling || parent) {
+        return None;
+    }
+    let owner_line = line_range(text, owner.range.start);
+    let om = line_marker(&text[owner_line.clone()])?;
+    // An empty item can't have a blank line before its first block.
+    if text[owner_line.start + om.end..owner_line.end].trim().is_empty() {
+        return None;
+    }
+    // Its content column (a task's box is part of its text).
+    let column = om.task.as_ref().map_or(om.end, |t| t.start);
+    let content = first.start + m.end;
+    if text[content..region.end].trim().is_empty() {
+        // The empty item goes, with the blank lines before it.
+        let before = text[..first.start].trim_end_matches(['\n', ' ', '\t']).len();
+        let t = splice(text, before..first.end, "");
+        let mut pending = Pending::after(&t, before);
+        pending.prefix.push_str(&" ".repeat(column));
+        pending.outer.push(ContainerKind::Item { depth: o.depth, indent: column });
+        return Some(Edited::pending(t, pending));
+    }
+    let blank_before = text[line_range(text, first.start - 1)].trim().is_empty();
+    let insert = format!("{}{}", if blank_before { "" } else { "\n" }, " ".repeat(column));
+    Some(Edited::new(splice(text, first.start..content, &insert), first.start + insert.len()))
 }
 
 /// Delete with nothing selected at the end of the region: joins the next
@@ -1384,6 +1435,31 @@ mod tests {
         assert_eq!(backspace_at("> ‸q").as_deref(), Some("‸q"));
         assert_eq!(backspace_at("1. ‸x").as_deref(), Some("‸x"));
         assert_eq!(backspace_at("ab‸c"), None);
+    }
+
+    #[test]
+    fn backspace_makes_a_list_item_a_block_of_the_item_before() {
+        // An empty item: a new empty paragraph of the item before.
+        assert_eq!(backspace_at("* aaa\n* ‸").as_deref(), Some("* aaa\n\n  ¶"));
+        assert_eq!(backspace_at("* a\n\n* ‸\n\nafter").as_deref(), Some("* a\n\n  ¶\n\nafter"));
+        assert_eq!(backspace_at("* a\n* ‸\n* c").as_deref(), Some("* a\n\n  ¶\n\n* c"));
+        assert_eq!(backspace_at("1. a\n2. ‸").as_deref(), Some("1. a\n\n   ¶"));
+        assert_eq!(backspace_at("- [ ] a\n- ‸").as_deref(), Some("- [ ] a\n\n  ¶"));
+        // A nested first item: of the item its list is in.
+        assert_eq!(backspace_at("* a\n  * ‸").as_deref(), Some("* a\n\n  ¶"));
+        assert_eq!(backspace_at("* a\n  * b\n  * ‸").as_deref(), Some("* a\n  * b\n\n    ¶"));
+        // After the item's other blocks.
+        assert_eq!(backspace_at("* a\n  * n\n* ‸").as_deref(), Some("* a\n  * n\n\n  ¶"));
+        // An item with text: a paragraph of the item before.
+        assert_eq!(backspace_at("* a\n* ‸b\n* c").as_deref(), Some("* a\n\n  ‸b\n* c"));
+        assert_eq!(backspace_at("* a\n\n* ‸b").as_deref(), Some("* a\n\n  ‸b"));
+        // In a quote, and in a list item's blocks.
+        assert_eq!(backspace_at("> * a\n> * ‸").as_deref(), Some("> * a\n>\n>   ¶"));
+        assert_eq!(backspace_at("> * a\n> * ‸b").as_deref(), Some("> * a\n>\n>   ‸b"));
+        assert_eq!(backspace_at("- a\n\n  p\n\n  * x\n  * ‸").as_deref(), Some("- a\n\n  p\n\n  * x\n\n    ¶"));
+        // Not into an empty item, nor out of another list.
+        assert_eq!(backspace_at("* \n* ‸b").as_deref(), Some("* \n‸b"));
+        assert_eq!(backspace_at("* a\n\n- ‸b").as_deref(), Some("* a\n\n‸b"));
     }
 
     #[test]

@@ -14,6 +14,7 @@ use crate::markdown::edit::{self, CodeBody, Edited, Pending, Sel};
 use crate::markdown::history::{History, Snapshot};
 use crate::markdown::live::{self, Display};
 use crate::markdown::page::PageText;
+use crate::markdown::parse::{ContainerKind, prefix_len};
 use crate::markdown::table::{self, CellRange, Table};
 use crate::markdown::{BlockKind, Document};
 use iced::widget::text_editor::{Action, Content, Cursor, Edit, Motion, Position};
@@ -59,6 +60,19 @@ impl Active {
     fn new(region: Range<usize>, text: &str) -> Active {
         Active { region, content: Content::with_text(text), kind: own_kind(text), table: None, live: None, code: None }
     }
+}
+
+/// The Markdown of the table at `start` in `doc`, with the prefixes of the
+/// containers it is in (a quote's `>`, a list item's indentation) on its lines.
+fn table_source(table: &Table, doc: &Document, start: usize) -> String {
+    let kinds = doc.blocks.iter().position(|b| b.range.start == start).map(|b| doc.outer_kinds(b)).unwrap_or_default();
+    let prefix = edit::container_prefix(&kinds, false);
+    table.to_markdown().split('\n').map(|line| format!("{prefix}{line}")).collect::<Vec<_>>().join("\n")
+}
+
+/// `source` without the prefixes of the containers `kinds` on its lines.
+fn without_prefixes(source: &str, kinds: &[ContainerKind]) -> String {
+    source.split('\n').map(|line| &line[prefix_len(line, kinds.iter().copied())..]).collect::<Vec<_>>().join("\n")
 }
 
 /// Typed text as a table cell stores it: line breaks as `<br>`, `|` escaped.
@@ -340,9 +354,13 @@ impl Page {
                 let source = &self.text[region.clone()];
                 let mut active = Active::new(region.clone(), source);
                 let block = self.doc.blocks.iter().position(|b| b.range.start == region.start);
-                if active.kind == BlockKind::Table
-                    && let Some(t) = Table::parse(source)
+                // A table in a quote is the quote's source on its own.
+                let in_table = block.is_some_and(|b| self.doc.blocks[b].kind == BlockKind::Table);
+                let kinds = block.map(|b| self.doc.outer_kinds(b)).unwrap_or_default();
+                if (in_table || active.kind == BlockKind::Table)
+                    && let Some(t) = Table::parse(&without_prefixes(source, &kinds))
                 {
+                    active.kind = BlockKind::Table;
                     let cell = table::cell_at_offset(source, head - region.start);
                     let cell = (cell.0.min(t.rows.len() - 1), cell.1.min(t.columns() - 1));
                     // The cursor (a selection within the cell) where it is in the source.
@@ -593,7 +611,7 @@ impl Page {
             let (new, cursor) = replace_shown(&raw, &live.display, shown, state.cell_sel.head, &cell_text(insert));
             state.table.rows[state.cell.0][state.cell.1] = new;
             state.cell_sel = Sel::caret(cursor);
-            let source = state.table.to_markdown();
+            let source = table_source(&state.table, &self.doc, a.region.start);
             self.text = edit::splice(&self.text, a.region.clone(), &source);
             a.region.end = a.region.start + source.len();
             self.reparse();
@@ -846,7 +864,7 @@ impl Page {
         } else {
             Sel::default()
         };
-        let source = state.table.to_markdown();
+        let source = table_source(&state.table, &self.doc, active.region.start);
         self.text = edit::splice(&self.text, active.region.clone(), &source);
         active.region.end = active.region.start + source.len();
         self.reparse();

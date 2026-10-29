@@ -324,7 +324,8 @@ pub fn cell_at_offset(source: &str, offset: usize) -> (usize, usize) {
     let line_index = source[..offset].matches('\n').count();
     let line_start = source[..offset].rfind('\n').map_or(0, |i| i + 1);
     let row = if line_index == 0 { 0 } else { line_index.max(2) - 1 };
-    // Unescaped pipes before the offset on the line, the leading one not counting.
+    // Unescaped pipes before the offset on the line, the leading one (after
+    // the prefixes of a quote or list item) not counting.
     let line = &source[line_start..offset];
     let mut pipes: usize = 0;
     let mut escaped = false;
@@ -335,7 +336,7 @@ pub fn cell_at_offset(source: &str, offset: usize) -> (usize, usize) {
             _ => escaped = false,
         }
     }
-    let leading = line.trim_start().starts_with('|');
+    let leading = line.trim_start_matches([' ', '\t', '>']).starts_with('|');
     (row, pipes.saturating_sub(usize::from(leading)))
 }
 
@@ -668,6 +669,14 @@ mod tests {
         assert_eq!(&src[cell_offset(&src, (1, 1))..cell_offset(&src, (1, 1)) + 1], "2");
         // The delimiter row counts as the first body row.
         assert_eq!(cell_at_offset(&src, src.find("---").unwrap()).0, 1);
+        // In a quote or a list item: the lines' prefixes before the leading pipe.
+        for prefix in ["> ", "  ", ">   "] {
+            let src: String = src.lines().map(|l| format!("{prefix}{l}\n")).collect();
+            for cell in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                let o = cell_offset(&src, cell);
+                assert_eq!(cell_at_offset(&src, o), cell, "{cell:?} at {o} in {src}");
+            }
+        }
     }
 
     #[test]
