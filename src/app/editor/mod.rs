@@ -110,6 +110,10 @@ pub enum EditorMsg {
     TextPressed,
     /// A press on a rendered block outside its text.
     BlockPressed(usize),
+    /// The pointer entered a rendered block.
+    BlockEntered(usize),
+    /// The left mouse button was released, anywhere in the window.
+    Released,
     /// The language field of the code block being edited changed.
     CodeLanguage(String),
     /// A press on a cell of the table being edited.
@@ -218,6 +222,9 @@ pub struct Editor {
     pub find: Option<find::FindBar>,
     /// A press on a cell started dragging over cells.
     cell_drag: bool,
+    /// The block a press started in, while the button is held: dragging onto
+    /// another block selects the blocks between.
+    block_drag: Option<usize>,
     /// Where the cells' range ends (the cursor's cell is where it starts).
     range_head: Option<(usize, usize)>,
     /// Where a cell's right-click menu is open.
@@ -254,6 +261,7 @@ impl Editor {
             last_insert: None,
             find: None,
             cell_drag: false,
+            block_drag: None,
             range_head: None,
             cell_menu: None,
             pointer_at: Point::ORIGIN,
@@ -284,10 +292,24 @@ impl Editor {
             EditorMsg::Action(_) | EditorMsg::Bind(_) | EditorMsg::Key(_) | EditorMsg::Find(_) | EditorMsg::Live(_)
         );
         let command = matches!(msg, EditorMsg::Command(_));
+        let press = self.source.is_none()
+            && matches!(
+                msg,
+                EditorMsg::Live(LiveMsg::Click { .. })
+                    | EditorMsg::Action(Action::Click(_))
+                    | EditorMsg::TextPressed
+                    | EditorMsg::BlockPressed(_)
+                    | EditorMsg::PressedAt(_)
+                    | EditorMsg::CellPressed(..)
+                    | EditorMsg::TableCellPressed(..)
+            );
         let before = self.cursor_state();
         let revision = self.page.revision;
         let shown = self.status.text().to_string();
         let task = self.handle(msg, prefs, effects);
+        if press {
+            self.block_drag = self.page.active_block().or(self.page.blocks.map(|b| b.0));
+        }
         // An edit clears the message about what came before it.
         if self.page.revision != revision && self.status.text() == shown {
             self.status.clear();
@@ -397,6 +419,19 @@ impl Editor {
             }
             EditorMsg::TextPressed => self.text_pressed(),
             EditorMsg::BlockPressed(block) => self.block_pressed(block),
+            EditorMsg::BlockEntered(block) => {
+                if let Some(anchor) = self.block_drag
+                    && (block != anchor || self.page.blocks.is_some())
+                {
+                    self.menu = None;
+                    self.page.select_blocks(anchor, block);
+                }
+                Task::none()
+            }
+            EditorMsg::Released => {
+                (self.cell_drag, self.block_drag) = (false, None);
+                Task::none()
+            }
             EditorMsg::CodeLanguage(language) => {
                 self.page.set_code_language(&language);
                 Task::none()
@@ -1594,11 +1629,11 @@ pub fn opens_in_editor(path: &Path, builtin: bool) -> bool {
 
 /// The subscription of the editor windows: nothing of their own yet.
 pub fn subscription(editors: &BTreeMap<window::Id, Editor>) -> Subscription<Message> {
-    // Dragging over cells ends where the button is released, in or out of the table.
-    if editors.values().any(|e| e.cell_drag) {
+    // Dragging over cells or blocks ends where the button is released, wherever that is.
+    if editors.values().any(|e| e.cell_drag || e.block_drag.is_some()) {
         iced::event::listen_with(|event, _status, window| match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
-                Some(Message::Editor(window, EditorMsg::Table(TableMsg::Released)))
+                Some(Message::Editor(window, EditorMsg::Released))
             }
             _ => None,
         })

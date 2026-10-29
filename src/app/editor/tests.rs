@@ -571,6 +571,44 @@ fn cutting_whole_blocks() {
 }
 
 #[test]
+fn dragging_onto_other_blocks_selects_them() {
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n\nfour\n");
+    let id = open_with_f1(&mut app);
+    // A press in a block's text, then the pointer onto the blocks below and back.
+    click_after(&mut app, id, "two");
+    live(&mut app, id, super::LiveMsg::Click { at: 1, extend: false });
+    assert_eq!(app.editors[&id].page.blocks, None);
+    editor(&mut app, id, EditorMsg::BlockEntered(3));
+    assert_eq!(app.editors[&id].page.blocks, Some((1, 3)));
+    assert!(app.editors[&id].page.active.is_none());
+    editor(&mut app, id, EditorMsg::BlockEntered(2));
+    assert_eq!(app.editors[&id].page.blocks, Some((1, 2)));
+    editor(&mut app, id, EditorMsg::BlockEntered(1));
+    assert_eq!(app.editors[&id].page.blocks, Some((1, 1)));
+    editor(&mut app, id, EditorMsg::BlockEntered(0));
+    assert_eq!(app.editors[&id].page.blocks, Some((1, 0)));
+    // Released: moving over blocks changes nothing.
+    editor(&mut app, id, EditorMsg::Released);
+    editor(&mut app, id, EditorMsg::BlockEntered(3));
+    assert_eq!(app.editors[&id].page.blocks, Some((1, 0)));
+    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::Delete), Modifiers::empty())));
+    assert_eq!(page_text(&app, id), "three\n\nfour\n");
+
+    // A press on a rendered block, beside its text.
+    let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::BlockPressed(2));
+    editor(&mut app, id, EditorMsg::BlockEntered(0));
+    assert_eq!(app.editors[&id].page.blocks, Some((2, 0)));
+    editor(&mut app, id, EditorMsg::Released);
+    // In source mode, no block is selected.
+    editor(&mut app, id, EditorMsg::Command(super::EditorCommand::SourceMode));
+    editor(&mut app, id, EditorMsg::Action(Action::Click(iced::Point::ORIGIN)));
+    editor(&mut app, id, EditorMsg::BlockEntered(1));
+    assert_eq!(app.editors[&id].page.blocks, None);
+}
+
+#[test]
 fn whole_blocks_are_selected_and_replaced() {
     let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n");
     let id = open_with_f1(&mut app);
