@@ -30,7 +30,7 @@ pub enum Dialog {
 /// What a confirmation dialog does on Yes.
 #[derive(Debug, Clone)]
 pub enum ConfirmAction {
-    DeleteDocs(Vec<(NodeId, DocType)>),
+    DeleteDocs(Vec<(NodeId, Option<DocType>)>),
 }
 
 /// What an input dialog's value is for.
@@ -137,9 +137,9 @@ impl App {
         self.after_unsaved(after)
     }
 
-    /// Deletes the pages and directories confirmed for deletion (F11), moving
-    /// their files to the Recycle Bin.
-    fn delete_docs(&mut self, targets: &[(NodeId, DocType)]) -> Task<Message> {
+    /// Deletes the nodes confirmed for deletion (F11, Delete), moving the files
+    /// of pages and directories to the Recycle Bin.
+    pub(super) fn delete_docs(&mut self, targets: &[(NodeId, Option<DocType>)]) -> Task<Message> {
         // Open pages are saved first (to the Recycle Bin with their changes), their editors close.
         let paths: Vec<_> = targets.iter().filter_map(|&(n, _)| self.doc_path_of(n)).collect();
         if let Err(e) = self.save_editors_of(&paths) {

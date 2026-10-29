@@ -352,31 +352,6 @@ impl Doc {
         (n, serial)
     }
 
-    /// Deletes the selected nodes but the root, and selects a neighbour of the
-    /// last one (or else its parent).
-    pub(super) fn delete_selected(&mut self) {
-        let root = self.map.root();
-        let targets: Vec<NodeId> = self.sorted_selection().into_iter().filter(|&n| n != root).collect();
-        let Some(&last) = targets.last() else { return };
-        let next = self.layout.get(last).and_then(|b| b.parent).map(|p| {
-            let sibs = self.map.children(p);
-            let pos = sibs.iter().position(|&s| s == last).unwrap_or(0);
-            sibs.iter()
-                .skip(pos + 1)
-                .chain(sibs[..pos].iter().rev())
-                .find(|s| !targets.contains(s))
-                .copied()
-                .unwrap_or(p)
-        });
-        self.checkpoint();
-        for t in targets {
-            self.map.delete(t);
-        }
-        if let Some(n) = next {
-            self.select(vec![n]);
-        }
-    }
-
     /// Moves the focused node one place up or down among its siblings.
     pub(super) fn move_focus(&mut self, up: bool) {
         let focus = self.focus;

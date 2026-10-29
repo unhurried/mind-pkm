@@ -157,23 +157,24 @@ pub fn new_directory(map: &mut MindMap, id: NodeId) -> Result<PathBuf, String> {
 
 // --- Delete (F11) ---
 
-/// The page and directory nodes to delete (a node under another selected node
-/// goes with that node's directory); refuses when any selected node is neither.
-pub fn delete_targets(map: &MindMap, selection: &[NodeId]) -> Result<Vec<(NodeId, DocType)>, String> {
-    let doc_dir = load_doc_dir(map)?;
-    let targets: Vec<(NodeId, Option<DocType>)> =
-        sorted_selection(map, selection).into_iter().map(|n| (n, doc_type(map, n, &doc_dir))).collect();
-    let others: Vec<String> = targets.iter().filter(|(_, t)| t.is_none()).map(|(n, _)| map.text(*n)).collect();
-    if !others.is_empty() {
-        return Err(format!("not a page or directory: {}", others.join(", ")));
-    }
-    Ok(targets.into_iter().map(|(n, t)| (n, t.unwrap())).collect())
+/// The nodes to delete (a node under another selected node goes with that
+/// node; the root is never deleted), each with the kind of document it links
+/// when it is a page or directory node: their files go too, any other node is
+/// deleted alone.
+pub fn delete_targets(map: &MindMap, selection: &[NodeId]) -> Vec<(NodeId, Option<DocType>)> {
+    let doc_dir = load_doc_dir(map).ok();
+    let nodes: Vec<NodeId> = selection.iter().copied().filter(|&n| n != map.root()).collect();
+    sorted_selection(map, &nodes)
+        .into_iter()
+        .map(|n| (n, doc_dir.as_deref().and_then(|d| doc_type(map, n, d))))
+        .collect()
 }
 
-pub fn delete_question(map: &MindMap, targets: &[(NodeId, DocType)]) -> String {
-    let describe = |(n, t): &(NodeId, DocType)| match t {
-        DocType::Page => format!("\"{}\"", map.text(*n)),
-        DocType::Directory => format!("directory \"{}\"", map.text(*n)),
+pub fn delete_question(map: &MindMap, targets: &[(NodeId, Option<DocType>)]) -> String {
+    let describe = |(n, t): &(NodeId, Option<DocType>)| match t {
+        Some(DocType::Page) => format!("\"{}\"", map.text(*n)),
+        Some(DocType::Directory) => format!("directory \"{}\"", map.text(*n)),
+        None => format!("node \"{}\"", map.text(*n)),
     };
     if targets.len() == 1 {
         format!("Are you sure to delete {}?", describe(&targets[0]))
@@ -186,26 +187,31 @@ pub fn delete_question(map: &MindMap, targets: &[(NodeId, DocType)]) -> String {
 /// Deletes the targets' files with `remove` (given the existing files of one
 /// target at a time: a page and its assets directory, or a directory; the
 /// application moves them to the Recycle Bin), then their nodes. A target
-/// whose files can't be removed keeps its node and is reported.
+/// whose files can't be removed keeps its node and is reported; a node that
+/// is neither a page nor a directory has no files and simply goes.
 pub fn delete_execute(
     map: &mut MindMap,
-    targets: &[(NodeId, DocType)],
+    targets: &[(NodeId, Option<DocType>)],
     remove: &mut dyn FnMut(&[PathBuf]) -> Result<(), String>,
 ) -> Result<(), String> {
-    let doc_dir = load_doc_dir(map)?;
+    let doc_dir = if targets.iter().any(|(_, t)| t.is_some()) { Some(load_doc_dir(map)?) } else { None };
     let (mut failed_pages, mut failed_dirs) = (Vec::new(), Vec::new());
     for &(n, t) in targets {
         if !map.exists(n) {
             continue;
         }
         let name = map.text(n);
+        let (Some(t), Some(doc_dir)) = (t, &doc_dir) else {
+            map.delete(n);
+            continue;
+        };
         let (files, failed) = match t {
-            DocType::Page => (vec![page_file(&doc_dir, &name), assets_dir(&doc_dir, &name)], &mut failed_pages),
-            DocType::Directory => (vec![directory_dir(&doc_dir, &name)], &mut failed_dirs),
+            DocType::Page => (vec![page_file(doc_dir, &name), assets_dir(doc_dir, &name)], &mut failed_pages),
+            DocType::Directory => (vec![directory_dir(doc_dir, &name)], &mut failed_dirs),
         };
         // Checked again, whatever the targets came from: nothing outside the
         // document directory, nor the directory itself, is ever removed.
-        let inside = files.iter().all(|f| paths::is_strictly_inside(f, &doc_dir));
+        let inside = files.iter().all(|f| paths::is_strictly_inside(f, doc_dir));
         let files: Vec<PathBuf> = files.into_iter().filter(|f| f.exists()).collect();
         if !inside || (!files.is_empty() && remove(&files).is_err()) {
             failed.push(name);
@@ -493,9 +499,8 @@ mod tests {
         let d = f.add_dir_node(root, "D");
         let q = f.add_page_node(d, "Q");
         let plain = f.add_child(root, "plain");
-        assert_eq!(delete_targets(&f.map, &[p, plain]).unwrap_err(), "not a page or directory: plain");
-        let targets = delete_targets(&f.map, &[q, p, d]).unwrap();
-        assert_eq!(targets, vec![(p, DocType::Page), (d, DocType::Directory)]);
+        let targets = delete_targets(&f.map, &[q, p, d, root]);
+        assert_eq!(targets, vec![(p, Some(DocType::Page)), (d, Some(DocType::Directory))]);
         assert_eq!(delete_question(&f.map, &targets), "Are you sure to delete the following?\n\"P\"\ndirectory \"D\"");
         let mut removed = Vec::new();
         delete_execute(&mut f.map, &targets, &mut |files| {
@@ -512,6 +517,39 @@ mod tests {
     }
 
     #[test]
+    fn delete_plain_nodes() {
+        let mut f = Fixture::new();
+        let root = f.map.root();
+        f.write_page("P", "");
+        let p = f.add_page_node(root, "P");
+        let plain = f.add_child(root, "plain");
+        let below = f.add_child(plain, "below");
+        let targets = delete_targets(&f.map, &[plain, below, p]);
+        assert_eq!(targets, vec![(p, Some(DocType::Page)), (plain, None)]);
+        assert_eq!(delete_question(&f.map, &targets), "Are you sure to delete the following?\n\"P\"\nnode \"plain\"");
+        assert_eq!(delete_question(&f.map, &targets[1..]), "Are you sure to delete node \"plain\"?");
+        let mut removed = Vec::new();
+        delete_execute(&mut f.map, &targets, &mut |files| {
+            removed.push(files.to_vec());
+            remove_files(files)
+        })
+        .unwrap();
+        // Only the page has files.
+        assert_eq!(removed.len(), 1);
+        assert!(!f.map.exists(p) && !f.map.exists(plain) && !f.map.exists(below));
+        // Without a document directory every node is a plain one.
+        let mut g = Fixture::new();
+        let config = g.map.children(g.map.root())[0];
+        g.map.delete(config);
+        let n = g.add_child(g.map.root(), "n");
+        let targets = delete_targets(&g.map, &[n]);
+        assert_eq!(targets, vec![(n, None)]);
+        delete_execute(&mut g.map, &targets, &mut remove_files).unwrap();
+        assert!(!g.map.exists(n));
+        assert!(delete_targets(&g.map, &[g.map.root()]).is_empty());
+    }
+
+    #[test]
     fn a_failed_removal_keeps_the_node() {
         let mut f = Fixture::new();
         let root = f.map.root();
@@ -519,7 +557,7 @@ mod tests {
         std::fs::create_dir(f.doc_dir.join("D")).unwrap();
         let p = f.add_page_node(root, "P");
         let d = f.add_dir_node(root, "D");
-        let targets = delete_targets(&f.map, &[p, d]).unwrap();
+        let targets = delete_targets(&f.map, &[p, d]);
         let err = delete_execute(&mut f.map, &targets, &mut |_| Err("in use".into())).unwrap_err();
         assert_eq!(err, "failed to delete page: P\nfailed to delete directory: D");
         assert!(f.map.exists(p) && f.map.exists(d));
@@ -560,10 +598,9 @@ mod tests {
                 })
                 .collect();
             for n in nodes {
-                if let Ok(targets) = delete_targets(&f.map, &[n]) {
-                    let _ = delete_execute(&mut f.map, &targets, &mut remove_files);
-                }
-                let forced = [(n, DocType::Page), (n, DocType::Directory)];
+                let targets = delete_targets(&f.map, &[n]);
+                let _ = delete_execute(&mut f.map, &targets, &mut remove_files);
+                let forced = [(n, Some(DocType::Page)), (n, Some(DocType::Directory))];
                 let _ = delete_execute(&mut f.map, &forced, &mut remove_files);
             }
             for kept in [&doc_dir, &kept_page, &outside.join("keep.md"), &parent.join("outside.md"), &map_file] {

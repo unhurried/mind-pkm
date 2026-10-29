@@ -468,3 +468,41 @@ fn moving_a_node_among_its_siblings_scrolls_only_to_keep_it_in_view() {
     assert!(r.y + r.height > bottom);
     assert_eq!(app.scroll_offset, iced::Vector::new(0.0, r.y + r.height + 24.0 - 400.0));
 }
+
+#[test]
+fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
+    for key in [Named::Delete, Named::F11] {
+        let mut m = MindMap::new("root");
+        let root = m.root();
+        let (a, b, c) = (m.add_child(root, "a"), m.add_child(root, "b"), m.add_child(root, "c"));
+        let mut app = app_with(m);
+        app.doc.as_mut().unwrap().select(vec![b]);
+        press(&mut app, key);
+        // Asked, nothing deleted yet; No (Cancel) keeps the node.
+        assert!(
+            matches!(app.dialogs.front(), Some(Dialog::Confirm { text, .. }) if text == "Are you sure to delete node \"b\"?")
+        );
+        assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
+        send(&mut app, Message::DialogCancel);
+        assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
+        // Yes deletes it and selects the next sibling; Undo brings it back.
+        press(&mut app, key);
+        send(&mut app, Message::DialogOk);
+        assert_eq!(root_texts(&app), vec!["a", "c"]);
+        assert_eq!(app.doc.as_ref().unwrap().focus, c);
+        send(&mut app, Message::Command(Command::Undo));
+        assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
+        // Ctrl: no question.
+        app.doc.as_mut().unwrap().select(vec![a, b]);
+        press_ctrl(&mut app, key);
+        assert!(app.dialogs.is_empty());
+        assert_eq!(root_texts(&app), vec!["c"]);
+        assert_eq!(app.doc.as_ref().unwrap().focus, c);
+        // The root is never deleted, and nothing is asked for it.
+        app.doc.as_mut().unwrap().select(vec![root]);
+        press(&mut app, key);
+        press_ctrl(&mut app, key);
+        assert!(app.dialogs.is_empty());
+        assert_eq!(root_texts(&app), vec!["c"]);
+    }
+}
