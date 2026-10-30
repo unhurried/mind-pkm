@@ -25,6 +25,8 @@ mod view;
 mod viewport;
 
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 
 use crate::mindmap::NodeId;

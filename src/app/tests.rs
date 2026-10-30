@@ -4,13 +4,13 @@
 use super::command::Command;
 use super::dialog::Dialog;
 use super::file::{AfterUnsaved, FileAction};
+use super::test_support::{key_event, send};
 use super::{App, Message, settings};
 use crate::mindmap::MindMap;
 use crate::pkm::filter::Filter;
 use crate::pkm::next_steps;
 use crate::pkm::testutil::Fixture;
-use iced::keyboard::key::{NativeCode, Physical};
-use iced::keyboard::{self, Key, Location, Modifiers, key::Named};
+use iced::keyboard::{Key, Modifiers, key::Named};
 
 fn app_with(map: MindMap) -> App {
     let mut app = App::new();
@@ -18,23 +18,8 @@ fn app_with(map: MindMap) -> App {
     app
 }
 
-fn send(app: &mut App, message: Message) {
-    let _ = app.update(message);
-}
-
 fn press(app: &mut App, key: Named) {
-    send(
-        app,
-        Message::Key(keyboard::Event::KeyPressed {
-            key: Key::Named(key),
-            modified_key: Key::Named(key),
-            physical_key: Physical::Unidentified(NativeCode::Unidentified),
-            location: Location::Standard,
-            modifiers: Modifiers::empty(),
-            text: None,
-            repeat: false,
-        }),
-    );
+    send(app, Message::Key(key_event(Key::Named(key), Modifiers::empty())));
 }
 
 fn map(app: &App) -> &MindMap {
@@ -265,18 +250,7 @@ fn typing_in_the_search_box_reaches_the_map_only_through_function_keys() {
 }
 
 fn press_char(app: &mut App, c: &str, modifiers: Modifiers) {
-    send(
-        app,
-        Message::Key(keyboard::Event::KeyPressed {
-            key: Key::Character(c.into()),
-            modified_key: Key::Character(c.into()),
-            physical_key: Physical::Unidentified(NativeCode::Unidentified),
-            location: Location::Standard,
-            modifiers,
-            text: None,
-            repeat: false,
-        }),
-    );
+    send(app, Message::Key(key_event(Key::Character(c.into()), modifiers)));
 }
 
 #[test]
@@ -422,18 +396,7 @@ fn only_edits_call_for_the_periodic_refresh() {
 }
 
 fn press_ctrl(app: &mut App, key: Named) {
-    send(
-        app,
-        Message::Key(keyboard::Event::KeyPressed {
-            key: Key::Named(key),
-            modified_key: Key::Named(key),
-            physical_key: Physical::Unidentified(NativeCode::Unidentified),
-            location: Location::Standard,
-            modifiers: Modifiers::CTRL,
-            text: None,
-            repeat: false,
-        }),
-    );
+    send(app, Message::Key(key_event(Key::Named(key), Modifiers::CTRL)));
 }
 
 #[test]
