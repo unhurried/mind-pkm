@@ -1,6 +1,7 @@
 //! The find bar: finding and replacing in the page's source.
 
-use super::{Editor, EditorMsg, move_source, source_sel};
+use super::page::{content_sel, move_content};
+use super::{Editor, EditorMsg};
 use crate::markdown::edit::{self, Sel};
 use crate::markdown::find;
 use iced::Task;
@@ -76,7 +77,7 @@ impl Editor {
     /// The cursor and selection, in source mode those of the source editor.
     fn current_sel(&self) -> Sel {
         match &self.source {
-            Some(source) => source_sel(source, &source.text()),
+            Some(source) => content_sel(source, &source.text()),
             None => self.page.sel,
         }
     }
@@ -138,7 +139,7 @@ impl Editor {
         match &mut self.source {
             Some(source) => {
                 let text = source.text();
-                move_source(source, &text, sel);
+                move_content(source, &text, sel);
                 self.page.sel = sel;
             }
             None => self.page.place(sel),

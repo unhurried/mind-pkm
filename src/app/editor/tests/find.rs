@@ -75,7 +75,7 @@ fn finding_in_source_mode() {
     find(&mut app, id, FindMsg::Next);
     let source = app.editors[&id].source.as_ref().unwrap();
     assert_eq!(source.selection().as_deref(), Some("foo"));
-    assert_eq!(crate::app::editor::source_sel(source, &source.text()).range(), 7..10);
+    assert_eq!(crate::app::editor::page::content_sel(source, &source.text()).range(), 7..10);
     find(&mut app, id, FindMsg::Replacement("x".into()));
     find(&mut app, id, FindMsg::ReplaceAll);
     assert_eq!(page_text(&app, id), "# x\n\nx\n");

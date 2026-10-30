@@ -125,7 +125,7 @@ pub fn position_of(text: &str, offset: usize) -> Position {
 }
 
 /// The selection of a text editor's content, as offsets in its text.
-fn content_sel(content: &Content, text: &str) -> Sel {
+pub fn content_sel(content: &Content, text: &str) -> Sel {
     let c = content.cursor();
     let head = offset_of(text, c.position);
     let anchor = c.selection.map_or(head, |p| offset_of(text, p));

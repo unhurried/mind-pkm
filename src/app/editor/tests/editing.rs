@@ -290,7 +290,7 @@ fn source_mode_keeps_the_cursor_and_the_history() {
     press(&mut app, id, "/", Modifiers::CTRL);
     let source = app.editors[&id].source.as_ref().expect("source mode");
     assert_eq!(source.text(), "# one\n\ntwo\n");
-    assert_eq!(crate::app::editor::source_sel(source, &source.text()).head, 9);
+    assert_eq!(crate::app::editor::page::content_sel(source, &source.text()).head, 9);
     typing(&mut app, id, "x");
     assert_eq!(page_text(&app, id), "# one\n\ntwxo\n");
     assert_eq!(app.editors[&id].counts().0.words, 2, "the status bar counts the page");

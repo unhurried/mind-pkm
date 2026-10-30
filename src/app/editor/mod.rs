@@ -1,9 +1,11 @@
 //! The page editor: a window per open Markdown file, showing the page as a
-//! live preview - every block rendered, but the one with the cursor, which
-//! shows its source in a text editor.
+//! live preview - every block rendered, the one with the cursor edited in its
+//! rendered form (code-like blocks as source in a text editor).
 //!
-//! `page` holds the page and its editing state, `keys` the commands and key
-//! bindings, `highlight` the styling of the source, `view` the rendering.
+//! `page` holds the page and its editing state, `live_text` the widget
+//! editing rendered text, `keys` the commands and key bindings, `highlight`
+//! the styling of the source, `view` the rendering; `tables`, `find` and
+//! `assets` handle the table being edited, the find bar and the assets pane.
 
 mod assets;
 pub mod clipboard;
@@ -39,7 +41,7 @@ use iced::widget::{operation, scrollable};
 use iced::{Point, Size, Subscription, Task, window};
 pub use keys::{Bind, EditorCommand};
 pub use live_text::LiveMsg;
-use page::Page;
+use page::{Page, content_sel, move_content};
 pub use render::{RenderCache, RenderKey};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -655,7 +657,7 @@ impl Editor {
             source.perform(action);
             if is_edit {
                 let text = source.text();
-                let sel = source_sel(source, &text);
+                let sel = content_sel(source, &text);
                 self.page.set_source_text(text, sel);
             }
             return Task::none();
@@ -1344,7 +1346,7 @@ impl Editor {
         } else if let Some(source) = &mut self.source {
             source.perform(Action::Edit(Edit::Delete));
             let text = source.text();
-            let sel = source_sel(source, &text);
+            let sel = content_sel(source, &text);
             self.page.set_source_text(text, sel);
         } else if self.page.active.as_ref().and_then(|a| a.table.as_ref()).is_some_and(|t| t.range.is_some()) {
             self.clear_cells();
@@ -1444,7 +1446,7 @@ impl Editor {
         if let Some(source) = &mut self.source {
             source.perform(Action::Edit(Edit::Paste(Arc::new(text.to_string()))));
             let t = source.text();
-            let sel = source_sel(source, &t);
+            let sel = content_sel(source, &t);
             self.page.set_source_text(t, sel);
             return;
         }
@@ -1482,7 +1484,7 @@ impl Editor {
         match self.source.take() {
             Some(content) => {
                 let text = content.text();
-                let sel = source_sel(&content, &text);
+                let sel = content_sel(&content, &text);
                 self.page.active = None;
                 self.page.pending = None;
                 self.page.place(sel);
@@ -1492,7 +1494,7 @@ impl Editor {
                 self.page.deactivate();
                 self.page.blocks = None;
                 let mut content = Content::with_text(&self.page.text);
-                move_source(&mut content, &self.page.text, sel);
+                move_content(&mut content, &self.page.text, sel);
                 self.page.sel = sel;
                 self.source = Some(content);
             }
@@ -1504,7 +1506,7 @@ impl Editor {
     fn refresh_source(&mut self) {
         if let Some(source) = &mut self.source {
             *source = Content::with_text(&self.page.text);
-            move_source(source, &self.page.text, self.page.sel);
+            move_content(source, &self.page.text, self.page.sel);
             self.page.active = None;
             self.page.pending = None;
         }
@@ -1514,7 +1516,7 @@ impl Editor {
         if let Some(source) = &self.source {
             let text = source.text();
             if text != self.page.text {
-                let sel = source_sel(source, &text);
+                let sel = content_sel(source, &text);
                 self.page.set_source_text(text, sel);
             }
         }
@@ -1536,7 +1538,7 @@ impl Editor {
             Bind::ShiftRight => Action::Select(Motion::Right),
             Bind::Type(c) => {
                 let text = source.text();
-                let sel = source_sel(source, &text);
+                let sel = content_sel(source, &text);
                 if let Some(e) = prefs.auto_pair.then(|| format::auto_pair(&text, sel, c, false)).flatten() {
                     self.page.set_source_text(e.text, e.sel);
                     self.refresh_source();
@@ -1548,7 +1550,7 @@ impl Editor {
         self.on_action(action)
     }
 
-    // --- Table keys (filled in by the table editing) ---
+    // --- Rendered editing ---
 
     /// A message of the widget editing the active block in its rendered form.
     fn live_message(&mut self, msg: LiveMsg) -> Task<EditorMsg> {
@@ -1580,6 +1582,8 @@ impl Editor {
     fn scroll_to_block(&self, block: usize) -> Task<EditorMsg> {
         scroll::to_top(self.id(&format!("block-{block}")), self.id("doc"))
     }
+
+    // --- Status bar ---
 
     /// Words and characters for the status bar.
     pub fn counts(&self) -> (count::Counts, Option<count::Counts>) {
@@ -1626,18 +1630,6 @@ fn grid_markdown(grid: &[Vec<String>]) -> String {
     t.to_markdown()
 }
 
-/// The selection of the source mode's text editor, as page offsets.
-fn source_sel(content: &Content, text: &str) -> Sel {
-    let c = content.cursor();
-    let head = page::offset_of(text, c.position);
-    let anchor = c.selection.map_or(head, |p| page::offset_of(text, p));
-    Sel { anchor, head }
-}
-
-fn move_source(content: &mut Content, text: &str, sel: Sel) {
-    page::move_content(content, text, sel);
-}
-
 impl Page {
     /// Takes the source mode's text as the page's.
     pub fn set_source_text(&mut self, text: String, sel: Sel) {
@@ -1679,9 +1671,9 @@ pub fn opens_in_editor(path: &Path, builtin: bool) -> bool {
     builtin && !path.is_dir() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
 }
 
-/// The subscription of the editor windows: nothing of their own yet.
+/// The subscription of the editor windows: while cells, blocks or an item of
+/// the assets pane are dragged, the release of the button, wherever it is.
 pub fn subscription(editors: &BTreeMap<window::Id, Editor>) -> Subscription<Message> {
-    // Dragging over cells or blocks ends where the button is released, wherever that is.
     if editors.values().any(|e| e.cell_drag || e.block_drag.is_some() || e.asset_pressed()) {
         iced::event::listen_with(|event, _status, window| match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
@@ -1862,7 +1854,6 @@ impl App {
         }
     }
 
-    /// The editors of files at or under `path` (a page, or a renamed directory).
     /// The page file or directory of a page or directory node.
     pub(super) fn doc_path_of(&self, id: crate::mindmap::NodeId) -> Option<PathBuf> {
         let map = &self.doc.as_ref()?.map;
@@ -1923,6 +1914,7 @@ impl App {
         Task::batch(gone.into_iter().map(|id| self.close_editor(id)))
     }
 
+    /// The editors of files at or under `path` (a page, or a renamed directory).
     pub(super) fn editors_of(&self, path: &Path) -> Vec<window::Id> {
         let key = crate::paths::key(path);
         self.editors
