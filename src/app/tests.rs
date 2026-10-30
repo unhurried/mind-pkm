@@ -102,6 +102,27 @@ fn a_new_page_that_fails_changes_nothing() {
 }
 
 #[test]
+fn a_new_page_that_already_exists_links_the_node_as_a_change_to_undo() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    f.write_page("Existing", "# Existing\n");
+    f.add_child(root, "Existing");
+    let mut app = app_with(f.map.clone());
+    let node = map(&app).find_child_by_text(root, "Existing").unwrap();
+    let before = map(&app).to_xml();
+    assert_eq!(map(&app).link_file(node), None);
+    app.doc.as_mut().unwrap().select(vec![node]);
+    send(&mut app, MapMsg::Command(Command::NewPage));
+    // Linked, and the user is told so ...
+    assert!(map(&app).link_file(node).is_some());
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Message(m)) if m == "page file already exists."));
+    // ... as a change: the map is unsaved, and Undo takes the link back.
+    assert!(app.doc.as_ref().unwrap().dirty());
+    send(&mut app, MapMsg::Command(Command::Undo));
+    assert_eq!(map(&app).to_xml(), before);
+}
+
+#[test]
 fn undo_selects_what_was_selected_before_the_change() {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);

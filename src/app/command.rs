@@ -322,8 +322,9 @@ impl App {
                     })
                     .collect()
             };
-        // An undo step only when something was created.
-        let results = doc.change_recorded_if(create, |_, _, results| results.iter().any(Result::is_ok));
+        // An undo step only when the map changed: also by a page that exists
+        // already, which is only linked (and reported).
+        let results = doc.change_recorded_if(create, |before, after, _| before.to_xml() != after.to_xml());
         let mut tasks = Vec::new();
         for result in results {
             if let Some(path) = self.report(result) {
