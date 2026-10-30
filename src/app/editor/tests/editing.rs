@@ -441,3 +441,18 @@ fn down_below_code_ending_a_list_item_adds_a_paragraph_in_it() {
     editor(&mut app, id, EditorMsg::Bind(Bind::Down));
     assert_eq!(app.editors[&id].page.region_text(), Some("  more"));
 }
+
+#[test]
+fn a_press_is_held_for_the_editor_that_takes_the_block_s_place() {
+    let (mut app, _f, _, _) = app_with_page("one\n\n```\ncode\n```\n");
+    let id = open_with_f1(&mut app);
+    let pad = iced::Padding::ZERO;
+    assert!(app.editors[&id].held(pad).is_none());
+    // Pressing the rendered code block, the point where it went down is held until the release.
+    editor(&mut app, id, EditorMsg::BlockPressed(1));
+    editor(&mut app, id, EditorMsg::PressPoint(iced::Point::new(30.0, 40.0)));
+    let held = app.editors[&id].held(pad).expect("a held press");
+    assert_eq!((held.from.x, held.from.y), (30.0, 40.0));
+    editor(&mut app, id, EditorMsg::Released);
+    assert!(app.editors[&id].held(pad).is_none());
+}

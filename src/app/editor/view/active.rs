@@ -12,6 +12,7 @@ use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext, EditorCommand};
 use crate::app::editor::live_text::{LiveText, Run, RunKind, TextLook};
 use crate::app::editor::page::{Active, Live, Mode, TableState};
+use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::render::{RenderKey, Rendered};
 use crate::app::editor::{Editor, EditorMsg, EditorPrefs, TableMsg};
 use crate::app::ime::ime_aligned;
@@ -25,7 +26,7 @@ use iced::widget::text_editor::Content;
 use iced::widget::{
     Column, Row, button, column, container, image, mouse_area, row, rule, space, svg, text, text_editor, text_input,
 };
-use iced::{Alignment, Background, Color, Element, Fill, Font, Theme, border};
+use iced::{Alignment, Background, Color, Element, Fill, Font, Padding, Theme, border};
 
 /// The runs the editing widget draws for what a live region shows: styled
 /// like the rendered blocks, with the Markdown at the cursor dimmed.
@@ -214,6 +215,7 @@ impl Editor {
             .padding(padding)
             .wrapping(Wrapping::WordOrGlyph)
             .style(move |_, _| editor_style(p, background));
+        let editor = PressRelay::relaying(editor, self.held(Padding::from(padding)));
         // Math and diagrams show what they become below their source.
         let preview: Option<Element<EditorMsg>> = match &a.kind {
             BlockKind::Math => {
@@ -275,6 +277,7 @@ impl Editor {
             .padding(0)
             .wrapping(Wrapping::WordOrGlyph)
             .style(move |_, _| editor_style(p, Color::TRANSPARENT));
+        let editor = PressRelay::relaying(editor, self.held(Padding::ZERO));
         let language = text_input("language", &code.info)
             .on_input(EditorMsg::CodeLanguage)
             .size(ctx.size(0.75))

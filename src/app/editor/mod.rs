@@ -17,6 +17,7 @@ mod keys;
 mod live_text;
 mod modal;
 mod page;
+mod press_relay;
 mod render;
 mod scroll;
 mod tables;
@@ -115,6 +116,8 @@ pub enum EditorMsg {
     PointerOver(Arc<HitInfo>, Point),
     /// The pointer moved, in the window (where a menu opens, a dragged item is).
     PointerAt(Point),
+    /// The left button went down at this point of the page.
+    PressPoint(Point),
     /// A press on the piece of text the pointer is over.
     TextPressed,
     /// A press on a rendered block outside its text.
@@ -250,6 +253,8 @@ pub struct Editor {
     /// The block a press started in, while the button is held: dragging onto
     /// another block selects the blocks between.
     block_drag: Option<usize>,
+    /// Where the left button last went down on the page, in the page.
+    press_at: Option<Point>,
     /// The pointer in the window, while a table is edited or the assets pane
     /// is shown (where a menu opens, a dragged item is).
     pointer_at: Point,
@@ -284,6 +289,7 @@ impl Editor {
             find: None,
             table_ui: TableUi::default(),
             block_drag: None,
+            press_at: None,
             pointer_at: Point::ORIGIN,
         }
     }
@@ -322,12 +328,18 @@ impl Editor {
                     | EditorMsg::CellPressed(..)
                     | EditorMsg::TableCellPressed(..)
             );
+        let rendered_press = self.source.is_none()
+            && matches!(msg, EditorMsg::TextPressed | EditorMsg::BlockPressed(_) | EditorMsg::TableCellPressed(..));
         let before = self.cursor_state();
         let revision = self.page.revision();
         let shown = self.status.text().to_string();
         let task = self.handle(msg, prefs, effects);
         if press {
             self.block_drag = self.page.active_block().or(self.page.selected_blocks().map(|b| b.0));
+        }
+        // A press on a rendered table: dragging onto other cells selects them.
+        if rendered_press && self.page.active().is_some_and(|a| a.table().is_some()) {
+            self.table_ui.drag = true;
         }
         // An edit clears the message about what came before it.
         if self.page.revision() != revision && self.status.text() == shown {
@@ -447,6 +459,10 @@ impl Editor {
                 self.assets_pointer(p);
                 Task::none()
             }
+            EditorMsg::PressPoint(p) => {
+                self.press_at = Some(p);
+                Task::none()
+            }
             EditorMsg::TextPressed => self.text_pressed(),
             EditorMsg::BlockPressed(block) => self.block_pressed(block),
             EditorMsg::BlockEntered(block) if self.asset_dragging() => {
@@ -462,7 +478,7 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::Released => {
-                (self.table_ui.drag, self.block_drag) = (false, None);
+                (self.table_ui.drag, self.block_drag, self.press_at) = (false, None, None);
                 self.assets_released(prefs)
             }
             EditorMsg::CodeLanguage(language) => {
@@ -848,6 +864,12 @@ impl Editor {
     /// Whether the button is down from a press on the page.
     pub(super) fn pressed(&self) -> bool {
         self.block_drag.is_some()
+    }
+
+    /// The press the button is held from, for a text editor (with this
+    /// padding) that replaced the block pressed.
+    pub(super) fn held(&self, padding: iced::Padding) -> Option<press_relay::Held> {
+        self.press_at.filter(|_| self.pressed()).map(|from| press_relay::Held { from, padding })
     }
 
     fn block_pressed(&mut self, block: usize) -> Task<EditorMsg> {

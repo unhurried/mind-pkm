@@ -11,6 +11,7 @@ use crate::app::editor::assets::{DropTarget, content_end};
 use crate::app::editor::column::{self, Gap, Shown};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext};
+use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::{AssetsMsg, Editor, EditorMsg, EditorPrefs};
 use crate::app::ime::ime_aligned;
 use crate::app::view::APP_FONT;
@@ -147,7 +148,8 @@ impl Editor {
                     room = room.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(last)));
                 }
                 col = col.push(room);
-                col.into()
+                // Where a press lands, for the editor that takes the block's place.
+                PressRelay::tracking(col, EditorMsg::PressPoint).into()
             }
         };
         let padded = container(content).padding(PAGE_PADDING).center_x(Fill);
