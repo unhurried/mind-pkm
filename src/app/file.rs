@@ -4,7 +4,7 @@ use super::dialog::Dialog;
 use super::doc::Doc;
 use super::search_panel::SearchPanel;
 use super::settings::{self, MapView};
-use super::{App, Message};
+use super::{App, MapMsg, Message};
 use crate::mindmap::MindMap;
 use crate::pkm;
 use iced::{Task, Vector};
@@ -140,7 +140,7 @@ impl App {
                 };
                 handle.map(|h| h.path().to_path_buf())
             },
-            move |path| Message::FileChosen(action, path),
+            move |path| MapMsg::FileChosen(action, path).into(),
         )
     }
 

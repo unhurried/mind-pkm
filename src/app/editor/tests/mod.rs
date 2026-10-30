@@ -11,7 +11,7 @@ use super::{
 use crate::app::command::Command;
 use crate::app::dialog::Dialog;
 use crate::app::test_support::{key_event, send, typing_event};
-use crate::app::{AfterUnsaved, App, Message};
+use crate::app::{AfterUnsaved, App, MapMsg, Message, WindowEvent};
 use crate::mindmap::NodeId;
 use crate::pkm::testutil::Fixture;
 use iced::keyboard::key::{NativeCode, Physical};
@@ -43,7 +43,7 @@ fn app_with_page(text: &str) -> (App, Fixture, NodeId, PathBuf) {
 
 /// Opens the selected page with F1; its window's id.
 fn open_with_f1(app: &mut App) -> window::Id {
-    send(app, Message::Key(key_event(Key::Named(Named::F1), Modifiers::empty())));
+    send(app, MapMsg::Key(key_event(Key::Named(Named::F1), Modifiers::empty())));
     *app.editors.keys().last().expect("an editor window")
 }
 
@@ -68,7 +68,7 @@ fn click_after(app: &mut App, id: window::Id, after: &str) {
 }
 
 fn press(app: &mut App, id: window::Id, key: &str, modifiers: Modifiers) {
-    send(app, Message::KeyIn(id, key_event(Key::Character(key.into()), modifiers)));
+    send(app, Message::Window(id, WindowEvent::Key(key_event(Key::Character(key.into()), modifiers))));
 }
 
 /// Selects `what` in the page (activating its block).

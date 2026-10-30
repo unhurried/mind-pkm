@@ -5,8 +5,8 @@ use iced::keyboard::key::{NativeCode, Physical};
 use iced::keyboard::{self, Key, Location, Modifiers};
 
 /// Handles `message` as the running application would (the task is dropped).
-pub fn send(app: &mut App, message: Message) {
-    let _ = app.update(message);
+pub fn send(app: &mut App, message: impl Into<Message>) {
+    let _ = app.update(message.into());
 }
 
 /// A key pressed with `modifiers`, as a window reports it (typing no text).

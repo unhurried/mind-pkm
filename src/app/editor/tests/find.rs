@@ -23,14 +23,14 @@ fn finding_the_next_and_previous_match() {
     assert_eq!(bar.matches, vec![0..3, 11..14, 21..24]);
     assert_eq!(app.editors[&id].find_status(), "1 of 3");
     // F3 / Enter: the next match, selected in its block.
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F3), Modifiers::empty())));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::F3), Modifiers::empty()))));
     assert_eq!(selected(&app, id), 11..14);
     assert_eq!(app.editors[&id].page.selected_source(), "foo");
     find(&mut app, id, FindMsg::Next);
     assert_eq!(selected(&app, id), 21..24);
     find(&mut app, id, FindMsg::Next);
     assert_eq!(selected(&app, id), 0..3, "wraps around");
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F3), Modifiers::SHIFT)));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::F3), Modifiers::SHIFT))));
     assert_eq!(selected(&app, id), 21..24);
     // Match case.
     find(&mut app, id, FindMsg::MatchCase(true));

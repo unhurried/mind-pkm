@@ -17,7 +17,7 @@ impl App {
             keyboard::Event::KeyPressed { key, modifiers, .. } => (key, modifiers),
             _ => return Task::none(),
         };
-        // Handled by Message::Escape.
+        // Handled by MapMsg::Escape.
         if key == Key::Named(Named::Escape) {
             return Task::none();
         }

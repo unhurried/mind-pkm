@@ -17,7 +17,7 @@ fn rows(app: &App, id: window::Id) -> Vec<Vec<String>> {
 }
 
 fn named(app: &mut App, id: window::Id, key: Named, modifiers: Modifiers) {
-    send(app, Message::KeyIn(id, key_event(Key::Named(key), modifiers)));
+    send(app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(key), modifiers))));
 }
 
 fn strings(rows: &[&[&str]]) -> Vec<Vec<String>> {

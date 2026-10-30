@@ -10,9 +10,9 @@ fn renaming_an_open_page_saves_it_and_the_editor_follows() {
     click_after(&mut app, id, "old");
     typing(&mut app, id, " new");
     assert!(app.editors[&id].page.is_dirty());
-    send(&mut app, Message::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
-    send(&mut app, Message::DialogInput("Done".into()));
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
+    send(&mut app, MapMsg::DialogInput("Done".into()));
+    send(&mut app, MapMsg::DialogOk);
     let renamed = f.doc_dir.join("Done.md");
     assert!(!page.exists());
     assert_eq!(crate::markdown::page::read_page(&renamed).unwrap(), "[assets](Done.assets)\n\nold new\n");
@@ -24,9 +24,9 @@ fn renaming_an_open_page_saves_it_and_the_editor_follows() {
 }
 
 fn rename_with_f2(app: &mut App, name: &str) {
-    send(app, Message::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
-    send(app, Message::DialogInput(name.into()));
-    send(app, Message::DialogOk);
+    send(app, MapMsg::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
+    send(app, MapMsg::DialogInput(name.into()));
+    send(app, MapMsg::DialogOk);
 }
 
 #[test]
@@ -34,21 +34,21 @@ fn undo_in_the_map_does_not_go_back_across_a_rename() {
     let (mut app, f, node, _) = app_with_page("[assets](Plan.assets)\n");
     std::fs::create_dir(f.doc_dir.join("Plan.assets")).unwrap();
     // An edit before the rename: its undo step would bring back the old name too.
-    send(&mut app, Message::Command(Command::NewChild));
-    send(&mut app, Message::DialogInput("child".into()));
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::Command(Command::NewChild));
+    send(&mut app, MapMsg::DialogInput("child".into()));
+    send(&mut app, MapMsg::DialogOk);
     app.doc.as_mut().unwrap().select(vec![node]);
     rename_with_f2(&mut app, "Done");
     assert_eq!(app.doc.as_ref().unwrap().map().text(node), "Done");
 
-    send(&mut app, Message::Command(Command::Undo));
-    send(&mut app, Message::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Undo));
     let map = &app.doc.as_ref().unwrap().map();
     assert_eq!(map.text(node), "Done");
     assert!(crate::pkm::page_file(&f.doc_dir, &map.text(node)).exists());
     assert!(!f.doc_dir.join("Plan.md").exists());
     // Nothing to redo either.
-    send(&mut app, Message::Command(Command::Redo));
+    send(&mut app, MapMsg::Command(Command::Redo));
     assert_eq!(app.doc.as_ref().unwrap().map().text(node), "Done");
 }
 
@@ -104,9 +104,9 @@ fn pages_in_a_renamed_directory_follow_it() {
     let id = *app.editors.keys().last().unwrap();
     click_after(&mut app, id, "note");
     typing(&mut app, id, "!");
-    send(&mut app, Message::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
-    send(&mut app, Message::DialogInput("Areas".into()));
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
+    send(&mut app, MapMsg::DialogInput("Areas".into()));
+    send(&mut app, MapMsg::DialogOk);
     let moved = f.doc_dir.join("Areas").join("Note.md");
     assert_eq!(app.editors[&id].page.path(), moved);
     assert_eq!(crate::markdown::page::read_page(&moved).unwrap(), "note!\n");
@@ -118,7 +118,7 @@ fn add_assets_saves_the_open_page_and_reloads_it() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "x");
     typing(&mut app, id, "y");
-    send(&mut app, Message::Command(Command::AddAssets));
+    send(&mut app, MapMsg::Command(Command::AddAssets));
     assert!(f.doc_dir.join("Plan.assets").is_dir());
     assert_eq!(crate::markdown::page::read_page(&page).unwrap(), "[assets](Plan.assets)\n\nxy\n");
     assert_eq!(page_text(&app, id), "[assets](Plan.assets)\n\nxy\n");

@@ -5,7 +5,7 @@ use super::command::Command;
 use super::dialog::Dialog;
 use super::file::{AfterUnsaved, FileAction};
 use super::test_support::{key_event, send};
-use super::{App, Message, settings};
+use super::{App, MapMsg, settings};
 use crate::mindmap::MindMap;
 use crate::pkm::filter::Filter;
 use crate::pkm::next_steps;
@@ -19,7 +19,7 @@ fn app_with(map: MindMap) -> App {
 }
 
 fn press(app: &mut App, key: Named) {
-    send(app, Message::Key(key_event(Key::Named(key), Modifiers::empty())));
+    send(app, MapMsg::Key(key_event(Key::Named(key), Modifiers::empty())));
 }
 
 fn map(app: &App) -> &MindMap {
@@ -35,12 +35,12 @@ fn a_new_node_asks_for_its_text_and_undo_removes_it() {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
     assert!(matches!(app.dialogs.front(), Some(Dialog::Input { .. })));
-    send(&mut app, Message::DialogInput("child".into()));
+    send(&mut app, MapMsg::DialogInput("child".into()));
     press(&mut app, Named::Enter);
     assert!(app.dialogs.is_empty());
     assert_eq!(root_texts(&app), vec!["child"]);
     assert!(app.doc.as_ref().unwrap().dirty());
-    send(&mut app, Message::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Undo));
     assert!(root_texts(&app).is_empty());
 }
 
@@ -49,7 +49,7 @@ fn cancelling_a_new_node_leaves_the_map_as_it_was() {
     let mut app = app_with(MindMap::new("root"));
     let before = map(&app).to_xml();
     press(&mut app, Named::Tab);
-    send(&mut app, Message::Escape);
+    send(&mut app, MapMsg::Escape);
     assert!(app.dialogs.is_empty());
     assert_eq!(map(&app).to_xml(), before);
     // Still saved, and no refresh is called for.
@@ -57,7 +57,7 @@ fn cancelling_a_new_node_leaves_the_map_as_it_was() {
     assert!(!doc.dirty() && !doc.edited_since_refresh());
     // Leaving the text empty removes it too.
     press(&mut app, Named::Enter);
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::DialogOk);
     assert_eq!(map(&app).to_xml(), before);
 }
 
@@ -71,12 +71,12 @@ fn a_refresh_landing_while_a_new_node_is_named_is_kept() {
     let mut app = app_with(f.map.clone());
     press(&mut app, Named::Tab);
     let generation = app.doc.as_ref().unwrap().generation();
-    send(&mut app, Message::NextStepsComputed(generation, Box::new(update)));
-    send(&mut app, Message::Escape);
+    send(&mut app, MapMsg::NextStepsComputed(generation, Box::new(update)));
+    send(&mut app, MapMsg::Escape);
     assert_eq!(map(&app).child_texts(page), vec!["One"]);
     assert_eq!(root_texts(&app), vec!["config", "ToDo", "Task"]);
     // The refresh is no undo step, and no undo step brings the new node back.
-    send(&mut app, Message::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Undo));
     assert_eq!(map(&app).child_texts(page), vec!["One"]);
     assert_eq!(root_texts(&app), vec!["config", "ToDo", "Task"]);
 }
@@ -90,13 +90,13 @@ fn a_new_page_that_fails_changes_nothing() {
     let bad = map(&app).find_child_by_text(root, "bad/name").unwrap();
     app.doc.as_mut().unwrap().select(vec![bad]);
     for command in [Command::NewPage, Command::NewDirectory] {
-        send(&mut app, Message::Command(command));
+        send(&mut app, MapMsg::Command(command));
     }
     let doc = app.doc.as_ref().unwrap();
     assert!(!doc.dirty() && !doc.edited_since_refresh());
     // No empty undo step either: Undo has nothing to take back.
     let before = map(&app).to_xml();
-    send(&mut app, Message::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Undo));
     assert_eq!(map(&app).to_xml(), before);
     assert!(!app.doc.as_ref().unwrap().dirty());
 }
@@ -105,13 +105,13 @@ fn a_new_page_that_fails_changes_nothing() {
 fn undo_selects_what_was_selected_before_the_change() {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
-    send(&mut app, Message::DialogInput("a".into()));
+    send(&mut app, MapMsg::DialogInput("a".into()));
     press(&mut app, Named::Enter);
     let a = app.doc.as_ref().unwrap().focus();
     press(&mut app, Named::Tab);
-    send(&mut app, Message::DialogInput("b".into()));
+    send(&mut app, MapMsg::DialogInput("b".into()));
     press(&mut app, Named::Enter);
-    send(&mut app, Message::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Undo));
     assert_eq!(app.doc.as_ref().unwrap().focus(), a);
 }
 
@@ -129,7 +129,7 @@ fn a_refresh_keeps_matching_children_and_the_selection() {
     f.write_page("Task", "### Next Steps\n* step A\n* step B\n* step C\n");
     let update = next_steps::compute(&next_steps::snapshot(map(&app), &f.doc_dir), chrono::Local::now().date_naive());
     let generation = app.doc.as_ref().unwrap().generation();
-    send(&mut app, Message::NextStepsComputed(generation, Box::new(update)));
+    send(&mut app, MapMsg::NextStepsComputed(generation, Box::new(update)));
     assert_eq!(map(&app).child_texts(page), vec!["step A", "step B", "step C"]);
     assert_eq!(map(&app).children(page)[0], a);
     assert!(map(&app).has_icon(a, "button_ok"));
@@ -146,7 +146,7 @@ fn a_node_added_under_a_page_node_is_warned_about() {
     app.doc.as_mut().unwrap().select(vec![page]);
     press(&mut app, Named::Tab);
     assert_eq!(app.status.text(), super::command::UNDER_PAGE_WARNING);
-    send(&mut app, Message::Escape);
+    send(&mut app, MapMsg::Escape);
     // Not under a page node: no warning.
     app.status.clear();
     app.doc.as_mut().unwrap().select(vec![root]);
@@ -157,25 +157,25 @@ fn a_node_added_under_a_page_node_is_warned_about() {
 fn edited_app() -> App {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
-    send(&mut app, Message::DialogInput("x".into()));
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::DialogInput("x".into()));
+    send(&mut app, MapMsg::DialogOk);
     app
 }
 
 #[test]
 fn closing_with_unsaved_changes_asks_and_cancel_keeps_them() {
     let mut app = edited_app();
-    send(&mut app, Message::CloseRequested);
+    send(&mut app, MapMsg::CloseRequested);
     assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
     // Enter doesn't answer this question; Cancel and Esc keep the map.
     press(&mut app, Named::Enter);
     assert_eq!(app.dialogs.len(), 1);
-    send(&mut app, Message::DialogCancel);
+    send(&mut app, MapMsg::DialogCancel);
     assert!(app.dialogs.is_empty());
     assert_eq!(root_texts(&app), vec!["x"]);
     assert!(app.doc.as_ref().unwrap().dirty());
-    send(&mut app, Message::CloseRequested);
-    send(&mut app, Message::Escape);
+    send(&mut app, MapMsg::CloseRequested);
+    send(&mut app, MapMsg::Escape);
     assert!(app.dialogs.is_empty());
     assert_eq!(root_texts(&app), vec!["x"]);
 }
@@ -183,9 +183,9 @@ fn closing_with_unsaved_changes_asks_and_cancel_keeps_them() {
 #[test]
 fn new_map_with_unsaved_changes_can_discard_them() {
     let mut app = edited_app();
-    send(&mut app, Message::Command(Command::New));
+    send(&mut app, MapMsg::Command(Command::New));
     assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::New))));
-    send(&mut app, Message::DialogDiscard);
+    send(&mut app, MapMsg::DialogDiscard);
     let doc = app.doc.as_ref().unwrap();
     assert!(!doc.dirty() && doc.map().path().is_none());
     assert_eq!(doc.map().text(doc.map().root()), "Map");
@@ -195,13 +195,13 @@ fn new_map_with_unsaved_changes_can_discard_them() {
 #[test]
 fn saving_a_new_map_from_the_unsaved_changes_question_goes_on_once_saved() {
     let mut app = edited_app();
-    send(&mut app, Message::Command(Command::New));
+    send(&mut app, MapMsg::Command(Command::New));
     // The map has no file yet: Save asks for one first.
-    send(&mut app, Message::DialogSave);
+    send(&mut app, MapMsg::DialogSave);
     assert!(app.dialogs.is_empty());
     assert_eq!(root_texts(&app), vec!["x"]);
     let dir = tempfile::tempdir().unwrap();
-    send(&mut app, Message::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::New)), Some(dir.path().join("saved"))));
+    send(&mut app, MapMsg::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::New)), Some(dir.path().join("saved"))));
     let saved = MindMap::load(&dir.path().join("saved.mm")).unwrap();
     assert_eq!(saved.child_texts(saved.root()), vec!["x"]);
     // Then the new map.
@@ -212,9 +212,9 @@ fn saving_a_new_map_from_the_unsaved_changes_question_goes_on_once_saved() {
 #[test]
 fn cancelling_save_as_from_the_unsaved_changes_question_keeps_the_changes() {
     let mut app = edited_app();
-    send(&mut app, Message::CloseRequested);
-    send(&mut app, Message::DialogSave);
-    send(&mut app, Message::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::Exit)), None));
+    send(&mut app, MapMsg::CloseRequested);
+    send(&mut app, MapMsg::DialogSave);
+    send(&mut app, MapMsg::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::Exit)), None));
     assert!(app.doc.as_ref().unwrap().dirty());
     assert_eq!(root_texts(&app), vec!["x"]);
 }
@@ -224,11 +224,11 @@ fn the_filter_dialog_sets_the_filter_and_cancel_keeps_it() {
     let mut app = app_with(MindMap::new("root"));
     assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::HideArchive);
     press(&mut app, Named::F5);
-    send(&mut app, Message::DialogInput("t".into()));
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::DialogInput("t".into()));
+    send(&mut app, MapMsg::DialogOk);
     assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::ToDo);
     press(&mut app, Named::F5);
-    send(&mut app, Message::Escape);
+    send(&mut app, MapMsg::Escape);
     assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::ToDo);
     assert!(app.dialogs.is_empty());
 }
@@ -250,15 +250,15 @@ fn typing_in_the_search_box_reaches_the_map_only_through_function_keys() {
 }
 
 fn press_char(app: &mut App, c: &str, modifiers: Modifiers) {
-    send(app, Message::Key(key_event(Key::Character(c.into()), modifiers)));
+    send(app, MapMsg::Key(key_event(Key::Character(c.into()), modifiers)));
 }
 
 #[test]
 fn ctrl_shift_f_asks_for_a_filter_like_f5() {
     let mut app = app_with(MindMap::new("root"));
     press_char(&mut app, "f", Modifiers::CTRL | Modifiers::SHIFT);
-    send(&mut app, Message::DialogInput("t".into()));
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::DialogInput("t".into()));
+    send(&mut app, MapMsg::DialogOk);
     assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::ToDo);
 }
 
@@ -282,10 +282,10 @@ fn folding_by_click_is_one_undo_step() {
     let a = m.add_child(root, "a");
     m.add_child(a, "a1");
     let mut app = app_with(m);
-    send(&mut app, Message::FoldClicked(a));
+    send(&mut app, MapMsg::FoldClicked(a));
     assert!(map(&app).is_folded(a));
     assert!(!app.doc.as_ref().unwrap().layout().contains(map(&app).children(a)[0]));
-    send(&mut app, Message::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Undo));
     assert!(!map(&app).is_folded(a));
 }
 
@@ -320,8 +320,8 @@ fn a_map_opens_as_it_was_last_shown() {
     let b = f.add_child(a, "b");
     let c = f.add_child(root, "c");
     let mut app = app_with(f.map.clone());
-    send(&mut app, Message::Command(Command::ZoomIn));
-    send(&mut app, Message::Command(Command::ZoomIn));
+    send(&mut app, MapMsg::Command(Command::ZoomIn));
+    send(&mut app, MapMsg::Command(Command::ZoomIn));
     app.doc.as_mut().unwrap().select(vec![c, b]);
     app.scroll_offset = iced::Vector::new(30.0, 40.0);
     let (path, view) = app.current_view().unwrap();
@@ -359,9 +359,9 @@ fn an_untitled_map_has_no_view_to_remember() {
 fn the_window_is_restored_as_it_was_before_maximizing_or_minimizing() {
     use iced::{Point, Size};
     let mut app = app_with(MindMap::new("root"));
-    send(&mut app, Message::WindowResized(Size::new(900.0, 600.0)));
-    send(&mut app, Message::WindowMoved(Point::new(50.0, 60.0)));
-    send(&mut app, Message::WindowState { maximized: false, minimized: false });
+    send(&mut app, MapMsg::WindowResized(Size::new(900.0, 600.0)));
+    send(&mut app, MapMsg::WindowMoved(Point::new(50.0, 60.0)));
+    send(&mut app, MapMsg::WindowState { maximized: false, minimized: false });
     let normal = app.window;
     assert_eq!(
         (normal.size, normal.position, normal.maximized),
@@ -369,15 +369,15 @@ fn the_window_is_restored_as_it_was_before_maximizing_or_minimizing() {
     );
 
     // Maximized: only that is noted.
-    send(&mut app, Message::WindowResized(Size::new(1920.0, 1040.0)));
-    send(&mut app, Message::WindowMoved(Point::new(-8.0, -8.0)));
-    send(&mut app, Message::WindowState { maximized: true, minimized: false });
+    send(&mut app, MapMsg::WindowResized(Size::new(1920.0, 1040.0)));
+    send(&mut app, MapMsg::WindowMoved(Point::new(-8.0, -8.0)));
+    send(&mut app, MapMsg::WindowState { maximized: true, minimized: false });
     assert_eq!(app.window, settings::WindowGeometry { maximized: true, ..normal });
 
     // Minimized: nothing changes.
-    send(&mut app, Message::WindowResized(Size::new(0.0, 0.0)));
-    send(&mut app, Message::WindowMoved(Point::new(-32000.0, -32000.0)));
-    send(&mut app, Message::WindowState { maximized: false, minimized: true });
+    send(&mut app, MapMsg::WindowResized(Size::new(0.0, 0.0)));
+    send(&mut app, MapMsg::WindowMoved(Point::new(-32000.0, -32000.0)));
+    send(&mut app, MapMsg::WindowState { maximized: false, minimized: true });
     assert_eq!(app.window, settings::WindowGeometry { maximized: true, ..normal });
 }
 
@@ -385,18 +385,18 @@ fn the_window_is_restored_as_it_was_before_maximizing_or_minimizing() {
 fn only_edits_call_for_the_periodic_refresh() {
     let mut app = app_with(MindMap::new("root"));
     let edited = |app: &App| app.doc.as_ref().unwrap().edited_since_refresh();
-    send(&mut app, Message::Command(Command::ZoomIn));
+    send(&mut app, MapMsg::Command(Command::ZoomIn));
     press(&mut app, Named::F5);
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::DialogOk);
     press(&mut app, Named::F2);
-    send(&mut app, Message::DialogCancel);
+    send(&mut app, MapMsg::DialogCancel);
     assert!(!edited(&app));
     press(&mut app, Named::F7);
     assert!(edited(&app));
 }
 
 fn press_ctrl(app: &mut App, key: Named) {
-    send(app, Message::Key(key_event(Key::Named(key), Modifiers::CTRL)));
+    send(app, MapMsg::Key(key_event(Key::Named(key), Modifiers::CTRL)));
 }
 
 #[test]
@@ -446,14 +446,14 @@ fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
             matches!(app.dialogs.front(), Some(Dialog::Confirm { text, .. }) if text == "Are you sure to delete node \"b\"?")
         );
         assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
-        send(&mut app, Message::DialogCancel);
+        send(&mut app, MapMsg::DialogCancel);
         assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
         // Yes deletes it and selects the next sibling; Undo brings it back.
         press(&mut app, key);
-        send(&mut app, Message::DialogOk);
+        send(&mut app, MapMsg::DialogOk);
         assert_eq!(root_texts(&app), vec!["a", "c"]);
         assert_eq!(app.doc.as_ref().unwrap().focus(), c);
-        send(&mut app, Message::Command(Command::Undo));
+        send(&mut app, MapMsg::Command(Command::Undo));
         assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
         // Ctrl: no question.
         app.doc.as_mut().unwrap().select(vec![a, b]);

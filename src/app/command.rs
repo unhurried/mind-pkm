@@ -3,7 +3,7 @@
 use super::dialog::{ConfirmAction, InputAction};
 use super::file::{AfterUnsaved, FileAction};
 use super::ui::zoom_step;
-use super::{App, Message, blocking, settings, viewport};
+use super::{App, MapMsg, Message, blocking, settings, viewport};
 use crate::mindmap::{MindMap, NodeId, Subtree};
 use crate::pkm::commands::{self, EditKind};
 use crate::pkm::filter::FILTER_HELP_MESSAGE;
@@ -124,7 +124,7 @@ impl App {
             }
             Command::Cut => self.cut_or_copy(true),
             Command::Copy => self.cut_or_copy(false),
-            Command::Paste => iced::clipboard::read().map(Message::ClipboardRead),
+            Command::Paste => iced::clipboard::read().map(|text| MapMsg::ClipboardRead(text).into()),
             Command::MoveUp | Command::MoveDown => {
                 doc.move_focus(cmd == Command::MoveUp);
                 self.keep_parent_in_place = true;
@@ -376,9 +376,9 @@ impl App {
         self.search.updating = true;
         Task::batch([
             Task::perform(blocking(move || next_steps::compute(&snapshot, today)), move |u| {
-                Message::NextStepsComputed(generation, Box::new(u))
+                MapMsg::NextStepsComputed(generation, Box::new(u)).into()
             }),
-            Task::perform(blocking(move || crate::search::update_index(&doc_dir)), Message::IndexUpdated),
+            Task::perform(blocking(move || crate::search::update_index(&doc_dir)), |r| MapMsg::IndexUpdated(r).into()),
         ])
     }
 

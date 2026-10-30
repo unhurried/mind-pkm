@@ -96,7 +96,7 @@ fn the_assets_pane_reads_the_folder_again() {
     let (mut app, f, id) = app_with_assets("x\n", &["a.png"]);
     assert!(!pane(&app, id).reading());
     // The window activated.
-    send(&mut app, Message::Focused(id));
+    send(&mut app, Message::Window(id, WindowEvent::Focused));
     assert!(pane(&app, id).reading());
     finish_read(&mut app, id);
     // Files inserted.
@@ -104,9 +104,9 @@ fn the_assets_pane_reads_the_folder_again() {
     assert!(pane(&app, id).reading());
     finish_read(&mut app, id);
     // The page renamed (F2): the pane shows the renamed folder.
-    send(&mut app, Message::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
-    send(&mut app, Message::DialogInput("Done".into()));
-    send(&mut app, Message::DialogOk);
+    send(&mut app, MapMsg::Key(key_event(Key::Named(Named::F2), Modifiers::empty())));
+    send(&mut app, MapMsg::DialogInput("Done".into()));
+    send(&mut app, MapMsg::DialogOk);
     assert!(pane(&app, id).reading());
     assert_eq!(app.editors[&id].assets_dir(), f.doc_dir.join("Done.assets"));
     finish_read(&mut app, id);

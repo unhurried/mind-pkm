@@ -2,7 +2,7 @@
 
 use super::search_panel::ROW_HEIGHT;
 use super::ui::zoom_step;
-use super::{App, MAP_SCROLL_ID, Message};
+use super::{App, MAP_SCROLL_ID, MapMsg, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
 use iced::widget::{operation, scrollable};
@@ -210,7 +210,7 @@ impl App {
 fn ask_window_state(id: window::Id) -> Task<Message> {
     window::is_maximized(id).then(move |maximized| {
         window::is_minimized(id)
-            .map(move |minimized| Message::WindowState { maximized, minimized: minimized.unwrap_or(false) })
+            .map(move |minimized| MapMsg::WindowState { maximized, minimized: minimized.unwrap_or(false) }.into())
     })
 }
 

@@ -7,7 +7,7 @@
 
 use super::doc::Doc;
 use super::layout::MapLayout;
-use super::{App, Message};
+use super::{App, MapMsg, Message};
 use crate::mindmap::{MindMap, NodeId};
 use iced::Point;
 
@@ -167,8 +167,10 @@ impl App {
 /// The messages that follow the pointer while a drag is armed.
 pub fn drag_events() -> iced::Subscription<Message> {
     iced::event::listen_with(|event, _status, _window| match event {
-        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => Some(Message::NodeDragEnd),
-        iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(Message::NodeDragCancel),
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(MapMsg::NodeDragEnd.into())
+        }
+        iced::Event::Mouse(iced::mouse::Event::CursorLeft) => Some(MapMsg::NodeDragCancel.into()),
         _ => None,
     })
 }

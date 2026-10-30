@@ -1,7 +1,7 @@
 //! The full-text search panel (F6), docked under the map. Closing it only
 //! hides it, so the next F6 shows the same query and results again.
 
-use super::{App, Message, blocking};
+use super::{App, MapMsg, Message, blocking};
 use crate::mindmap::NodeId;
 use crate::pkm::{self, filter::Filter};
 use crate::search::{self, SearchHit, SearchScope, SearchSort};
@@ -126,7 +126,7 @@ impl App {
                     search::analyzer::warm_up();
                     search::update_index(&doc_dir)
                 }),
-                Message::IndexUpdated,
+                |r| MapMsg::IndexUpdated(r).into(),
             ),
         ])
     }
@@ -151,7 +151,7 @@ impl App {
         let (query, sort, scope) = (self.search.query.clone(), self.search.sort, self.search.scope);
         Task::perform(
             blocking(move || search::search(&doc_dir, &query, sort, scope, search::DEFAULT_MAX_RESULTS)),
-            move |r| Message::Search(SearchMsg::Done(id, r)),
+            move |r| MapMsg::Search(SearchMsg::Done(id, r)).into(),
         )
     }
 

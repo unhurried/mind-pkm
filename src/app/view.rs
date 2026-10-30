@@ -7,7 +7,7 @@ use super::drag::DropPlace;
 use super::layout::{MapLayout, NodeBox};
 use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SCOPES, SEARCH_INPUT_ID, SORTS, SearchMsg};
 use super::ui::{self, DialogStyle, Menu, MenuStyle};
-use super::{App, DIALOG_INPUT_ID, MAP_SCROLL_ID, Message};
+use super::{App, DIALOG_INPUT_ID, MAP_SCROLL_ID, MapMsg, Message};
 use crate::mindmap::{ICON_CHECKMARK, MindMap, NodeId};
 use crate::pkm;
 use crate::search::{self, SearchHit, Snippet};
@@ -206,7 +206,13 @@ impl App {
         if window != self.main_window {
             return space().into();
         }
-        let body: Element<Message> = match &self.doc {
+        self.map_window().map(Message::Map)
+    }
+
+    /// The map window: the menu bar, the map (or a welcome), the search
+    /// panel, the status bar, an open menu and the dialog on top.
+    fn map_window(&self) -> Element<'_, MapMsg> {
+        let body: Element<MapMsg> = match &self.doc {
             None => self.welcome(),
             Some(doc) => {
                 let map = self.map_view(doc);
@@ -222,7 +228,7 @@ impl App {
             }
         };
         let main = column![self.menu_bar(), body, self.status_bar()];
-        let mut layers: Stack<Message> = stack![main].width(Fill).height(Fill);
+        let mut layers: Stack<MapMsg> = stack![main].width(Fill).height(Fill);
         if let Some(i) = self.menu {
             layers = layers.push(self.menu_dropdown(i));
         }
@@ -233,14 +239,14 @@ impl App {
         super::arrow_cursor::arrow_cursor(layers).into()
     }
 
-    fn welcome(&self) -> Element<'_, Message> {
+    fn welcome(&self) -> Element<'_, MapMsg> {
         center(
             column![
                 text("Mind PKM").size(28),
                 text("Open a Freeplane mind map (.mm), or start a new one.").color(MUTED),
                 row![
-                    button(text("Open...").size(12)).on_press(Message::Command(Command::Open)),
-                    button(text("New").size(12)).on_press(Message::Command(Command::New)),
+                    button(text("Open...").size(12)).on_press(MapMsg::Command(Command::Open)),
+                    button(text("New").size(12)).on_press(MapMsg::Command(Command::New)),
                 ]
                 .spacing(8),
             ]
@@ -250,17 +256,17 @@ impl App {
         .into()
     }
 
-    fn menu_bar(&self) -> Element<'_, Message> {
-        ui::menu_bar(MENUS, self.menu, MENU_STYLE, Message::Menu)
+    fn menu_bar(&self) -> Element<'_, MapMsg> {
+        ui::menu_bar(MENUS, self.menu, MENU_STYLE, MapMsg::Menu)
     }
 
-    fn menu_dropdown(&self, index: usize) -> Element<'_, Message> {
+    fn menu_dropdown(&self, index: usize) -> Element<'_, MapMsg> {
         let builtin = self.editor_prefs.builtin;
         let checked = move |cmd| cmd == Command::ToggleBuiltinEditor && builtin;
-        ui::menu_dropdown(MENUS, index, MENU_STYLE, checked, Message::Command, Message::Menu)
+        ui::menu_dropdown(MENUS, index, MENU_STYLE, checked, MapMsg::Command, MapMsg::Menu)
     }
 
-    fn status_bar(&self) -> Element<'_, Message> {
+    fn status_bar(&self) -> Element<'_, MapMsg> {
         let (filter, path) = match &self.doc {
             Some(doc) => (
                 format!("Filter: {}", doc.filter().label()),
@@ -286,9 +292,9 @@ impl App {
 
     // --- The map ---
 
-    fn map_view<'a>(&'a self, doc: &'a Doc) -> Element<'a, Message> {
+    fn map_view<'a>(&'a self, doc: &'a Doc) -> Element<'a, MapMsg> {
         let size = doc.layout().size;
-        let mut layers: Stack<Message> = Stack::new().width(size.width).height(size.height);
+        let mut layers: Stack<MapMsg> = Stack::new().width(size.width).height(size.height);
         layers = layers.push(
             canvas_widget(EdgeLayer { layout: doc.layout(), cache: &self.edges, zoom: self.zoom })
                 .width(size.width)
@@ -316,9 +322,9 @@ impl App {
         // While a node drag is armed, pointer moves are reported in map
         // coordinates. A release here ends it even if it comes before the
         // drag subscription is in place (a quick click).
-        let mut layers = mouse_area(layers).on_release(Message::NodeDragEnd);
+        let mut layers = mouse_area(layers).on_release(MapMsg::NodeDragEnd);
         if self.drag.is_some() {
-            layers = layers.on_move(Message::NodeDragMove);
+            layers = layers.on_move(MapMsg::NodeDragMove);
         }
         let map = scrollable(layers)
             .id(MAP_SCROLL_ID)
@@ -326,21 +332,21 @@ impl App {
                 vertical: scrollable::Scrollbar::default(),
                 horizontal: scrollable::Scrollbar::default(),
             })
-            .on_scroll(Message::MapScrolled)
+            .on_scroll(MapMsg::MapScrolled)
             .width(Fill)
             .height(Fill);
         // Nodes, markers and scrollbars capture their own presses, so only a
         // press on empty map space reaches this area and starts a pan.
-        let map = mouse_area(map).on_press(Message::PanStart);
+        let map = mouse_area(map).on_press(MapMsg::PanStart);
         // Ctrl+wheel zooms instead of scrolling.
-        container(super::ctrl_wheel::ctrl_wheel(map, Message::ZoomWheel))
+        container(super::ctrl_wheel::ctrl_wheel(map, MapMsg::ZoomWheel))
             .style(|_| container::background(MAP_BG))
             .width(Fill)
             .height(Fill)
             .into()
     }
 
-    fn node_view<'a>(&'a self, doc: &'a Doc, b: &NodeBox) -> Element<'a, Message> {
+    fn node_view<'a>(&'a self, doc: &'a Doc, b: &NodeBox) -> Element<'a, MapMsg> {
         let id = b.id;
         let map = &doc.map();
         let label = map.text(id);
@@ -378,7 +384,7 @@ impl App {
                         },
                         ..Default::default()
                     })
-                    .on_press(Message::LinkClicked(id)),
+                    .on_press(MapMsg::LinkClicked(id)),
             ));
         }
         // The focused node is always among the selected ones.
@@ -397,24 +403,24 @@ impl App {
                     container::Style::default()
                 }
             });
-        mouse_area(boxed).on_press(Message::NodeClicked(id)).on_double_click(Message::NodeDoubleClicked(id)).into()
+        mouse_area(boxed).on_press(MapMsg::NodeClicked(id)).on_double_click(MapMsg::NodeDoubleClicked(id)).into()
     }
 
     // --- Search panel ---
 
-    fn search_view(&self) -> Element<'_, Message> {
+    fn search_view(&self) -> Element<'_, MapMsg> {
         let s = &self.search;
-        let search = |m: SearchMsg| Message::Search(m);
+        let search = |m: SearchMsg| MapMsg::Search(m);
         let controls = row![
             text_input("Keyword", &s.query)
                 .id(SEARCH_INPUT_ID)
-                .on_input(|q| Message::Search(SearchMsg::QueryChanged(q)))
+                .on_input(|q| MapMsg::Search(SearchMsg::QueryChanged(q)))
                 .on_submit(search(SearchMsg::Submit))
                 .size(12)
                 .padding(4)
                 .width(Fill),
-            pick_list(SCOPES, Some(s.scope), |v| Message::Search(SearchMsg::Scope(v))).text_size(12),
-            pick_list(SORTS, Some(s.sort), |v| Message::Search(SearchMsg::Sort(v))).text_size(12),
+            pick_list(SCOPES, Some(s.scope), |v| MapMsg::Search(SearchMsg::Scope(v))).text_size(12),
+            pick_list(SORTS, Some(s.sort), |v| MapMsg::Search(SearchMsg::Sort(v))).text_size(12),
             icon_button(
                 PanelIcon::Search,
                 "Search",
@@ -470,11 +476,11 @@ impl App {
 
     // --- Dialogs ---
 
-    fn dialog_view(&self, dialog: &Dialog) -> Element<'_, Message> {
+    fn dialog_view(&self, dialog: &Dialog) -> Element<'_, MapMsg> {
         let answer = |label, primary, message| ui::dialog_button(label, primary, DIALOG_STYLE, message);
-        let ok = |label| answer(label, true, Message::DialogOk);
-        let cancel = |label| answer(label, false, Message::DialogCancel);
-        let (body, buttons): (Element<Message>, Vec<Element<Message>>) = match dialog {
+        let ok = |label| answer(label, true, MapMsg::DialogOk);
+        let cancel = |label| answer(label, false, MapMsg::DialogCancel);
+        let (body, buttons): (Element<MapMsg>, Vec<Element<MapMsg>>) = match dialog {
             Dialog::Message(msg) => (text(msg.clone()).size(13).into(), vec![ok("OK")]),
             Dialog::Confirm { text: question, .. } => {
                 (text(question.clone()).size(13).into(), vec![ok("Yes"), cancel("No")])
@@ -484,8 +490,8 @@ impl App {
                     text(prompt.clone()).size(13).font(if prompt.contains('\n') { Font::MONOSPACE } else { APP_FONT }),
                     text_input("", value)
                         .id(DIALOG_INPUT_ID)
-                        .on_input(Message::DialogInput)
-                        .on_submit(Message::DialogOk)
+                        .on_input(MapMsg::DialogInput)
+                        .on_submit(MapMsg::DialogOk)
                         .size(13)
                         .padding(6),
                 ]
@@ -496,16 +502,16 @@ impl App {
             Dialog::UnsavedPages(pages) => (
                 text(format!("These pages have unsaved changes: {}. Save them?", pages.join(", "))).size(13).into(),
                 vec![
-                    answer("Save", true, Message::DialogSave),
-                    answer("Don't Save", false, Message::DialogDiscard),
+                    answer("Save", true, MapMsg::DialogSave),
+                    answer("Don't Save", false, MapMsg::DialogDiscard),
                     cancel("Cancel"),
                 ],
             ),
             Dialog::Unsaved(_) => (
                 text("The map has unsaved changes. Save them?").size(13).into(),
                 vec![
-                    answer("Save", true, Message::DialogSave),
-                    answer("Don't Save", false, Message::DialogDiscard),
+                    answer("Save", true, MapMsg::DialogSave),
+                    answer("Don't Save", false, MapMsg::DialogDiscard),
                     cancel("Cancel"),
                 ],
             ),
@@ -517,7 +523,7 @@ impl App {
 const FILE_COLUMN: f32 = 260.0;
 const DATE_COLUMN: f32 = 110.0;
 
-fn result_row(i: usize, hit: &SearchHit, selected: bool) -> Element<'_, Message> {
+fn result_row(i: usize, hit: &SearchHit, selected: bool) -> Element<'_, MapMsg> {
     let modified = chrono::DateTime::from_timestamp_millis(hit.last_modified)
         .map(|d| d.with_timezone(&chrono::Local).format("%y/%m/%d %H:%M").to_string())
         .unwrap_or_default();
@@ -535,8 +541,8 @@ fn result_row(i: usize, hit: &SearchHit, selected: bool) -> Element<'_, Message>
             ..Default::default()
         },
     ))
-    .on_press(Message::Search(SearchMsg::RowClicked(i)))
-    .on_double_click(Message::Search(SearchMsg::RowDoubleClicked(i)))
+    .on_press(MapMsg::Search(SearchMsg::RowClicked(i)))
+    .on_double_click(MapMsg::Search(SearchMsg::RowDoubleClicked(i)))
     .into()
 }
 
@@ -562,7 +568,7 @@ fn highlighted_spans(snippet: &Snippet) -> Vec<Span<'static, (), Font>> {
 }
 
 /// The child count shown right of a folded node; clicking it unfolds the node.
-fn fold_marker<'a>(b: &NodeBox, count: usize, zoom: f32) -> Element<'a, Message> {
+fn fold_marker<'a>(b: &NodeBox, count: usize, zoom: f32) -> Element<'a, MapMsg> {
     let center = Point::new(b.rect.x + b.rect.width + (2.0 + FOLD_MARKER_SIZE / 2.0) * zoom, b.rect.center_y());
     fold_button(count.to_string(), b.id, center, zoom, true)
 }
@@ -581,13 +587,13 @@ fn branch_x(start: f32, child: f32) -> f32 {
 
 /// The clickable branch point of an unfolded node: invisible until hovered,
 /// then a circle like the fold marker; clicking it folds the node.
-fn branch_handle<'a>(id: NodeId, point: Point, zoom: f32) -> Element<'a, Message> {
+fn branch_handle<'a>(id: NodeId, point: Point, zoom: f32) -> Element<'a, MapMsg> {
     fold_button("−".into(), id, point, zoom, false)
 }
 
 /// A round button centered at `center` that folds or unfolds `id`; unless
 /// `always_shown`, it shows only while hovered.
-fn fold_button<'a>(label: String, id: NodeId, center: Point, zoom: f32, always_shown: bool) -> Element<'a, Message> {
+fn fold_button<'a>(label: String, id: NodeId, center: Point, zoom: f32, always_shown: bool) -> Element<'a, MapMsg> {
     let size = FOLD_MARKER_SIZE * zoom;
     let button = button(text(label).size(FOLD_MARKER_FONT_SIZE * zoom).center())
         .width(size)
@@ -605,16 +611,16 @@ fn fold_button<'a>(label: String, id: NodeId, center: Point, zoom: f32, always_s
                 button::Style { text_color: Color::TRANSPARENT, ..Default::default() }
             }
         })
-        .on_press(Message::FoldClicked(id));
+        .on_press(MapMsg::FoldClicked(id));
     pin(super::arrow_cursor::hand_cursor(button)).position(center - Vector::new(size / 2.0, size / 2.0)).into()
 }
 
 /// Where dragged nodes would be dropped: an outline around the target for a
 /// child, a line along its top or bottom edge for a sibling.
-fn drop_indicator<'a>(r: Rectangle, place: DropPlace) -> Element<'a, Message> {
+fn drop_indicator<'a>(r: Rectangle, place: DropPlace) -> Element<'a, MapMsg> {
     const LINE: f32 = 3.0;
     let line = || container(space()).width(r.width).height(LINE).style(|_| container::background(SELECTED_BORDER));
-    let (marker, position): (Element<'a, Message>, Point) = match place {
+    let (marker, position): (Element<'a, MapMsg>, Point) = match place {
         DropPlace::Child => (
             container(space())
                 .width(r.width)
@@ -700,8 +706,8 @@ fn icon_button<'a>(
     icon: PanelIcon,
     name: &'a str,
     style: fn(&Theme, button::Status) -> button::Style,
-    on_press: Option<Message>,
-) -> Element<'a, Message> {
+    on_press: Option<MapMsg>,
+) -> Element<'a, MapMsg> {
     let button = button(canvas_widget(icon).width(ICON_SIZE).height(ICON_SIZE))
         .padding([5, 10])
         .style(style)
@@ -724,7 +730,7 @@ enum PanelIcon {
     Close,
 }
 
-impl canvas::Program<Message> for PanelIcon {
+impl canvas::Program<MapMsg> for PanelIcon {
     type State = ();
 
     fn draw(
@@ -762,7 +768,7 @@ struct EdgeLayer<'a> {
     zoom: f32,
 }
 
-impl canvas::Program<Message> for EdgeLayer<'_> {
+impl canvas::Program<MapMsg> for EdgeLayer<'_> {
     type State = ();
 
     fn draw(

@@ -25,7 +25,7 @@ fn pages_open_in_the_editor_unless_it_is_turned_off() {
     assert!(!opens_in_editor(dir.path(), true));
     let mut app = App::new();
     assert!(app.editor_prefs.builtin);
-    send(&mut app, Message::Command(Command::ToggleBuiltinEditor));
+    send(&mut app, MapMsg::Command(Command::ToggleBuiltinEditor));
     assert!(!app.editor_prefs.builtin);
 }
 
@@ -35,15 +35,15 @@ fn keys_go_to_the_window_they_were_typed_in() {
     let id = open_with_f1(&mut app);
     let main = app.main_window;
     // F7 in the map window toggles the checkmark; in the editor it does nothing to the map.
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F7), Modifiers::empty())));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::F7), Modifiers::empty()))));
     let map = &app.doc.as_ref().unwrap().map();
     assert!(!map.has_icon(node, crate::mindmap::ICON_CHECKMARK));
-    send(&mut app, Message::KeyIn(main, key_event(Key::Named(Named::F7), Modifiers::empty())));
+    send(&mut app, Message::Window(main, WindowEvent::Key(key_event(Key::Named(Named::F7), Modifiers::empty()))));
     assert!(app.doc.as_ref().unwrap().map().has_icon(node, crate::mindmap::ICON_CHECKMARK));
     // Ctrl+S in the editor saves the page, not the map.
     click_after(&mut app, id, "one");
     typing(&mut app, id, "!");
-    send(&mut app, Message::KeyIn(id, key_event(Key::Character("s".into()), Modifiers::CTRL)));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Character("s".into()), Modifiers::CTRL))));
     assert!(!app.editors[&id].page.is_dirty());
     assert!(app.doc.as_ref().unwrap().dirty());
 }
@@ -77,12 +77,12 @@ fn closing_an_edited_page_asks_first() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "one");
     typing(&mut app, id, "!");
-    send(&mut app, Message::CloseRequest(id));
+    send(&mut app, Message::Window(id, WindowEvent::CloseRequested));
     assert_eq!(app.editors[&id].dialogs.front(), Some(&EditorDialog::Unsaved));
     editor(&mut app, id, EditorMsg::Dialog(DialogAnswer::Cancel));
     assert!(app.editors.contains_key(&id));
     assert_eq!(page_text(&app, id), "one!\n");
-    send(&mut app, Message::CloseRequest(id));
+    send(&mut app, Message::Window(id, WindowEvent::CloseRequested));
     editor(&mut app, id, EditorMsg::Dialog(DialogAnswer::Discard));
     assert!(!app.editors.contains_key(&id));
     assert_eq!(std::fs::read_to_string(page).unwrap(), "\u{feff}one\n");
@@ -94,14 +94,14 @@ fn exiting_with_unsaved_pages_asks_and_cancel_keeps_them() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "one");
     typing(&mut app, id, "!");
-    send(&mut app, Message::CloseRequested);
+    send(&mut app, MapMsg::CloseRequested);
     assert!(matches!(app.dialogs.front(), Some(Dialog::UnsavedPages(p)) if p == &vec!["Plan.md".to_string()]));
-    send(&mut app, Message::DialogCancel);
+    send(&mut app, MapMsg::DialogCancel);
     assert!(app.dialogs.is_empty());
     assert!(app.editors[&id].page.is_dirty());
     // Save writes the page (and ends the application).
-    send(&mut app, Message::CloseRequested);
-    send(&mut app, Message::DialogSave);
+    send(&mut app, MapMsg::CloseRequested);
+    send(&mut app, MapMsg::DialogSave);
     assert_eq!(std::fs::read_to_string(page).unwrap(), "\u{feff}one!\n");
     assert!(app.dialogs.is_empty());
 }
@@ -113,15 +113,15 @@ fn cancelling_the_pages_question_after_dont_save_keeps_the_map_unsaved() {
     click_after(&mut app, id, "one");
     typing(&mut app, id, "!");
     app.doc.as_mut().unwrap().change(|_| ());
-    send(&mut app, Message::CloseRequested);
+    send(&mut app, MapMsg::CloseRequested);
     assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
-    send(&mut app, Message::DialogDiscard);
+    send(&mut app, MapMsg::DialogDiscard);
     assert!(matches!(app.dialogs.front(), Some(Dialog::UnsavedPages(_))));
-    send(&mut app, Message::DialogCancel);
+    send(&mut app, MapMsg::DialogCancel);
     assert!(app.dialogs.is_empty());
     // Cancel aborts the whole exit: the map is still unsaved and is asked about again.
     assert!(app.doc.as_ref().unwrap().dirty());
-    send(&mut app, Message::CloseRequested);
+    send(&mut app, MapMsg::CloseRequested);
     assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
 }
 
@@ -133,7 +133,7 @@ fn ctrl_click_on_a_link_to_another_page_opens_it() {
     // A plain click edits the link; Ctrl+click follows it.
     editor(&mut app, id, EditorMsg::Link("Other.md".into(), 5));
     assert_eq!(app.editors.len(), 1);
-    send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::CTRL)));
+    send(&mut app, Message::Window(id, WindowEvent::Key(keyboard::Event::ModifiersChanged(Modifiers::CTRL))));
     editor(&mut app, id, EditorMsg::Link("Other.md".into(), 5));
     assert_eq!(app.editors.len(), 2);
     assert!(app.editors.values().any(|e| e.page.path() == other));
@@ -143,7 +143,7 @@ fn ctrl_click_on_a_link_to_another_page_opens_it() {
 fn a_page_that_is_not_utf8_is_reported() {
     let (mut app, f, _, _) = app_with_page("x");
     std::fs::write(f.doc_dir.join("Plan.md"), [0x93, 0xfa, 0x96, 0x7b]).unwrap();
-    send(&mut app, Message::Key(key_event(Key::Named(Named::F1), Modifiers::empty())));
+    send(&mut app, MapMsg::Key(key_event(Key::Named(Named::F1), Modifiers::empty())));
     assert!(app.editors.is_empty());
     assert!(matches!(app.dialogs.front(), Some(Dialog::Message(m)) if m.starts_with("failed to open")));
 }
@@ -169,7 +169,7 @@ fn outline_zoom_theme_and_full_screen() {
     assert!(app.editor_prefs.dark);
     assert_eq!(app.theme(id), iced::Theme::Dark);
     // F11 full screen, Esc leaves it.
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F11), Modifiers::empty())));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::F11), Modifiers::empty()))));
     assert!(app.editors[&id].fullscreen);
     editor(&mut app, id, EditorMsg::Escape);
     assert!(!app.editors[&id].fullscreen);
@@ -181,7 +181,7 @@ fn enter_chooses_the_default_button_of_a_dialog() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "one");
     typing(&mut app, id, "!");
-    send(&mut app, Message::CloseRequest(id));
+    send(&mut app, Message::Window(id, WindowEvent::CloseRequested));
     assert_eq!(app.editors[&id].dialogs.front(), Some(&EditorDialog::Unsaved));
     // Other keys do nothing while the dialog is open.
     editor(&mut app, id, EditorMsg::Key(key_event(Key::Character("x".into()), Modifiers::empty())));

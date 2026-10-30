@@ -5,7 +5,13 @@ use super::*;
 /// A key typed with `text` in the editor window.
 fn type_key(app: &mut App, id: window::Id, c: char) {
     let text = c.to_string();
-    send(app, Message::KeyIn(id, typing_event(Key::Character(text.as_str().into()), Modifiers::empty(), &text)));
+    send(
+        app,
+        Message::Window(
+            id,
+            WindowEvent::Key(typing_event(Key::Character(text.as_str().into()), Modifiers::empty(), &text)),
+        ),
+    );
 }
 
 #[test]
@@ -23,7 +29,7 @@ fn typing_with_nothing_active_types_into_the_first_block() {
 fn end_with_nothing_active_goes_to_the_end_of_the_first_block() {
     let (mut app, _f, _, _) = app_with_page("# Page1\n\nHello world.\n");
     let id = open_with_f1(&mut app);
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::End), Modifiers::empty())));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::End), Modifiers::empty()))));
     // The block is active: the widget has the keys.
     typing(&mut app, id, " unsaved");
     assert_eq!(page_text(&app, id), "# Page1 unsaved\n\nHello world.\n");
@@ -216,7 +222,7 @@ fn selection_helpers() {
 fn ctrl_click_on_an_anchor_goes_to_the_heading() {
     let (mut app, _f, _, _) = app_with_page("[to b](#part-b)\n\n# Part A\n\n# Part B\n");
     let id = open_with_f1(&mut app);
-    send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::CTRL)));
+    send(&mut app, Message::Window(id, WindowEvent::Key(keyboard::Event::ModifiersChanged(Modifiers::CTRL))));
     editor(&mut app, id, EditorMsg::Link("#part-b".into(), 1));
     let page = &app.editors[&id].page;
     assert!(page.active().is_none());
@@ -244,7 +250,7 @@ fn dragging_onto_other_blocks_selects_them() {
     editor(&mut app, id, EditorMsg::Released);
     editor(&mut app, id, EditorMsg::BlockEntered(3));
     assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 0)));
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::Delete), Modifiers::empty())));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::Delete), Modifiers::empty()))));
     assert_eq!(page_text(&app, id), "three\n\nfour\n");
 
     // A press on a rendered block, beside its text.
@@ -273,12 +279,15 @@ fn whole_blocks_are_selected_and_replaced() {
     assert_eq!(app.editors[&id].page.selected_blocks(), Some((0, 2)));
     // Shift+click from the active block.
     click_after(&mut app, id, "one");
-    send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::SHIFT)));
+    send(&mut app, Message::Window(id, WindowEvent::Key(keyboard::Event::ModifiersChanged(Modifiers::SHIFT))));
     editor(&mut app, id, EditorMsg::BlockPressed(1));
     assert_eq!(app.editors[&id].page.selected_blocks(), Some((0, 1)));
-    send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::empty())));
+    send(&mut app, Message::Window(id, WindowEvent::Key(keyboard::Event::ModifiersChanged(Modifiers::empty()))));
     // Typing replaces them.
-    send(&mut app, Message::KeyIn(id, typing_event(Key::Character("z".into()), Modifiers::empty(), "z")));
+    send(
+        &mut app,
+        Message::Window(id, WindowEvent::Key(typing_event(Key::Character("z".into()), Modifiers::empty(), "z"))),
+    );
     assert_eq!(page_text(&app, id), "z\n\nthree\n");
 }
 
@@ -321,9 +330,9 @@ fn deleting_three_blocks() {
     click_after(&mut app, id, "one");
     // From the text editor's last line to the next block; then the window's keys.
     editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::ArrowDown), Modifiers::SHIFT)));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::ArrowDown), Modifiers::SHIFT))));
     assert_eq!(app.editors[&id].page.selected_blocks(), Some((0, 2)));
-    send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::Delete), Modifiers::empty())));
+    send(&mut app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::Delete), Modifiers::empty()))));
     assert_eq!(page_text(&app, id), "four\n");
     press(&mut app, id, "z", Modifiers::CTRL);
     assert_eq!(page_text(&app, id), "one\n\ntwo\n\nthree\n\nfour\n");
