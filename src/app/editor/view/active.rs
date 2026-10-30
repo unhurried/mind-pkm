@@ -395,6 +395,7 @@ impl Editor {
         LiveText::new(self.id("active"), runs, live.display.text.len(), (live.sel.anchor, live.sel.head))
             .base(base.font, base.size, LINE_HEIGHT)
             .colors(p.selection, base.color)
+            .held(self.pressed())
             .marks(marks)
     }
 

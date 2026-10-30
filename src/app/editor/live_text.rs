@@ -114,6 +114,9 @@ pub struct LiveText<'a> {
     line_height: f32,
     selection: Color,
     caret: Color,
+    /// The button is down from a press that began elsewhere (on the rendered
+    /// block that became this one): moving the pointer selects from there.
+    held: bool,
     key_binding: Box<dyn Fn(KeyPress) -> Option<Binding<EditorMsg>> + 'a>,
 }
 
@@ -129,6 +132,7 @@ impl<'a> LiveText<'a> {
             line_height: 1.6,
             selection: Color::from_rgba(0.25, 0.5, 0.95, 0.25),
             caret: Color::BLACK,
+            held: false,
             key_binding: Box::new(Binding::from_key_press),
         }
     }
@@ -147,6 +151,13 @@ impl<'a> LiveText<'a> {
 
     pub fn marks(mut self, marks: Vec<(Range<usize>, Color)>) -> Self {
         self.marks = marks;
+        self
+    }
+
+    /// Whether the button is down from a press made before this widget was
+    /// shown (the press that made its block the active one).
+    pub fn held(mut self, held: bool) -> Self {
+        self.held = held;
         self
     }
 
@@ -197,6 +208,8 @@ struct State {
     focus: Option<Focus>,
     last_click: Option<mouse::Click>,
     dragging: bool,
+    /// The button was released since the editor last said it was held.
+    released: bool,
     modifiers: keyboard::Modifiers,
     preedit: Option<input_method::Preedit>,
     cache: HashMap<ShapeKey, Shaped>,
@@ -436,6 +449,9 @@ impl Widget<EditorMsg, Theme, Renderer> for LiveText<'_> {
         _viewport: &Rectangle,
     ) {
         let state = tree.state.downcast_mut::<State>();
+        if !self.held {
+            state.released = false;
+        }
         let bounds = layout.bounds();
         let hit = |state: &State, p: Point| {
             let local = p - bounds.position();
@@ -508,13 +524,16 @@ impl Widget<EditorMsg, Theme, Renderer> for LiveText<'_> {
                     state.focus = None;
                 }
             }
-            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging => {
+            Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging || (self.held && !state.released) => {
                 if let Some(p) = cursor.position() {
                     let at = hit(state, p);
                     shell.publish(EditorMsg::Live(LiveMsg::Drag(at)));
                 }
             }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => state.dragging = false,
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                state.dragging = false;
+                state.released = true;
+            }
             Event::InputMethod(event) => match event {
                 input_method::Event::Opened | input_method::Event::Closed => {
                     state.preedit = matches!(event, input_method::Event::Opened).then(input_method::Preedit::new);

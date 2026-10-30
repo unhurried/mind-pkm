@@ -845,6 +845,11 @@ impl Editor {
         self.focus()
     }
 
+    /// Whether the button is down from a press on the page.
+    pub(super) fn pressed(&self) -> bool {
+        self.block_drag.is_some()
+    }
+
     fn block_pressed(&mut self, block: usize) -> Task<EditorMsg> {
         self.menu = None;
         if self.shift_selects(block) {
