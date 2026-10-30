@@ -130,7 +130,7 @@ fn dropped_files_are_copied_into_the_assets_folder() {
     let pdf = f.dir.path().join("doc.pdf");
     std::fs::write(&pdf, b"pdf").unwrap();
     let opts = crate::markdown::images::ImageOptions::default();
-    let md = crate::app::editor::files_markdown(&page, "x\n", &[picture, pdf], &opts).unwrap();
+    let md = crate::markdown::images::files_markdown(&page, "x\n", &[picture, pdf], &opts).unwrap();
     assert_eq!(md, vec!["![](Plan.assets/photo.png)".to_string(), "[doc.pdf](../doc.pdf)".to_string()]);
     assert!(f.doc_dir.join("Plan.assets").join("photo.png").is_file());
 }

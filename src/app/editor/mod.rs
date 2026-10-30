@@ -1426,7 +1426,7 @@ impl Editor {
             return Task::none();
         }
         let (page, text, opts) = (self.page.path.clone(), self.page.text.clone(), prefs.images.clone());
-        Task::perform(blocking(move || files_markdown(&page, &text, &files, &opts)), EditorMsg::Inserted)
+        Task::perform(blocking(move || images::files_markdown(&page, &text, &files, &opts)), EditorMsg::Inserted)
     }
 
     /// Saves pasted image data as a PNG in the image folder and inserts it.
@@ -1558,18 +1558,6 @@ impl Editor {
     }
 }
 
-/// The Markdown inserting files into the page at `page`: images copied into
-/// its image folder, other files linked where they are.
-pub fn files_markdown(page: &Path, text: &str, files: &[PathBuf], opts: &ImageOptions) -> Result<Vec<String>, String> {
-    files
-        .iter()
-        .map(|f| {
-            let target = if images::is_image(f) { images::copy_image(page, text, f, opts)? } else { f.clone() };
-            Ok(images::markdown_for(page, &target, opts))
-        })
-        .collect()
-}
-
 /// A table cell's Markdown as HTML, for copying cells.
 fn cell_html(cell: &str) -> String {
     let html = html::fragment(&table::cell_to_text(cell).replace('\n', "  \n"));
@@ -1585,18 +1573,6 @@ struct CursorState {
     region: Option<std::ops::Range<usize>>,
     cell: Option<((usize, usize), Sel)>,
     source: Option<iced::widget::text_editor::Cursor>,
-}
-
-impl Page {
-    /// Takes the source mode's text as the page's.
-    pub fn set_source_text(&mut self, text: String, sel: Sel) {
-        if text != self.text {
-            self.set_text(text, sel);
-            self.active = None;
-            self.pending = None;
-        }
-        self.sel = sel;
-    }
 }
 
 /// Where a link in a page leads.

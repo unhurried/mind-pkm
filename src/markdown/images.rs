@@ -130,6 +130,18 @@ pub fn markdown_for(page: &Path, file: &Path, opts: &ImageOptions) -> String {
     }
 }
 
+/// The Markdown inserting files into the page at `page`: images copied into
+/// its image folder, other files linked where they are.
+pub fn files_markdown(page: &Path, text: &str, files: &[PathBuf], opts: &ImageOptions) -> Result<Vec<String>, String> {
+    files
+        .iter()
+        .map(|f| {
+            let target = if is_image(f) { copy_image(page, text, f, opts)? } else { f.clone() };
+            Ok(markdown_for(page, &target, opts))
+        })
+        .collect()
+}
+
 /// A value of the page's YAML front matter (`key: value` at the top level).
 pub fn front_matter_value(text: &str, key: &str) -> Option<String> {
     let rest = text.strip_prefix("---\n")?;

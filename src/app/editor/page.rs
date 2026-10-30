@@ -942,6 +942,16 @@ impl Page {
         self.apply(Edited { text, sel, pending: None });
     }
 
+    /// Takes the source mode's text as the page's.
+    pub fn set_source_text(&mut self, text: String, sel: Sel) {
+        if text != self.text {
+            self.set_text(text, sel);
+            self.active = None;
+            self.pending = None;
+        }
+        self.sel = sel;
+    }
+
     pub fn undo(&mut self) -> bool {
         self.time_travel(true)
     }
