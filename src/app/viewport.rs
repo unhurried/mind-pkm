@@ -97,8 +97,8 @@ impl App {
     /// node or its parent) and where that one is, for `keep_in_place`.
     pub(super) fn focus_anchor(&self, parent: bool) -> Option<(NodeId, NodeId, Point)> {
         let doc = self.doc.as_ref()?;
-        let id = if parent { doc.map.parent(doc.focus)? } else { doc.focus };
-        Some((doc.focus, id, doc.layout.get(id)?.rect.position()))
+        let id = if parent { doc.map().parent(doc.focus())? } else { doc.focus() };
+        Some((doc.focus(), id, doc.layout().get(id)?.rect.position()))
     }
 
     /// Scrolls by as much as the anchored node moved in the layout, so that it
@@ -106,10 +106,10 @@ impl App {
     pub(super) fn keep_in_place(&mut self, anchor: Option<(NodeId, NodeId, Point)>) -> Task<Message> {
         let Some((focus, id, before)) = anchor else { return Task::none() };
         let Some(doc) = &self.doc else { return Task::none() };
-        if doc.focus != focus {
+        if doc.focus() != focus {
             return Task::none();
         }
-        let Some(after) = doc.layout.get(id).map(|b| b.rect.position()) else { return Task::none() };
+        let Some(after) = doc.layout().get(id).map(|b| b.rect.position()) else { return Task::none() };
         let delta = after - before;
         if delta == Vector::ZERO {
             return Task::none();

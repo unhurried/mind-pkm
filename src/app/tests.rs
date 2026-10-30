@@ -23,7 +23,7 @@ fn press(app: &mut App, key: Named) {
 }
 
 fn map(app: &App) -> &MindMap {
-    &app.doc.as_ref().unwrap().map
+    app.doc.as_ref().unwrap().map()
 }
 
 fn root_texts(app: &App) -> Vec<String> {
@@ -39,7 +39,7 @@ fn a_new_node_asks_for_its_text_and_undo_removes_it() {
     press(&mut app, Named::Enter);
     assert!(app.dialogs.is_empty());
     assert_eq!(root_texts(&app), vec!["child"]);
-    assert!(app.doc.as_ref().unwrap().dirty);
+    assert!(app.doc.as_ref().unwrap().dirty());
     send(&mut app, Message::Command(Command::Undo));
     assert!(root_texts(&app).is_empty());
 }
@@ -54,7 +54,7 @@ fn cancelling_a_new_node_leaves_the_map_as_it_was() {
     assert_eq!(map(&app).to_xml(), before);
     // Still saved, and no refresh is called for.
     let doc = app.doc.as_ref().unwrap();
-    assert!(!doc.dirty && !doc.edited_since_refresh);
+    assert!(!doc.dirty() && !doc.edited_since_refresh());
     // Leaving the text empty removes it too.
     press(&mut app, Named::Enter);
     send(&mut app, Message::DialogOk);
@@ -70,7 +70,7 @@ fn a_refresh_landing_while_a_new_node_is_named_is_kept() {
     let update = next_steps::compute(&next_steps::snapshot(&f.map, &f.doc_dir), chrono::Local::now().date_naive());
     let mut app = app_with(f.map.clone());
     press(&mut app, Named::Tab);
-    let generation = app.doc.as_ref().unwrap().generation;
+    let generation = app.doc.as_ref().unwrap().generation();
     send(&mut app, Message::NextStepsComputed(generation, Box::new(update)));
     send(&mut app, Message::Escape);
     assert_eq!(map(&app).child_texts(page), vec!["One"]);
@@ -93,12 +93,12 @@ fn a_new_page_that_fails_changes_nothing() {
         send(&mut app, Message::Command(command));
     }
     let doc = app.doc.as_ref().unwrap();
-    assert!(!doc.dirty && !doc.edited_since_refresh);
+    assert!(!doc.dirty() && !doc.edited_since_refresh());
     // No empty undo step either: Undo has nothing to take back.
     let before = map(&app).to_xml();
     send(&mut app, Message::Command(Command::Undo));
     assert_eq!(map(&app).to_xml(), before);
-    assert!(!app.doc.as_ref().unwrap().dirty);
+    assert!(!app.doc.as_ref().unwrap().dirty());
 }
 
 #[test]
@@ -107,12 +107,12 @@ fn undo_selects_what_was_selected_before_the_change() {
     press(&mut app, Named::Tab);
     send(&mut app, Message::DialogInput("a".into()));
     press(&mut app, Named::Enter);
-    let a = app.doc.as_ref().unwrap().focus;
+    let a = app.doc.as_ref().unwrap().focus();
     press(&mut app, Named::Tab);
     send(&mut app, Message::DialogInput("b".into()));
     press(&mut app, Named::Enter);
     send(&mut app, Message::Command(Command::Undo));
-    assert_eq!(app.doc.as_ref().unwrap().focus, a);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), a);
 }
 
 #[test]
@@ -128,12 +128,12 @@ fn a_refresh_keeps_matching_children_and_the_selection() {
     app.doc.as_mut().unwrap().select(vec![a]);
     f.write_page("Task", "### Next Steps\n* step A\n* step B\n* step C\n");
     let update = next_steps::compute(&next_steps::snapshot(map(&app), &f.doc_dir), chrono::Local::now().date_naive());
-    let generation = app.doc.as_ref().unwrap().generation;
+    let generation = app.doc.as_ref().unwrap().generation();
     send(&mut app, Message::NextStepsComputed(generation, Box::new(update)));
     assert_eq!(map(&app).child_texts(page), vec!["step A", "step B", "step C"]);
     assert_eq!(map(&app).children(page)[0], a);
     assert!(map(&app).has_icon(a, "button_ok"));
-    assert_eq!(app.doc.as_ref().unwrap().focus, a);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), a);
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn closing_with_unsaved_changes_asks_and_cancel_keeps_them() {
     send(&mut app, Message::DialogCancel);
     assert!(app.dialogs.is_empty());
     assert_eq!(root_texts(&app), vec!["x"]);
-    assert!(app.doc.as_ref().unwrap().dirty);
+    assert!(app.doc.as_ref().unwrap().dirty());
     send(&mut app, Message::CloseRequested);
     send(&mut app, Message::Escape);
     assert!(app.dialogs.is_empty());
@@ -187,8 +187,8 @@ fn new_map_with_unsaved_changes_can_discard_them() {
     assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::New))));
     send(&mut app, Message::DialogDiscard);
     let doc = app.doc.as_ref().unwrap();
-    assert!(!doc.dirty && doc.map.path().is_none());
-    assert_eq!(doc.map.text(doc.map.root()), "Map");
+    assert!(!doc.dirty() && doc.map().path().is_none());
+    assert_eq!(doc.map().text(doc.map().root()), "Map");
     assert_eq!(root_texts(&app), vec!["config", "ToDo"]);
 }
 
@@ -215,21 +215,21 @@ fn cancelling_save_as_from_the_unsaved_changes_question_keeps_the_changes() {
     send(&mut app, Message::CloseRequested);
     send(&mut app, Message::DialogSave);
     send(&mut app, Message::FileChosen(FileAction::SaveAs(Some(AfterUnsaved::Exit)), None));
-    assert!(app.doc.as_ref().unwrap().dirty);
+    assert!(app.doc.as_ref().unwrap().dirty());
     assert_eq!(root_texts(&app), vec!["x"]);
 }
 
 #[test]
 fn the_filter_dialog_sets_the_filter_and_cancel_keeps_it() {
     let mut app = app_with(MindMap::new("root"));
-    assert_eq!(app.doc.as_ref().unwrap().filter, Filter::HideArchive);
+    assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::HideArchive);
     press(&mut app, Named::F5);
     send(&mut app, Message::DialogInput("t".into()));
     send(&mut app, Message::DialogOk);
-    assert_eq!(app.doc.as_ref().unwrap().filter, Filter::ToDo);
+    assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::ToDo);
     press(&mut app, Named::F5);
     send(&mut app, Message::Escape);
-    assert_eq!(app.doc.as_ref().unwrap().filter, Filter::ToDo);
+    assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::ToDo);
     assert!(app.dialogs.is_empty());
 }
 
@@ -259,7 +259,7 @@ fn ctrl_shift_f_asks_for_a_filter_like_f5() {
     press_char(&mut app, "f", Modifiers::CTRL | Modifiers::SHIFT);
     send(&mut app, Message::DialogInput("t".into()));
     send(&mut app, Message::DialogOk);
-    assert_eq!(app.doc.as_ref().unwrap().filter, Filter::ToDo);
+    assert_eq!(*app.doc.as_ref().unwrap().filter(), Filter::ToDo);
 }
 
 #[test]
@@ -284,7 +284,7 @@ fn folding_by_click_is_one_undo_step() {
     let mut app = app_with(m);
     send(&mut app, Message::FoldClicked(a));
     assert!(map(&app).is_folded(a));
-    assert!(!app.doc.as_ref().unwrap().layout.contains(map(&app).children(a)[0]));
+    assert!(!app.doc.as_ref().unwrap().layout().contains(map(&app).children(a)[0]));
     send(&mut app, Message::Command(Command::Undo));
     assert!(!map(&app).is_folded(a));
 }
@@ -301,15 +301,15 @@ fn up_and_down_cross_to_cousins() {
     let mut app = app_with(m);
     app.doc.as_mut().unwrap().select(vec![a2]);
     press(&mut app, Named::ArrowDown);
-    assert_eq!(app.doc.as_ref().unwrap().focus, b1);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), b1);
     press(&mut app, Named::ArrowDown);
-    assert_eq!(app.doc.as_ref().unwrap().focus, b1);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), b1);
     press(&mut app, Named::ArrowUp);
-    assert_eq!(app.doc.as_ref().unwrap().focus, a2);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), a2);
     press(&mut app, Named::ArrowUp);
-    assert_eq!(app.doc.as_ref().unwrap().focus, a1);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), a1);
     press(&mut app, Named::ArrowUp);
-    assert_eq!(app.doc.as_ref().unwrap().focus, a1);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), a1);
 }
 
 #[test]
@@ -331,7 +331,7 @@ fn a_map_opens_as_it_was_last_shown() {
     let mut reopened = App::new();
     let _ = reopened.set_doc(f.map.clone(), Some(view.clone()));
     let doc = reopened.doc.as_ref().unwrap();
-    assert_eq!((doc.selection.clone(), doc.focus), (vec![c, b], b));
+    assert_eq!((doc.selection().to_vec(), doc.focus()), (vec![c, b], b));
     assert_eq!(reopened.zoom, 1.25);
     assert_eq!(reopened.scroll_offset, iced::Vector::new(30.0, 40.0));
 
@@ -341,12 +341,12 @@ fn a_map_opens_as_it_was_last_shown() {
     gone.delete(c);
     let mut reopened = App::new();
     let _ = reopened.set_doc(gone, Some(view.clone()));
-    assert_eq!(reopened.doc.as_ref().unwrap().focus, root);
+    assert_eq!(reopened.doc.as_ref().unwrap().focus(), root);
     let mut folded = f.map.clone();
     folded.set_folded(a, true);
     let mut reopened = App::new();
     let _ = reopened.set_doc(folded, Some(view));
-    assert_eq!(reopened.doc.as_ref().unwrap().focus, a);
+    assert_eq!(reopened.doc.as_ref().unwrap().focus(), a);
 }
 
 #[test]
@@ -384,7 +384,7 @@ fn the_window_is_restored_as_it_was_before_maximizing_or_minimizing() {
 #[test]
 fn only_edits_call_for_the_periodic_refresh() {
     let mut app = app_with(MindMap::new("root"));
-    let edited = |app: &App| app.doc.as_ref().unwrap().edited_since_refresh;
+    let edited = |app: &App| app.doc.as_ref().unwrap().edited_since_refresh();
     send(&mut app, Message::Command(Command::ZoomIn));
     press(&mut app, Named::F5);
     send(&mut app, Message::DialogOk);
@@ -406,7 +406,7 @@ fn moving_a_node_among_its_siblings_scrolls_only_to_keep_it_in_view() {
     let kids: Vec<_> = (0..40).map(|i| m.add_child(root, &format!("node {i}"))).collect();
     let mut app = app_with(m);
     app.viewport_size = Some(iced::Size::new(800.0, 400.0));
-    let rect = |app: &App, n| app.doc.as_ref().unwrap().layout.get(n).unwrap().rect;
+    let rect = |app: &App, n| app.doc.as_ref().unwrap().layout().get(n).unwrap().rect;
 
     // Well inside the view: the map stays where it is and the node moves.
     let n = kids[20];
@@ -452,7 +452,7 @@ fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
         press(&mut app, key);
         send(&mut app, Message::DialogOk);
         assert_eq!(root_texts(&app), vec!["a", "c"]);
-        assert_eq!(app.doc.as_ref().unwrap().focus, c);
+        assert_eq!(app.doc.as_ref().unwrap().focus(), c);
         send(&mut app, Message::Command(Command::Undo));
         assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
         // Ctrl: no question.
@@ -460,7 +460,7 @@ fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
         press_ctrl(&mut app, key);
         assert!(app.dialogs.is_empty());
         assert_eq!(root_texts(&app), vec!["c"]);
-        assert_eq!(app.doc.as_ref().unwrap().focus, c);
+        assert_eq!(app.doc.as_ref().unwrap().focus(), c);
         // The root is never deleted, and nothing is asked for it.
         app.doc.as_mut().unwrap().select(vec![root]);
         press(&mut app, key);

@@ -95,7 +95,7 @@ impl App {
     fn asset_doc_dir(&self, path: &Path) -> Result<PathBuf, String> {
         let name = file_name(path);
         let doc = self.doc.as_ref().ok_or_else(|| format!("{name} is not in the document directory."))?;
-        let doc_dir = pkm::load_doc_dir(&doc.map)?;
+        let doc_dir = pkm::load_doc_dir(doc.map())?;
         if !pkm::assets::can_change(path, &doc_dir) {
             return Err(format!("{name} is not in the document directory."));
         }
@@ -179,7 +179,7 @@ impl App {
 
     /// The page file or directory of a page or directory node.
     pub(super) fn doc_path_of(&self, id: crate::mindmap::NodeId) -> Option<PathBuf> {
-        let map = &self.doc.as_ref()?.map;
+        let map = &self.doc.as_ref()?.map();
         let doc_dir = pkm::load_doc_dir(map).ok()?;
         let name = map.text(id);
         Some(match pkm::doc_type(map, id, &doc_dir)? {

@@ -70,7 +70,7 @@ impl Doc {
     /// Moves the nodes (in the given order) to the drop target, as one undo
     /// step; a move that leaves them all where they were is not recorded.
     pub(super) fn move_nodes(&mut self, nodes: &[NodeId], target: DropTarget) {
-        let map = &self.map;
+        let map = self.map();
         let nodes: Vec<NodeId> = nodes.iter().copied().filter(|&n| map.exists(n) && n != map.root()).collect();
         if nodes.is_empty()
             || !map.exists(target.node)
@@ -89,30 +89,26 @@ impl Doc {
             |map: &MindMap| -> Vec<_> { nodes.iter().map(|&n| (map.parent(n), map.index_in_parent(n))).collect() };
         let old_places = places(map);
         let unfolds = target.place == DropPlace::Child && map.is_folded(target.node);
-        let before = self.map.clone();
-        let map = &mut self.map;
-        if unfolds {
-            map.set_folded(target.node, false);
-        }
-        // The position of `anchor` among the parent's children once `n` is taken out.
-        let index_without = |map: &MindMap, anchor: NodeId, n: NodeId| {
-            map.children(parent).into_iter().filter(|&c| c != n).position(|c| c == anchor)
-        };
-        let mut anchor = target.node;
-        for &n in &nodes {
-            let index = match target.place {
-                DropPlace::Child => None,
-                DropPlace::Before => index_without(map, target.node, n),
-                DropPlace::After => index_without(map, anchor, n).map(|i| i + 1),
+        let move_them = |map: &mut MindMap| {
+            if unfolds {
+                map.set_folded(target.node, false);
+            }
+            // The position of `anchor` among the parent's children once `n` is taken out.
+            let index_without = |map: &MindMap, anchor: NodeId, n: NodeId| {
+                map.children(parent).into_iter().filter(|&c| c != n).position(|c| c == anchor)
             };
-            map.move_node(n, parent, index);
-            anchor = n;
-        }
-        if unfolds || places(&self.map) != old_places {
-            self.record(before);
-        } else {
-            self.map = before;
-        }
+            let mut anchor = target.node;
+            for &n in &nodes {
+                let index = match target.place {
+                    DropPlace::Child => None,
+                    DropPlace::Before => index_without(map, target.node, n),
+                    DropPlace::After => index_without(map, anchor, n).map(|i| i + 1),
+                };
+                map.move_node(n, parent, index);
+                anchor = n;
+            }
+        };
+        self.change_or_revert(move_them, |map| unfolds || places(map) != old_places);
     }
 }
 
@@ -123,10 +119,10 @@ impl App {
     pub(super) fn drag_arm(&mut self, id: NodeId, click: Option<NodeId>) {
         self.drag = None;
         let Some(doc) = &self.doc else { return };
-        if id == doc.map.root() || !doc.selection.contains(&id) {
+        if id == doc.map().root() || !doc.selection().contains(&id) {
             return;
         }
-        let root = doc.map.root();
+        let root = doc.map().root();
         let nodes: Vec<NodeId> = doc.sorted_selection().into_iter().filter(|&n| n != root).collect();
         if !nodes.is_empty() {
             self.drag = Some(NodeDrag { nodes, origin: None, dragging: false, target: None, click });
@@ -140,7 +136,7 @@ impl App {
             drag.dragging = true;
         }
         if drag.dragging {
-            drag.target = drop_target(&doc.map, &doc.layout, &drag.nodes, p);
+            drag.target = drop_target(doc.map(), doc.layout(), &drag.nodes, p);
         }
     }
 
@@ -148,7 +144,7 @@ impl App {
     pub(super) fn drag_end(&mut self) {
         let (Some(drag), Some(doc)) = (self.drag.take(), &mut self.doc) else { return };
         if !drag.dragging {
-            if let Some(id) = drag.click.filter(|&id| doc.map.exists(id)) {
+            if let Some(id) = drag.click.filter(|&id| doc.map().exists(id)) {
                 doc.select(vec![id]);
             }
         } else if let Some(target) = drag.target {
@@ -229,19 +225,19 @@ mod tests {
         let (map, [r, a, a1, a2, b, c]) = sample();
         let mut doc = Doc::new(map, 0);
         doc.move_nodes(&[a1, b], DropTarget { node: c, place: DropPlace::Child });
-        assert_eq!(texts(&doc.map, c), ["a1", "b"]);
-        assert_eq!(texts(&doc.map, r), ["a", "c"]);
-        assert!(doc.dirty);
+        assert_eq!(texts(doc.map(), c), ["a1", "b"]);
+        assert_eq!(texts(doc.map(), r), ["a", "c"]);
+        assert!(doc.dirty());
         doc.undo();
-        assert_eq!(texts(&doc.map, r), ["a", "b", "c"]);
-        assert_eq!(texts(&doc.map, a), ["a1", "a2"]);
+        assert_eq!(texts(doc.map(), r), ["a", "b", "c"]);
+        assert_eq!(texts(doc.map(), a), ["a1", "a2"]);
 
         // Before / after, also when the moved node comes from in front of the target.
         doc.move_nodes(&[a], DropTarget { node: c, place: DropPlace::Before });
-        assert_eq!(texts(&doc.map, r), ["b", "a", "c"]);
+        assert_eq!(texts(doc.map(), r), ["b", "a", "c"]);
         doc.move_nodes(&[b, a2], DropTarget { node: c, place: DropPlace::After });
-        assert_eq!(texts(&doc.map, r), ["a", "c", "b", "a2"]);
-        assert_eq!(texts(&doc.map, a), ["a1"]);
+        assert_eq!(texts(doc.map(), r), ["a", "c", "b", "a2"]);
+        assert_eq!(texts(doc.map(), a), ["a1"]);
     }
 
     #[test]
@@ -252,8 +248,8 @@ mod tests {
         doc.move_nodes(&[r], DropTarget { node: b, place: DropPlace::Child });
         doc.move_nodes(&[b], DropTarget { node: c, place: DropPlace::Before });
         doc.move_nodes(&[b], DropTarget { node: a, place: DropPlace::After });
-        assert!(!doc.dirty);
-        assert_eq!(texts(&doc.map, r), ["a", "b", "c"]);
+        assert!(!doc.dirty());
+        assert_eq!(texts(doc.map(), r), ["a", "b", "c"]);
     }
 
     #[test]
@@ -262,7 +258,7 @@ mod tests {
         map.set_folded(a, true);
         let mut doc = Doc::new(map, 0);
         doc.move_nodes(&[b], DropTarget { node: a, place: DropPlace::Child });
-        assert!(!doc.map.is_folded(a));
-        assert_eq!(texts(&doc.map, a), ["a1", "a2", "b"]);
+        assert!(!doc.map().is_folded(a));
+        assert_eq!(texts(doc.map(), a), ["a1", "a2", "b"]);
     }
 }

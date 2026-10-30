@@ -39,17 +39,17 @@ fn undo_in_the_map_does_not_go_back_across_a_rename() {
     send(&mut app, Message::DialogOk);
     app.doc.as_mut().unwrap().select(vec![node]);
     rename_with_f2(&mut app, "Done");
-    assert_eq!(app.doc.as_ref().unwrap().map.text(node), "Done");
+    assert_eq!(app.doc.as_ref().unwrap().map().text(node), "Done");
 
     send(&mut app, Message::Command(Command::Undo));
     send(&mut app, Message::Command(Command::Undo));
-    let map = &app.doc.as_ref().unwrap().map;
+    let map = &app.doc.as_ref().unwrap().map();
     assert_eq!(map.text(node), "Done");
     assert!(crate::pkm::page_file(&f.doc_dir, &map.text(node)).exists());
     assert!(!f.doc_dir.join("Plan.md").exists());
     // Nothing to redo either.
     send(&mut app, Message::Command(Command::Redo));
-    assert_eq!(app.doc.as_ref().unwrap().map.text(node), "Done");
+    assert_eq!(app.doc.as_ref().unwrap().map().text(node), "Done");
 }
 
 #[test]

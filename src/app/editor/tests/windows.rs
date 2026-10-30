@@ -36,16 +36,16 @@ fn keys_go_to_the_window_they_were_typed_in() {
     let main = app.main_window;
     // F7 in the map window toggles the checkmark; in the editor it does nothing to the map.
     send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::F7), Modifiers::empty())));
-    let map = &app.doc.as_ref().unwrap().map;
+    let map = &app.doc.as_ref().unwrap().map();
     assert!(!map.has_icon(node, crate::mindmap::ICON_CHECKMARK));
     send(&mut app, Message::KeyIn(main, key_event(Key::Named(Named::F7), Modifiers::empty())));
-    assert!(app.doc.as_ref().unwrap().map.has_icon(node, crate::mindmap::ICON_CHECKMARK));
+    assert!(app.doc.as_ref().unwrap().map().has_icon(node, crate::mindmap::ICON_CHECKMARK));
     // Ctrl+S in the editor saves the page, not the map.
     click_after(&mut app, id, "one");
     typing(&mut app, id, "!");
     send(&mut app, Message::KeyIn(id, key_event(Key::Character("s".into()), Modifiers::CTRL)));
     assert!(!app.editors[&id].page.is_dirty());
-    assert!(app.doc.as_ref().unwrap().dirty);
+    assert!(app.doc.as_ref().unwrap().dirty());
 }
 
 #[test]
@@ -112,7 +112,7 @@ fn cancelling_the_pages_question_after_dont_save_keeps_the_map_unsaved() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "one");
     typing(&mut app, id, "!");
-    app.doc.as_mut().unwrap().checkpoint();
+    app.doc.as_mut().unwrap().change(|_| ());
     send(&mut app, Message::CloseRequested);
     assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
     send(&mut app, Message::DialogDiscard);
@@ -120,7 +120,7 @@ fn cancelling_the_pages_question_after_dont_save_keeps_the_map_unsaved() {
     send(&mut app, Message::DialogCancel);
     assert!(app.dialogs.is_empty());
     // Cancel aborts the whole exit: the map is still unsaved and is asked about again.
-    assert!(app.doc.as_ref().unwrap().dirty);
+    assert!(app.doc.as_ref().unwrap().dirty());
     send(&mut app, Message::CloseRequested);
     assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Exit))));
 }

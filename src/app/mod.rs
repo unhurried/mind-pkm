@@ -308,8 +308,12 @@ impl App {
         }
         match &self.doc {
             Some(doc) => {
-                let name = doc.map.path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
-                format!("{}{} - Mind PKM", name.unwrap_or_else(|| "Untitled".into()), if doc.dirty { " *" } else { "" })
+                let name = doc.map().path().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+                format!(
+                    "{}{} - Mind PKM",
+                    name.unwrap_or_else(|| "Untitled".into()),
+                    if doc.dirty() { " *" } else { "" }
+                )
             }
             None => "Mind PKM".into(),
         }
@@ -492,10 +496,7 @@ impl App {
             Message::CloseRequested => self.guard_unsaved(AfterUnsaved::Exit),
             Message::Tick => {
                 let pages = self.editors_tick();
-                let due = self
-                    .doc
-                    .as_ref()
-                    .is_some_and(|d| d.edited_since_refresh && d.last_refresh.elapsed() >= UPDATE_INTERVAL);
+                let due = self.doc.as_ref().is_some_and(|d| d.refresh_due(UPDATE_INTERVAL));
                 Task::batch([pages, if due { self.start_update(false) } else { Task::none() }])
             }
             Message::DialogInput(value) => {
@@ -532,8 +533,8 @@ impl App {
             doc.toggle_selected(id);
         } else if self.modifiers.shift() {
             doc.extend_selection(id);
-        } else if doc.selection.len() > 1 && doc.selection.contains(&id) && id != doc.map.root() {
-            doc.focus = id;
+        } else if doc.selection().len() > 1 && doc.selection().contains(&id) && id != doc.map().root() {
+            doc.set_focus(id);
             click = Some(id);
         } else {
             doc.select(vec![id]);

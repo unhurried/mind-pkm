@@ -75,23 +75,23 @@ impl App {
     /// Arrow key navigation between the shown nodes (Shift extends the selection).
     fn navigate(&mut self, key: &Key) {
         let Some(doc) = &mut self.doc else { return };
-        let focus = doc.focus;
-        let Some(b) = doc.layout.get(focus) else { return };
-        let root = doc.map.root();
+        let focus = doc.focus();
+        let Some(b) = doc.layout().get(focus) else { return };
+        let root = doc.map().root();
         let target = match key {
             Key::Named(Named::ArrowUp) | Key::Named(Named::ArrowDown) => {
                 let up = *key == Key::Named(Named::ArrowUp);
-                doc.layout.neighbor_on_level(focus, up)
+                doc.layout().neighbor_on_level(focus, up)
             }
             Key::Named(Named::ArrowRight) => {
-                if doc.map.is_folded(focus) && focus != root {
-                    doc.map.set_folded(focus, false);
+                if doc.map().is_folded(focus) && focus != root {
+                    doc.unfold_to_navigate(focus);
                     None
                 } else {
                     // The child nearest to the node's vertical center.
                     let cy = b.rect.center_y();
-                    let distance = |n: NodeId| (doc.layout.get(n).unwrap().rect.center_y() - cy).abs();
-                    doc.layout
+                    let distance = |n: NodeId| (doc.layout().get(n).unwrap().rect.center_y() - cy).abs();
+                    doc.layout()
                         .visible_children(focus)
                         .iter()
                         .copied()

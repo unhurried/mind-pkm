@@ -190,7 +190,7 @@ impl App {
                 // Resolved per search, so results reflect links changed since the panel opened.
                 self.search.nodes = match (&self.doc, &self.search.doc_dir) {
                     (Some(doc), Some(dir)) => {
-                        let by_file = pkm::collect_nodes_by_linked_file(&doc.map, doc.map.root());
+                        let by_file = pkm::collect_nodes_by_linked_file(doc.map(), doc.map().root());
                         hits.iter().map(|h| pkm::find_node_for_file(&by_file, &h.file, dir)).collect()
                     }
                     _ => vec![None; hits.len()],
@@ -256,16 +256,16 @@ impl App {
         let Some(i) = self.search.selected else { return Task::none() };
         let target = self.search.nodes.get(i).copied().flatten();
         let Some(doc) = &mut self.doc else { return Task::none() };
-        let Some(node) = target.filter(|&n| doc.map.exists(n)) else {
+        let Some(node) = target.filter(|&n| doc.map().exists(n)) else {
             self.search.status = format!("no node links to this file: {}", self.search.hits[i].relative_path);
             return Task::none();
         };
         // A filter hiding the node would leave nothing to select.
-        if !doc.filter.visible(&doc.map).contains(&node) {
-            doc.filter = Filter::All;
+        if !doc.filter().visible(doc.map()).contains(&node) {
+            doc.set_filter(Filter::All);
         }
         doc.reveal(node);
-        self.search.status = format!("selected: {}", pkm::node_path_text(&doc.map, node));
+        self.search.status = format!("selected: {}", pkm::node_path_text(doc.map(), node));
         self.relayout();
         self.center_on_focus()
     }

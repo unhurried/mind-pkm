@@ -1,5 +1,10 @@
 //! An open map with its view state: the selection, the filter, the layout and
 //! the undo history, and the edits that only concern the map.
+//!
+//! The map and its state change only through `Doc`: every edit is recorded
+//! for undo (`change`, `try_change`, `change_recorded_if`...), and the few
+//! changes that are not say why (`unfold_to_navigate`, `reveal`,
+//! `apply_refresh`, `set_new_node_text`).
 
 use super::layout::{self, MapLayout};
 use super::view;
@@ -7,26 +12,27 @@ use crate::mindmap::{MindMap, NodeId};
 use crate::pkm::{self, commands, filter::Filter};
 use iced::{Rectangle, Size};
 use std::collections::{HashMap, VecDeque};
-use std::time::Instant;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 const UNDO_LIMIT: usize = 100;
 
 pub struct Doc {
     /// Distinguishes this document from a later one in background results.
-    pub(super) generation: u64,
-    pub(super) map: MindMap,
+    generation: u64,
+    map: MindMap,
     /// The selected nodes, in the order they were selected.
-    pub(super) selection: Vec<NodeId>,
+    selection: Vec<NodeId>,
     /// The node single-node commands act on; always among the selection.
-    pub(super) focus: NodeId,
-    pub(super) filter: Filter,
-    pub(super) layout: MapLayout,
+    focus: NodeId,
+    filter: Filter,
+    layout: MapLayout,
     /// Changed since last saved.
-    pub(super) dirty: bool,
+    dirty: bool,
     /// When the last Next Steps / search index refresh started, and whether
     /// the map has been edited since.
-    pub(super) last_refresh: Instant,
-    pub(super) edited_since_refresh: bool,
+    last_refresh: Instant,
+    edited_since_refresh: bool,
     undo: VecDeque<Checkpoint>,
     redo: Vec<Selected>,
     /// The serial number of the last checkpoint.
@@ -71,18 +77,82 @@ impl Doc {
         }
     }
 
+    // --- State ---
+
+    /// Distinguishes this document from a later one in background results.
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn map(&self) -> &MindMap {
+        &self.map
+    }
+
+    /// The selected nodes, in the order they were selected.
+    pub(super) fn selection(&self) -> &[NodeId] {
+        &self.selection
+    }
+
+    /// The node single-node commands act on; always among the selection.
+    pub(super) fn focus(&self) -> NodeId {
+        self.focus
+    }
+
+    pub(super) fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    pub(super) fn set_filter(&mut self, filter: Filter) {
+        self.filter = filter;
+    }
+
+    pub(super) fn layout(&self) -> &MapLayout {
+        &self.layout
+    }
+
+    /// Changed since last saved.
+    pub(super) fn dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Whether the map has been edited since the last Next Steps / search
+    /// index refresh started.
+    #[cfg(test)]
+    pub(super) fn edited_since_refresh(&self) -> bool {
+        self.edited_since_refresh
+    }
+
+    /// Whether a refresh is due: the map has been edited since the last one,
+    /// which started at least `interval` ago.
+    pub(super) fn refresh_due(&self, interval: Duration) -> bool {
+        self.edited_since_refresh && self.last_refresh.elapsed() >= interval
+    }
+
+    /// A Next Steps / search index refresh starts.
+    pub(super) fn refresh_started(&mut self) {
+        self.last_refresh = Instant::now();
+        self.edited_since_refresh = false;
+    }
+
+    /// Saves the map to `path`; it has no unsaved changes then.
+    pub(super) fn save(&mut self, path: &Path) -> Result<(), String> {
+        self.map.save(path)?;
+        self.dirty = false;
+        Ok(())
+    }
+
     // --- Undo ---
 
     /// Records the current map for undo; call before every change. Returns the
     /// checkpoint's serial number.
-    pub(super) fn checkpoint(&mut self) -> u64 {
+    fn checkpoint(&mut self) -> u64 {
         self.record(self.map.clone())
     }
 
     /// Records `before` as the map preceding a change just made (with the
     /// selection, which the change hasn't touched yet). Returns the
     /// checkpoint's serial number.
-    pub(super) fn record(&mut self, before: MindMap) -> u64 {
+    fn record(&mut self, before: MindMap) -> u64 {
         self.push_undo(before);
         self.redo.clear();
         self.dirty = true;
@@ -117,6 +187,40 @@ impl Doc {
         let replaced = std::mem::replace(&mut self.map, map);
         self.map.reserve_ids(bound);
         replaced
+    }
+
+    /// Makes a change, recorded for undo.
+    pub(super) fn change<T>(&mut self, change: impl FnOnce(&mut MindMap) -> T) -> T {
+        self.checkpoint();
+        change(&mut self.map)
+    }
+
+    /// Makes a change, recorded for undo only when `recorded` says so (given
+    /// the map before it, the map after it and the change's result): a change
+    /// not recorded stays as it is.
+    pub(super) fn change_recorded_if<T>(
+        &mut self,
+        change: impl FnOnce(&mut MindMap) -> T,
+        recorded: impl FnOnce(&MindMap, &MindMap, &T) -> bool,
+    ) -> T {
+        let before = self.map.clone();
+        let result = change(&mut self.map);
+        if recorded(&before, &self.map, &result) {
+            self.record(before);
+        }
+        result
+    }
+
+    /// Makes a change, recorded for undo when `kept` says so (given the map
+    /// after it); else the map is put back as it was.
+    pub(super) fn change_or_revert(&mut self, change: impl FnOnce(&mut MindMap), kept: impl FnOnce(&MindMap) -> bool) {
+        let before = self.map.clone();
+        change(&mut self.map);
+        if kept(&self.map) {
+            self.record(before);
+        } else {
+            self.map = before;
+        }
     }
 
     /// Makes a change that may fail; only a successful one is recorded for undo.
@@ -392,7 +496,27 @@ impl Doc {
         }
     }
 
-    /// Unfolds the way to the node and selects it.
+    /// Names a node just created (`new_child`, `new_sibling`): part of the
+    /// undo step of its creation.
+    pub(super) fn set_new_node_text(&mut self, id: NodeId, text: &str) {
+        self.map.set_text(id, text);
+    }
+
+    /// Unfolds a node the user goes into (Right on a folded node). Going
+    /// there is no edit: no undo step, nothing marked as changed.
+    pub(super) fn unfold_to_navigate(&mut self, id: NodeId) {
+        self.map.set_folded(id, false);
+    }
+
+    /// Makes `id`, one of the selected nodes, the one single-node commands act on.
+    pub(super) fn set_focus(&mut self, id: NodeId) {
+        if self.selection.contains(&id) {
+            self.focus = id;
+        }
+    }
+
+    /// Unfolds the way to the node and selects it. Like going into a folded
+    /// node, this is no edit: no undo step, nothing marked as changed.
     pub(super) fn reveal(&mut self, id: NodeId) {
         self.map.unfold_ancestors(id);
         self.select(vec![id]);

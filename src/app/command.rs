@@ -11,7 +11,6 @@ use crate::pkm::{self, next_steps};
 use chrono::Local;
 use iced::Task;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 const NEW_TEXT_PROMPT: &str = "New Text";
 const NEW_NAME_PROMPT: &str = "New Name";
@@ -96,7 +95,7 @@ impl App {
             _ => {}
         }
         let Some(doc) = &mut self.doc else { return Task::none() };
-        let focus = doc.focus;
+        let focus = doc.focus();
         match cmd {
             Command::New | Command::Open | Command::Exit | Command::ToggleBuiltinEditor => Task::none(),
             Command::Save => self.save(None),
@@ -120,7 +119,7 @@ impl App {
                 self.open_input(NEW_TEXT_PROMPT, String::new(), InputAction::NewNode(n, serial))
             }
             Command::EditText => {
-                let text = doc.map.text(focus);
+                let text = doc.map().text(focus);
                 self.open_input(NEW_TEXT_PROMPT, text, InputAction::EditText(focus))
             }
             Command::Cut => self.cut_or_copy(true),
@@ -136,7 +135,7 @@ impl App {
                 Task::none()
             }
             Command::SetLink => {
-                let link = doc.map.link(focus).unwrap_or("").to_string();
+                let link = doc.map().link(focus).unwrap_or("").to_string();
                 self.open_input(LINK_PROMPT, link, InputAction::SetLink(focus))
             }
             Command::CenterSelected => self.center_on_focus(),
@@ -153,7 +152,7 @@ impl App {
 
             // --- PKM ---
             Command::PkmOpen | Command::OpenExternally => {
-                let result = commands::open_targets(&doc.map, &doc.sorted_selection());
+                let result = commands::open_targets(doc.map(), &doc.sorted_selection());
                 let files = self.report(result).unwrap_or_default();
                 if cmd == Command::OpenExternally {
                     files.iter().for_each(|f| self.open_in_desktop(f));
@@ -171,13 +170,12 @@ impl App {
             Command::Search => self.open_search(),
             Command::ToggleCheckmark => {
                 let selection = doc.sorted_selection();
-                doc.checkpoint();
-                commands::toggle_checkmark(&mut doc.map, &selection);
+                doc.change(|map| commands::toggle_checkmark(map, &selection));
                 Task::none()
             }
             Command::AddToToDo => {
                 // In the order the nodes were selected.
-                let selection = doc.selection.clone();
+                let selection = doc.selection().to_vec();
                 match doc.try_change(|map| commands::add_to_todo(map, &selection)) {
                     Ok(created) => doc.select(created),
                     Err(e) => self.message(e),
@@ -187,14 +185,14 @@ impl App {
             Command::NewPage => self.create_documents(true),
             Command::NewDirectory => self.create_documents(false),
             Command::PkmDelete | Command::PkmDeleteNow => {
-                let targets = commands::delete_targets(&doc.map, &doc.sorted_selection());
+                let targets = commands::delete_targets(doc.map(), &doc.sorted_selection());
                 if targets.is_empty() {
                     return Task::none();
                 }
                 if cmd == Command::PkmDeleteNow {
                     return self.delete_docs(&targets);
                 }
-                let text = commands::delete_question(&doc.map, &targets);
+                let text = commands::delete_question(doc.map(), &targets);
                 self.ask(text, ConfirmAction::DeleteDocs(targets));
                 Task::none()
             }
@@ -207,7 +205,7 @@ impl App {
                     return Task::none();
                 }
                 let Some(doc) = &self.doc else { return Task::none() };
-                let result = commands::add_assets(&doc.map, &doc.sorted_selection(), focus);
+                let result = commands::add_assets(doc.map(), &doc.sorted_selection(), focus);
                 if let (Ok(()), Some(page)) = (&result, &page) {
                     self.editors_reload(page);
                 }
@@ -215,11 +213,13 @@ impl App {
                 Task::none()
             }
             Command::FindUnlinked => {
-                match doc.try_change(commands::find_unlinked) {
-                    Ok(n) => {
-                        doc.map.set_folded(n, false);
-                        doc.select(vec![n]);
-                    }
+                let unlinked = doc.try_change(|map| {
+                    let n = commands::find_unlinked(map)?;
+                    map.set_folded(n, false);
+                    Ok::<_, String>(n)
+                });
+                match unlinked {
+                    Ok(n) => doc.select(vec![n]),
                     Err(e) => self.message(e),
                 }
                 Task::none()
@@ -231,19 +231,16 @@ impl App {
     /// and as indented text on the system clipboard.
     fn cut_or_copy(&mut self, cut: bool) -> Task<Message> {
         let Some(doc) = &mut self.doc else { return Task::none() };
-        let root = doc.map.root();
+        let root = doc.map().root();
         let nodes: Vec<NodeId> = doc.sorted_selection().into_iter().filter(|&n| !cut || n != root).collect();
         if nodes.is_empty() {
             return Task::none();
         }
-        let subtrees = nodes.iter().map(|&n| doc.map.extract_subtree(n)).collect();
-        let text = plain_text_outline(&doc.map, &nodes);
+        let subtrees = nodes.iter().map(|&n| doc.map().extract_subtree(n)).collect();
+        let text = plain_text_outline(doc.map(), &nodes);
         if cut {
-            let parent = doc.map.parent(nodes[0]);
-            doc.checkpoint();
-            for &n in &nodes {
-                doc.map.delete(n);
-            }
+            let parent = doc.map().parent(nodes[0]);
+            doc.change(|map| nodes.iter().for_each(|&n| map.delete(n)));
             if let Some(p) = parent {
                 doc.select(vec![p]);
             }
@@ -261,13 +258,14 @@ impl App {
         if subtrees.is_none() && text.is_none() {
             return Task::none();
         }
-        let focus = doc.focus;
-        doc.checkpoint();
-        doc.map.set_folded(focus, false);
-        let pasted = match subtrees {
-            Some(subtrees) => subtrees.iter().map(|s| doc.map.insert_subtree(focus, None, s)).collect(),
-            None => insert_outline(&mut doc.map, focus, text.as_deref().unwrap_or_default()),
-        };
+        let focus = doc.focus();
+        let pasted = doc.change(|map| {
+            map.set_folded(focus, false);
+            match subtrees {
+                Some(subtrees) => subtrees.iter().map(|s| map.insert_subtree(focus, None, s)).collect(),
+                None => insert_outline(map, focus, text.as_deref().unwrap_or_default()),
+            }
+        });
         doc.select(pasted.clone());
         self.warn_if_under_page(&pasted);
         Task::none()
@@ -278,7 +276,7 @@ impl App {
     pub(super) fn warn_if_under_page(&mut self, nodes: &[NodeId]) {
         let Some(doc_dir) = self.doc_dir(false) else { return };
         let Some(doc) = &self.doc else { return };
-        let map = &doc.map;
+        let map = &doc.map();
         let under_page = nodes
             .iter()
             .filter(|&&n| map.exists(n))
@@ -292,9 +290,9 @@ impl App {
     /// Edit (F2): renames a page or directory node with its file, else edits the text.
     fn pkm_edit(&mut self) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
-        let focus = doc.focus;
-        let text = doc.map.text(focus);
-        match commands::edit_kind(&doc.map, &doc.selection, focus) {
+        let focus = doc.focus();
+        let text = doc.map().text(focus);
+        match commands::edit_kind(doc.map(), doc.selection(), focus) {
             Ok(EditKind::Text) => self.open_input(NEW_TEXT_PROMPT, text, InputAction::EditText(focus)),
             Ok(EditKind::Rename(kind)) => self.open_input(NEW_NAME_PROMPT, text, InputAction::Rename(focus, kind)),
             Err(e) => {
@@ -311,21 +309,21 @@ impl App {
         let template = settings::page_template();
         let today = Local::now().date_naive();
         let selection = doc.sorted_selection();
-        let before = doc.map.clone();
-        let results: Vec<Result<PathBuf, String>> = selection
-            .into_iter()
-            .map(|n| {
-                if pages {
-                    commands::new_page(&mut doc.map, n, &template, today)
-                } else {
-                    commands::new_directory(&mut doc.map, n)
-                }
-            })
-            .collect();
+        let create =
+            |map: &mut MindMap| -> Vec<Result<PathBuf, String>> {
+                selection
+                    .into_iter()
+                    .map(|n| {
+                        if pages {
+                            commands::new_page(map, n, &template, today)
+                        } else {
+                            commands::new_directory(map, n)
+                        }
+                    })
+                    .collect()
+            };
         // An undo step only when something was created.
-        if results.iter().any(Result::is_ok) {
-            doc.record(before);
-        }
+        let results = doc.change_recorded_if(create, |_, _, results| results.iter().any(Result::is_ok));
         let mut tasks = Vec::new();
         for result in results {
             if let Some(path) = self.report(result) {
@@ -344,14 +342,14 @@ impl App {
     /// Opens what the node links: a file or directory, a URL, or another node.
     pub(super) fn follow_link(&mut self, id: NodeId) -> Task<Message> {
         let Some(doc) = &mut self.doc else { return Task::none() };
-        if let Some(target) = doc.map.link_node(id) {
+        if let Some(target) = doc.map().link_node(id) {
             doc.reveal(target);
             self.relayout();
             return self.center_on_focus();
         }
-        if let Some(file) = doc.map.link_file(id) {
+        if let Some(file) = doc.map().link_file(id) {
             return self.open_page(&file);
-        } else if let Some(link) = doc.map.link(id).map(str::to_string)
+        } else if let Some(link) = doc.map().link(id).map(str::to_string)
             && let Err(e) = opener::open(&link)
         {
             self.message(format!("failed to open {link}: {e}"));
@@ -362,19 +360,18 @@ impl App {
     /// The document directory of the open map. When it can't be had, the
     /// reason is shown if `report`.
     pub(super) fn doc_dir(&mut self, report: bool) -> Option<PathBuf> {
-        let result = pkm::load_doc_dir(&self.doc.as_ref()?.map);
+        let result = pkm::load_doc_dir(self.doc.as_ref()?.map());
         if report { self.report(result) } else { result.ok() }
     }
 
     /// Refreshes the Next Steps children and the search index in the background.
     pub(super) fn start_update(&mut self, show_errors: bool) -> Task<Message> {
         let Some(doc) = &mut self.doc else { return Task::none() };
-        doc.last_refresh = Instant::now();
-        doc.edited_since_refresh = false;
+        doc.refresh_started();
         let Some(doc_dir) = self.doc_dir(show_errors) else { return Task::none() };
         let Some(doc) = &self.doc else { return Task::none() };
-        let snapshot = next_steps::snapshot(&doc.map, &doc_dir);
-        let generation = doc.generation;
+        let snapshot = next_steps::snapshot(doc.map(), &doc_dir);
+        let generation = doc.generation();
         let today = Local::now().date_naive();
         self.search.updating = true;
         Task::batch([
@@ -389,7 +386,7 @@ impl App {
     /// has been opened meanwhile.
     pub(super) fn next_steps_computed(&mut self, generation: u64, update: &next_steps::Update) {
         if let Some(doc) = &mut self.doc
-            && doc.generation == generation
+            && doc.generation() == generation
         {
             doc.apply_refresh(|map| next_steps::apply(map, update));
         }

@@ -263,8 +263,8 @@ impl App {
     fn status_bar(&self) -> Element<'_, Message> {
         let (filter, path) = match &self.doc {
             Some(doc) => (
-                format!("Filter: {}", doc.filter.label()),
-                if doc.map.exists(doc.focus) { pkm::node_path_text(&doc.map, doc.focus) } else { String::new() },
+                format!("Filter: {}", doc.filter().label()),
+                if doc.map().exists(doc.focus()) { pkm::node_path_text(doc.map(), doc.focus()) } else { String::new() },
             ),
             None => (String::new(), String::new()),
         };
@@ -287,29 +287,29 @@ impl App {
     // --- The map ---
 
     fn map_view<'a>(&'a self, doc: &'a Doc) -> Element<'a, Message> {
-        let size = doc.layout.size;
+        let size = doc.layout().size;
         let mut layers: Stack<Message> = Stack::new().width(size.width).height(size.height);
         layers = layers.push(
-            canvas_widget(EdgeLayer { layout: &doc.layout, cache: &self.edges, zoom: self.zoom })
+            canvas_widget(EdgeLayer { layout: doc.layout(), cache: &self.edges, zoom: self.zoom })
                 .width(size.width)
                 .height(size.height),
         );
         // The branch point handles go under the nodes: a wide node next to a
         // narrow parent keeps its own clicks where it reaches into a handle.
-        let root = doc.map.root();
-        for b in doc.layout.boxes.iter().filter(|b| b.id != root) {
-            if let Some(point) = branch_point(&doc.layout, b) {
+        let root = doc.map().root();
+        for b in doc.layout().boxes.iter().filter(|b| b.id != root) {
+            if let Some(point) = branch_point(doc.layout(), b) {
                 layers = layers.push(branch_handle(b.id, point, self.zoom));
             }
         }
-        for b in &doc.layout.boxes {
+        for b in &doc.layout().boxes {
             layers = layers.push(pin(self.node_view(doc, b)).position(b.rect.position()));
             if b.folded {
-                layers = layers.push(fold_marker(b, doc.map.children(b.id).len(), self.zoom));
+                layers = layers.push(fold_marker(b, doc.map().children(b.id).len(), self.zoom));
             }
         }
         if let Some(target) = self.drop_indicator()
-            && let Some(b) = doc.layout.get(target.node)
+            && let Some(b) = doc.layout().get(target.node)
         {
             layers = layers.push(drop_indicator(b.rect, target.place));
         }
@@ -342,7 +342,7 @@ impl App {
 
     fn node_view<'a>(&'a self, doc: &'a Doc, b: &NodeBox) -> Element<'a, Message> {
         let id = b.id;
-        let map = &doc.map;
+        let map = &doc.map();
         let label = map.text(id);
         let zoom = self.zoom;
         let tsize = self.measure_cache.get(&label).copied().unwrap_or(Size::new(NODE_MAX_TEXT_WIDTH, 20.0) * zoom);
@@ -382,8 +382,8 @@ impl App {
             ));
         }
         // The focused node is always among the selected ones.
-        let selected = doc.selection.contains(&id);
-        let border_width = if doc.focus == id { 2 } else { 1 };
+        let selected = doc.selection().contains(&id);
+        let border_width = if doc.focus() == id { 2 } else { 1 };
         let boxed = container(content)
             .padding(NODE_PADDING.map(|p| p * zoom))
             .width(b.rect.width)
