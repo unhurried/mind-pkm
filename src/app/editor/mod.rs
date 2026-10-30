@@ -49,6 +49,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 pub use tables::TableMsg;
+use tables::TableUi;
 use view::HitInfo;
 
 /// The size of the first editor window, when none was remembered.
@@ -243,19 +244,14 @@ pub struct Editor {
     /// When and where the last inserted files went (files dropped together go on separate lines).
     last_insert: Option<(std::time::Instant, usize)>,
     pub find: Option<find::FindBar>,
-    /// A press on a cell started dragging over cells.
-    cell_drag: bool,
+    /// The table being edited, as the window shows it.
+    table_ui: TableUi,
     /// The block a press started in, while the button is held: dragging onto
     /// another block selects the blocks between.
     block_drag: Option<usize>,
-    /// Where the cells' range ends (the cursor's cell is where it starts).
-    range_head: Option<(usize, usize)>,
-    /// Where a cell's right-click menu is open.
-    cell_menu: Option<Point>,
-    /// The pointer in the window, while a table is edited.
+    /// The pointer in the window, while a table is edited or the assets pane
+    /// is shown (where a menu opens, a dragged item is).
     pointer_at: Point,
-    /// The table toolbar's body rows and columns as typed.
-    resize_fields: (Option<String>, Option<String>),
 }
 
 impl Editor {
@@ -285,12 +281,9 @@ impl Editor {
             copied: None,
             last_insert: None,
             find: None,
-            cell_drag: false,
+            table_ui: TableUi::default(),
             block_drag: None,
-            range_head: None,
-            cell_menu: None,
             pointer_at: Point::ORIGIN,
-            resize_fields: (None, None),
         }
     }
 
@@ -341,7 +334,7 @@ impl Editor {
         }
         self.refresh_find();
         if !self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
-            (self.cell_drag, self.range_head, self.cell_menu, self.resize_fields) = (false, None, None, (None, None));
+            self.table_ui = TableUi::default();
         }
         let reveals = command || (may_reveal && self.cursor_state() != before);
         if reveals { Task::batch([task, self.reveal(prefs)]) } else { task }
@@ -436,7 +429,7 @@ impl Editor {
             }
             EditorMsg::Menu(m) => {
                 self.menu = m;
-                self.cell_menu = None;
+                self.table_ui.menu = None;
                 Task::none()
             }
             EditorMsg::PointerOver(info, p) => {
@@ -466,7 +459,7 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::Released => {
-                (self.cell_drag, self.block_drag) = (false, None);
+                (self.table_ui.drag, self.block_drag) = (false, None);
                 self.assets_released(prefs)
             }
             EditorMsg::CodeLanguage(language) => {
@@ -570,11 +563,11 @@ impl Editor {
         if !self.dialogs.is_empty() {
             self.dialogs.pop_front();
         } else if self.menu.is_some()
-            || self.cell_menu.is_some()
+            || self.table_ui.menu.is_some()
             || self.assets.as_ref().is_some_and(|a| a.menu.is_some())
         {
             self.menu = None;
-            self.cell_menu = None;
+            self.table_ui.menu = None;
             if let Some(pane) = &mut self.assets {
                 pane.menu = None;
             }
@@ -920,7 +913,7 @@ impl Editor {
     fn run(&mut self, cmd: EditorCommand, prefs: &EditorPrefs, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         use EditorCommand as C;
         self.select_all_again &= cmd == C::SelectAll;
-        self.cell_menu = None;
+        self.table_ui.menu = None;
         if self.source.is_none() && self.table_command(cmd) {
             return self.focus();
         }
@@ -1607,7 +1600,7 @@ pub fn opens_in_editor(path: &Path, builtin: bool) -> bool {
 /// The subscription of the editor windows: while cells, blocks or an item of
 /// the assets pane are dragged, the release of the button, wherever it is.
 pub fn subscription(editors: &BTreeMap<window::Id, Editor>) -> Subscription<Message> {
-    if editors.values().any(|e| e.cell_drag || e.block_drag.is_some() || e.asset_pressed()) {
+    if editors.values().any(|e| e.table_ui.drag || e.block_drag.is_some() || e.asset_pressed()) {
         iced::event::listen_with(|event, _status, window| match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 Some(Message::Editor(window, EditorMsg::Released))

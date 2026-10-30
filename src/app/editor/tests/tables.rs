@@ -142,11 +142,11 @@ fn rows_and_columns_from_the_cell_menu() {
     click_after(&mut app, id, "1");
     editor(&mut app, id, EditorMsg::PointerAt(iced::Point::new(100.0, 200.0)));
     editor(&mut app, id, EditorMsg::Table(TableMsg::Menu(2, 1)));
-    assert_eq!(app.editors[&id].cell_menu, Some(iced::Point::new(100.0, 200.0)));
+    assert_eq!(app.editors[&id].table_ui.menu, Some(iced::Point::new(100.0, 200.0)));
     assert_eq!(cell(&app, id), (2, 1), "the right-clicked cell");
     editor(&mut app, id, EditorMsg::Table(TableMsg::MenuItem(crate::app::editor::keys::TableMenuItem::CopyColumn)));
     assert_eq!(clipboard(&app).text.as_deref(), Some("b\n2\n4"));
-    assert_eq!(app.editors[&id].cell_menu, None);
+    assert_eq!(app.editors[&id].table_ui.menu, None);
     editor(&mut app, id, EditorMsg::Table(TableMsg::Menu(1, 0)));
     let item = crate::app::editor::keys::TableMenuItem::Command(EditorCommand::RowBelow);
     editor(&mut app, id, EditorMsg::Table(TableMsg::MenuItem(item)));

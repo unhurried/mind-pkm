@@ -308,7 +308,7 @@ impl Editor {
         if let Some(i) = self.menu {
             layers = layers.push(self.menu_dropdown(i, p, prefs));
         }
-        if let Some(at) = self.cell_menu {
+        if let Some(at) = self.table_ui.menu {
             layers = layers.push(self.cell_menu_view(at, p));
         }
         if let Some(pane) = &self.assets {
