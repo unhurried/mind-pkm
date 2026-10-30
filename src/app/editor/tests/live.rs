@@ -3,13 +3,7 @@
 use super::*;
 
 fn shown(app: &App, id: window::Id) -> String {
-    app.editors[&id]
-        .page
-        .active
-        .as_ref()
-        .and_then(|a| a.live.as_ref())
-        .map(|l| l.display.text.clone())
-        .unwrap_or_default()
+    app.editors[&id].page.active.as_ref().and_then(|a| a.live()).map(|l| l.display.text.clone()).unwrap_or_default()
 }
 
 #[test]
@@ -50,7 +44,7 @@ fn deleting_rendered_text_keeps_or_removes_its_markup() {
     assert_eq!(shown(&app, id), "bold x");
     // Selecting `bo` of the rendered word and deleting it.
     live(&mut app, id, LiveMsg::Click { at: 0, extend: false });
-    let l = app.editors[&id].page.active.as_ref().unwrap().live.clone().unwrap();
+    let l = app.editors[&id].page.active.as_ref().unwrap().live().cloned().unwrap();
     let start = l.display.text.find("bo").unwrap();
     live(&mut app, id, LiveMsg::Click { at: start, extend: false });
     live(&mut app, id, LiveMsg::Drag(start + 2));
@@ -64,7 +58,7 @@ fn deleting_rendered_text_keeps_or_removes_its_markup() {
     assert_eq!(shown(&app, id), "a bold b");
     live(&mut app, id, LiveMsg::Click { at: 2, extend: false });
     // From the bold's start (now shown with its markers) to its end.
-    let l = app.editors[&id].page.active.as_ref().unwrap().live.clone().unwrap();
+    let l = app.editors[&id].page.active.as_ref().unwrap().live().cloned().unwrap();
     let (s, e) = (l.display.text.find("**").unwrap(), l.display.text.rfind("**").unwrap() + 2);
     live(&mut app, id, LiveMsg::Click { at: s, extend: false });
     live(&mut app, id, LiveMsg::Drag(e));

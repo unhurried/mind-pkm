@@ -9,7 +9,7 @@ fn table_of(app: &App, id: window::Id) -> crate::markdown::table::Table {
 }
 
 fn cell_range(app: &App, id: window::Id) -> Option<crate::markdown::table::CellRange> {
-    app.editors[&id].page.active.as_ref().unwrap().table.as_ref().unwrap().range
+    app.editors[&id].page.active.as_ref().unwrap().table().unwrap().range
 }
 
 fn rows(app: &App, id: window::Id) -> Vec<Vec<String>> {

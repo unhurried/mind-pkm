@@ -334,7 +334,7 @@ impl Editor {
             self.status.clear();
         }
         self.refresh_find();
-        if !self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
+        if !self.page.active.as_ref().is_some_and(|a| a.table().is_some()) {
             self.table_ui = TableUi::default();
         }
         let reveals = command || (may_reveal && self.cursor_state() != before);
@@ -349,14 +349,14 @@ impl Editor {
             blocks: self.page.blocks,
             revision: self.page.revision,
             region: self.page.active.as_ref().map(|a| a.region.clone()),
-            cell: self.page.active.as_ref().and_then(|a| a.table.as_ref()).map(|t| (t.cell, t.cell_sel)),
+            cell: self.page.active.as_ref().and_then(|a| a.table()).map(|t| (t.cell, t.cell_sel)),
             source: self.source.as_ref().map(Content::cursor),
         }
     }
 
     /// Scrolls the page to show the cursor.
     fn reveal(&self, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        if self.source.is_none() && self.page.active.as_ref().is_some_and(|a| a.live.is_some()) {
+        if self.source.is_none() && self.page.active.as_ref().is_some_and(|a| a.live().is_some()) {
             return scroll::reveal_live(self.id("active"), self.id("doc"));
         }
         let (before, kind) = match (&self.source, &self.page.active) {
@@ -364,10 +364,12 @@ impl Editor {
                 self.page.text[..self.page.sel.head.min(self.page.text.len())].to_string(),
                 crate::markdown::BlockKind::Paragraph,
             ),
-            (None, Some(a)) if a.table.is_some() => return scroll::reveal_box(self.id("active-cell"), self.id("doc")),
-            (None, Some(a)) if a.code.is_some() => {
-                let code = a.code.as_ref().map_or("", |c| c.text());
-                let at = a.code.as_ref().map_or(0, |c| c.to_body(self.page.sel.head)).min(code.len());
+            (None, Some(a)) if a.table().is_some() => {
+                return scroll::reveal_box(self.id("active-cell"), self.id("doc"));
+            }
+            (None, Some(a)) if a.code().is_some() => {
+                let code = a.code().map_or("", |c| c.text());
+                let at = a.code().map_or(0, |c| c.to_body(self.page.sel.head)).min(code.len());
                 let (size, font, padding) = view::code_text_style(prefs.zoom);
                 let caret = scroll::CaretText {
                     before: code[..at].to_string(),
@@ -673,7 +675,7 @@ impl Editor {
         }
         let Some(active) = &self.page.active else { return Task::none() };
         let region = active.region.clone();
-        let in_table = active.table.is_some();
+        let in_table = active.table().is_some();
         if in_table {
             return self.table_bind(bind);
         }
@@ -721,7 +723,7 @@ impl Editor {
                     }
                     return self.focus();
                 }
-                let code = self.page.active.as_ref().and_then(|a| a.code.as_ref());
+                let code = self.page.active.as_ref().and_then(|a| a.code());
                 if let Some(code) = code.filter(|c| sel.is_empty() && c.to_body(sel.head) == 0) {
                     // At the start of the code: an empty block goes, else to the block before.
                     if code.text().is_empty() {
@@ -1305,7 +1307,7 @@ impl Editor {
         }
         if let Some(a) = &self.page.active {
             let r = a.region.clone();
-            if a.table.is_some() {
+            if a.table().is_some() {
                 self.page.select_blocks(self.page.active_block().unwrap_or(0), self.page.active_block().unwrap_or(0));
                 return Task::none();
             }
@@ -1322,7 +1324,7 @@ impl Editor {
     fn copy(&mut self, markdown_only: bool, effects: &mut Vec<Effect>) -> bool {
         // A range of table cells: tab-separated text and an HTML table, or a Markdown table.
         if let Some(a) = &self.page.active
-            && let Some(state) = &a.table
+            && let Some(state) = a.table()
             && let Some(range) = state.range
         {
             let t = &state.table;
@@ -1357,7 +1359,7 @@ impl Editor {
             let text = source.text();
             let sel = content_sel(source, &text);
             self.page.set_source_text(text, sel);
-        } else if self.page.active.as_ref().and_then(|a| a.table.as_ref()).is_some_and(|t| t.range.is_some()) {
+        } else if self.page.active.as_ref().and_then(|a| a.table()).is_some_and(|t| t.range.is_some()) {
             self.clear_cells();
         } else {
             self.page.perform(Action::Edit(Edit::Delete));
@@ -1379,7 +1381,7 @@ impl Editor {
             }
         }
         match paste::convert(&text, content.html.as_deref(), in_code, plain, self.copied.as_deref()) {
-            Paste::Cells(grid) if self.page.active.as_ref().is_some_and(|a| a.table.is_some()) => {
+            Paste::Cells(grid) if self.page.active.as_ref().is_some_and(|a| a.table().is_some()) => {
                 self.page.change_table(|t, cell| {
                     t.paste(cell, &grid);
                     cell

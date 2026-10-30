@@ -94,7 +94,7 @@ fn pasted(app: &mut App, id: window::Id, text: &str, html: Option<&str>, plain: 
 }
 
 fn cell(app: &App, id: window::Id) -> (usize, usize) {
-    app.editors[&id].page.active.as_ref().unwrap().table.as_ref().unwrap().cell
+    app.editors[&id].page.active.as_ref().unwrap().table().unwrap().cell
 }
 
 fn live(app: &mut App, id: window::Id, msg: LiveMsg) {

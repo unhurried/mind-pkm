@@ -331,7 +331,7 @@ fn deleting_three_blocks() {
 
 /// The text the text editor of the block being edited holds.
 fn editor_text(app: &App, id: window::Id) -> String {
-    app.editors[&id].page.active.as_ref().map(|a| a.content.text()).unwrap_or_default()
+    app.editors[&id].page.active.as_ref().and_then(|a| a.content()).map(|c| c.text()).unwrap_or_default()
 }
 
 #[test]

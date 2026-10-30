@@ -11,7 +11,7 @@ use super::{Ctx, TextBase};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext, EditorCommand};
 use crate::app::editor::live_text::{LiveText, Run, RunKind, TextLook};
-use crate::app::editor::page::{Active, Live, TableState};
+use crate::app::editor::page::{Active, Live, Mode, TableState};
 use crate::app::editor::render::{RenderKey, Rendered};
 use crate::app::editor::{Editor, EditorMsg, EditorPrefs, TableMsg};
 use crate::app::ime::ime_aligned;
@@ -21,6 +21,7 @@ use crate::markdown::edit::CodeBody;
 use crate::markdown::live::{Display, Look, Object};
 use crate::markdown::{BlockKind, images, table};
 use iced::advanced::text::Wrapping;
+use iced::widget::text_editor::Content;
 use iced::widget::{
     Column, Row, button, column, container, image, mouse_area, row, rule, space, svg, text, text_editor, text_input,
 };
@@ -182,15 +183,16 @@ impl Editor {
         width: f32,
     ) -> Element<'a, EditorMsg> {
         let p = ctx.p;
-        if let Some(state) = &a.table {
-            return container(self.table_editor(a, state, ctx, prefs, width)).id(self.id("active-box")).into();
-        }
-        if let Some(live) = &a.live {
-            return container(self.live_view(a, live, ctx, prefs, width)).id(self.id("active-box")).into();
-        }
-        if let Some(code) = &a.code {
-            return self.code_editor(a, code, ctx, prefs);
-        }
+        let content = match &a.mode {
+            Mode::Table(state, _) => {
+                return container(self.table_editor(a, state, ctx, prefs, width)).id(self.id("active-box")).into();
+            }
+            Mode::Live(live) => {
+                return container(self.live_view(a, live, ctx, prefs, width)).id(self.id("active-box")).into();
+            }
+            Mode::Code(code, content) => return self.code_editor(a, code, content, ctx, prefs),
+            Mode::Source(content) => content,
+        };
         let (size, font, padding) = region_text_style(&a.kind, ctx.zoom);
         let code = a.kind.is_code();
         let bind = BindContext { auto_pair: prefs.auto_pair, code, source_mode: false, table: false };
@@ -201,7 +203,7 @@ impl Editor {
             code: None,
         };
         let background = if code { p.code_bg } else { Color::TRANSPARENT };
-        let editor = text_editor(&a.content)
+        let editor = text_editor(content)
             .id(self.id("active"))
             .on_action(EditorMsg::Action)
             .key_binding(move |k| keys::binding(k, bind))
@@ -249,6 +251,7 @@ impl Editor {
         &'a self,
         a: &'a Active,
         code: &'a CodeBody,
+        content: &'a Content,
         ctx: &Ctx<'a>,
         prefs: &EditorPrefs,
     ) -> Element<'a, EditorMsg> {
@@ -261,7 +264,7 @@ impl Editor {
         let settings =
             highlight::Settings { dark: prefs.dark, page_start: false, find: self.find_query(), code: Some(lang) };
         let (size, font, padding) = code_text_style(ctx.zoom);
-        let editor = text_editor(&a.content)
+        let editor = text_editor(content)
             .id(self.id("active"))
             .on_action(EditorMsg::Action)
             .key_binding(move |k| keys::binding(k, bind))
@@ -422,7 +425,7 @@ impl Editor {
                     color: p.text,
                 };
                 let active = (r, c) == state.cell;
-                let content: Element<EditorMsg> = if active && let Some(live) = &a.live {
+                let content: Element<EditorMsg> = if active && let Some(live) = a.live() {
                     let editor = self
                         .live_text(live, base, ctx, cell_width - 16.0, Vec::new())
                         .key_binding(move |k| keys::binding(k, bind));

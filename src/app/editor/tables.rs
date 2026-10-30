@@ -39,17 +39,17 @@ pub(super) struct TableUi {
 
 impl Editor {
     fn table_cell(&self) -> Option<((usize, usize), usize, usize)> {
-        let state = self.page.active.as_ref()?.table.as_ref()?;
+        let state = self.page.active.as_ref()?.table()?;
         Some((state.cell, state.table.rows.len(), state.table.columns()))
     }
 
     fn range_mut(&mut self) -> Option<&mut Option<CellRange>> {
-        Some(&mut self.page.active.as_mut()?.table.as_mut()?.range)
+        Some(&mut self.page.active.as_mut()?.table_mut()?.range)
     }
 
     /// The selected range of cells, or the cursor's cell.
     fn cells(&self) -> Option<CellRange> {
-        let state = self.page.active.as_ref()?.table.as_ref()?;
+        let state = self.page.active.as_ref()?.table()?;
         Some(state.range.unwrap_or(CellRange::new(state.cell, state.cell)))
     }
 
@@ -128,7 +128,7 @@ impl Editor {
 
     /// Delete or Backspace on a range of cells: they become empty.
     pub(super) fn clear_cells(&mut self) {
-        let Some(range) = self.page.active.as_ref().and_then(|a| a.table.as_ref()).and_then(|s| s.range) else {
+        let Some(range) = self.page.active.as_ref().and_then(|a| a.table()).and_then(|s| s.range) else {
             return;
         };
         self.page.change_table(|t, _| {
@@ -147,7 +147,7 @@ impl Editor {
     /// Keys bound in a table's cell.
     pub(super) fn table_bind(&mut self, bind: Bind) -> Task<EditorMsg> {
         let Some(((r, c), rows, cols)) = self.table_cell() else { return Task::none() };
-        let range = self.page.active.as_ref().and_then(|a| a.table.as_ref()).and_then(|s| s.range);
+        let range = self.page.active.as_ref().and_then(|a| a.table()).and_then(|s| s.range);
         if range.is_some() {
             match bind {
                 Bind::Delete | Bind::Backspace => {
