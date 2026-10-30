@@ -8,20 +8,27 @@ use super::theme::{
     editor_style,
 };
 use crate::app::editor::assets::{DropTarget, content_end};
+use crate::app::editor::column::{self, Gap, Shown};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext};
 use crate::app::editor::{AssetsMsg, Editor, EditorMsg, EditorPrefs};
 use crate::app::ime::ime_aligned;
 use crate::app::view::APP_FONT;
-use crate::markdown::BlockKind;
 use crate::markdown::parse::ContainerKind;
 use iced::advanced::text::Wrapping;
 use iced::widget::{Column, column, container, mouse_area, row, scrollable, space, text_editor};
 use iced::{Color, Element, Fill};
 
-/// What a block in the column is, and the containers around it (with their
-/// index in the page's parse when known).
-type Described = (BlockKind, Vec<(ContainerKind, Option<usize>)>);
+/// The height of the gap above an entry of the column.
+fn gap_height(gap: Gap, zoom: f32) -> f32 {
+    let unit = BLOCK_GAP * zoom;
+    match gap {
+        Gap::None => 0.0,
+        Gap::Tight => 2.0 * zoom,
+        Gap::Heading => unit * 1.6,
+        Gap::Normal => unit,
+    }
+}
 
 /// `content` inside the containers `kinds` (outermost first): a quote's bar,
 /// a list item's indentation.
@@ -64,94 +71,12 @@ impl Editor {
             None => {
                 let mut col = Column::new().width(width);
                 let page = &self.page;
-                let doc = &page.doc;
-                // Tight list items stay close together; headings get more room above.
-                let gap = |prev: Option<&BlockKind>, kind: &BlockKind| -> f32 {
-                    let unit = BLOCK_GAP * ctx.zoom;
-                    match (prev, kind) {
-                        (None, _) => 0.0,
-                        (Some(BlockKind::ListItem(a)), BlockKind::ListItem(b)) if !b.loose && a.list == b.list => {
-                            2.0 * ctx.zoom
-                        }
-                        (_, BlockKind::Heading(_)) => unit * 1.6,
-                        _ => unit,
-                    }
-                };
                 let active = page.active.as_ref();
                 let selected = page.blocks.map(|(a, b)| a.min(b)..=a.max(b));
-                // What the column shows: the blocks, with the active region in
-                // place of the blocks it covers (a new paragraph before the
-                // block after it).
-                enum Entry {
-                    Block(usize),
-                    Active,
-                }
-                let mut entries = Vec::new();
-                let mut active_block = None;
-                for (i, block) in doc.blocks.iter().enumerate() {
-                    if let Some(a) = active {
-                        let overlaps = block.range.end >= a.region.start && block.range.start <= a.region.end;
-                        let placed = entries.iter().any(|e| matches!(e, Entry::Active));
-                        if page.pending.is_none() && overlaps {
-                            if !placed {
-                                entries.push(Entry::Active);
-                                active_block = Some(i);
-                            }
-                            continue;
-                        }
-                        if !placed && page.pending.as_ref().is_some_and(|pd| pd.at <= block.range.start) {
-                            entries.push(Entry::Active);
-                        }
-                    }
-                    entries.push(Entry::Block(i));
-                }
-                if active.is_some() && !entries.iter().any(|e| matches!(e, Entry::Active)) {
-                    entries.push(Entry::Active);
-                }
-                // The kind of what an entry shows, and the containers around it
-                // (with their index, when known).
-                let describe = |e: &Entry| -> Described {
-                    let of_block = |i: usize| -> Described {
-                        let b = &doc.blocks[i];
-                        (b.kind.clone(), b.outer.iter().map(|&c| (doc.containers[c].kind, Some(c))).collect())
-                    };
-                    match (e, &page.pending, active_block) {
-                        (Entry::Block(i), _, _) => of_block(*i),
-                        (Entry::Active, Some(pd), _) => {
-                            (BlockKind::Paragraph, pd.outer.iter().map(|&k| (k, None)).collect())
-                        }
-                        (Entry::Active, None, Some(i)) => {
-                            (active.map_or(BlockKind::Paragraph, |a| a.kind.clone()), of_block(i).1)
-                        }
-                        (Entry::Active, None, None) => (BlockKind::Paragraph, Vec::new()),
-                    }
-                };
-                // The source range an entry covers.
-                let covers = |e: &Entry| -> std::ops::Range<usize> {
-                    match (e, &page.pending, active) {
-                        (Entry::Block(i), _, _) => doc.blocks[*i].range.clone(),
-                        (Entry::Active, Some(pd), _) => pd.at..pd.at,
-                        (Entry::Active, None, Some(a)) => a.region.clone(),
-                        (Entry::Active, None, None) => 0..0,
-                    }
-                };
-                let mut previous: Option<Described> = None;
                 let mut previous_end = None;
-                for entry in &entries {
-                    let (kind, outer) = describe(entry);
-                    let space_above = gap(previous.as_ref().map(|p| &p.0), &kind);
+                for entry in column::entries(page) {
+                    let space_above = gap_height(entry.gap, ctx.zoom);
                     if space_above > 0.0 {
-                        // Inside the containers both sides share: a quote's bar goes on.
-                        let shared: Vec<ContainerKind> = previous
-                            .as_ref()
-                            .map(|(_, prev)| {
-                                prev.iter()
-                                    .zip(&outer)
-                                    .take_while(|(a, b)| a.0 == b.0 && (a.1.is_none() || b.1.is_none() || a.1 == b.1))
-                                    .map(|(a, _)| a.0)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
                         // A click in the gap goes to the nearer block: the upper
                         // half to the end of the one above, the lower half to the
                         // start of the one below.
@@ -165,19 +90,19 @@ impl Editor {
                             area.into()
                         };
                         let gap_view: Element<EditorMsg> = match previous_end {
-                            Some(end) => column![half(end), half(covers(entry).start)].into(),
-                            None => half(covers(entry).start),
+                            Some(end) => column![half(end), half(entry.covers.start)].into(),
+                            None => half(entry.covers.start),
                         };
-                        col = col.push(in_containers(gap_view, &shared, p, ctx.zoom));
+                        // Inside the containers both sides share: a quote's bar goes on.
+                        col = col.push(in_containers(gap_view, &entry.shared, p, ctx.zoom));
                     }
-                    let kinds: Vec<ContainerKind> = outer.iter().map(|(k, _)| *k).collect();
+                    let kinds = entry.kinds();
                     let inner = inner_width(width, &kinds, ctx.zoom);
-                    let shown: Element<EditorMsg> = match (entry, active) {
-                        (Entry::Active, Some(a)) => {
+                    let shown: Element<EditorMsg> = match (entry.shown, active) {
+                        (Shown::Active, Some(a)) => {
                             in_containers(self.active_view(a, ctx, prefs, inner), &kinds, p, ctx.zoom)
                         }
-                        (Entry::Block(i), _) => {
-                            let i = *i;
+                        (Shown::Block(i), _) => {
                             let rendered = self.block_view(i, ctx, inner);
                             let is_selected = selected.as_ref().is_some_and(|s| s.contains(&i));
                             let rendered: Element<EditorMsg> = if is_selected {
@@ -201,19 +126,18 @@ impl Editor {
                             }
                             area.into()
                         }
-                        (Entry::Active, None) => continue,
+                        (Shown::Active, None) => continue,
                     };
                     col = col.push(shown);
                     // Where a dragged item would go as a paragraph of its own.
                     if let Some(DropTarget::Paragraph { at }) = ctx.editor.drop_target()
-                        && content_end(&page.text, covers(entry)) == *at
+                        && content_end(&page.text, entry.covers.clone()) == *at
                     {
                         col = col.push(
                             container(space().height(2)).width(Fill).style(move |_| container::background(p.link)),
                         );
                     }
-                    previous_end = Some(covers(entry).end);
-                    previous = Some((kind, outer));
+                    previous_end = Some(entry.covers.end);
                 }
                 // Room to click below the last block.
                 let last = previous_end.map_or(0, |end| content_end(&page.text, 0..end));

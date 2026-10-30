@@ -9,6 +9,7 @@
 
 mod assets;
 pub mod clipboard;
+mod column;
 mod find;
 mod flow;
 mod highlight;
