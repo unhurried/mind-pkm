@@ -127,7 +127,7 @@ impl App {
             Command::Paste => iced::clipboard::read().map(|text| MapMsg::ClipboardRead(text).into()),
             Command::MoveUp | Command::MoveDown => {
                 doc.move_focus(cmd == Command::MoveUp);
-                self.keep_parent_in_place = true;
+                self.viewport.keep_parent_in_place = true;
                 Task::none()
             }
             Command::ToggleFold => {
@@ -142,11 +142,11 @@ impl App {
             // The relayout after the command keeps the focused node in place.
             Command::ZoomIn | Command::ZoomOut | Command::ZoomReset => {
                 let zoom = match cmd {
-                    Command::ZoomIn => zoom_step(viewport::ZOOM_STEPS, self.zoom, 1),
-                    Command::ZoomOut => zoom_step(viewport::ZOOM_STEPS, self.zoom, -1),
+                    Command::ZoomIn => zoom_step(viewport::ZOOM_STEPS, self.viewport.zoom(), 1),
+                    Command::ZoomOut => zoom_step(viewport::ZOOM_STEPS, self.viewport.zoom(), -1),
                     _ => 1.0,
                 };
-                self.set_zoom(zoom);
+                self.viewport.set_zoom(zoom);
                 Task::none()
             }
 

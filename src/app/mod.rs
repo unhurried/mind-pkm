@@ -41,13 +41,13 @@ use editor::{Editor, EditorMsg, EditorPrefs, RenderCache, RenderKey};
 use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::scrollable;
-use iced::{Point, Size, Subscription, Task, Vector, window};
+use iced::{Point, Size, Subscription, Task, window};
 use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use viewport::Pan;
+use viewport::MapViewport;
 
 /// The periodic Next Steps / search index refresh runs at most this often, and
 /// only after the map changed.
@@ -262,25 +262,11 @@ pub struct App {
     window_position: Option<Point>,
     /// The window as it is to be restored on the next start.
     window: WindowGeometry,
-    /// The map's scroll position, as last scrolled to or reported.
-    scroll_offset: Vector,
-    /// Set by a move among siblings: the parent stays in place on screen
-    /// after the message, not the moved node.
-    keep_parent_in_place: bool,
-    /// The size of the map's scrollable as last reported; None when it may have changed.
-    viewport_size: Option<Size>,
-    /// The map's zoom level, one of `viewport::ZOOM_STEPS`.
-    zoom: f32,
-    /// Ctrl+wheel movement not yet turned into a zoom step, in notches.
-    wheel_zoom: f32,
-    /// Node text sizes at the current zoom, by text.
-    measure_cache: HashMap<String, Size>,
-    /// The drawn edges, cleared on every relayout.
-    edges: iced::widget::canvas::Cache,
+    /// What the map window shows of the map: zoom, scrolling, panning.
+    viewport: MapViewport,
     clipboard: Option<Clipboard>,
     /// The status bar message.
     status: Status,
-    pan: Option<Pan>,
     /// A node drag, armed by a press on a selected node.
     drag: Option<NodeDrag>,
     /// Removes what the editors' assets panes delete: to the Recycle Bin.
@@ -334,16 +320,9 @@ impl App {
             window_size: INITIAL_WINDOW.size,
             window_position: None,
             window: INITIAL_WINDOW,
-            scroll_offset: Vector::ZERO,
-            keep_parent_in_place: false,
-            viewport_size: None,
-            zoom: 1.0,
-            wheel_zoom: 0.0,
-            measure_cache: HashMap::new(),
-            edges: Default::default(),
+            viewport: MapViewport::default(),
             clipboard: None,
             status: Status::default(),
-            pan: None,
             drag: None,
             asset_remover: recycle,
         }
@@ -400,7 +379,7 @@ impl App {
             window::close_requests().map(|id| Message::Window(id, WindowEvent::CloseRequested)),
             iced::time::every(TICK).map(|_| MapMsg::Tick.into()),
             // Pointer tracking only while panning, so ordinary moves cost nothing.
-            if self.pan.is_some() {
+            if self.viewport.pan.is_some() {
                 iced::event::listen_with(|event, _status, _window| match event {
                     iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
                         Some(MapMsg::PanMove(position).into())
@@ -451,7 +430,7 @@ impl App {
         let (focus_anchor, parent_anchor) = (self.focus_anchor(false), self.focus_anchor(true));
         let task = self.handle(message);
         self.relayout();
-        let anchor = if std::mem::take(&mut self.keep_parent_in_place) { parent_anchor } else { focus_anchor };
+        let anchor = if std::mem::take(&mut self.viewport.keep_parent_in_place) { parent_anchor } else { focus_anchor };
         let mut tasks = vec![task, self.keep_in_place(anchor)];
         if reveal {
             tasks.push(self.reveal_focus());

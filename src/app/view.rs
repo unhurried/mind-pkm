@@ -279,7 +279,7 @@ impl App {
                 container(text(path).size(11).color(MUTED).wrapping(Wrapping::None)).width(Fill).clip(true),
                 text(self.status.text().to_string()).size(11).color(MUTED).wrapping(Wrapping::None),
                 text(filter).size(11).color(MUTED),
-                text(format!("Zoom: {:.0}%", self.zoom * 100.0)).size(11).color(MUTED),
+                text(format!("Zoom: {:.0}%", self.viewport.zoom() * 100.0)).size(11).color(MUTED),
             ]
             .spacing(16),
         )
@@ -296,7 +296,7 @@ impl App {
         let size = doc.layout().size;
         let mut layers: Stack<MapMsg> = Stack::new().width(size.width).height(size.height);
         layers = layers.push(
-            canvas_widget(EdgeLayer { layout: doc.layout(), cache: &self.edges, zoom: self.zoom })
+            canvas_widget(EdgeLayer { layout: doc.layout(), cache: &self.viewport.edges, zoom: self.viewport.zoom() })
                 .width(size.width)
                 .height(size.height),
         );
@@ -305,13 +305,13 @@ impl App {
         let root = doc.map().root();
         for b in doc.layout().boxes.iter().filter(|b| b.id != root) {
             if let Some(point) = branch_point(doc.layout(), b) {
-                layers = layers.push(branch_handle(b.id, point, self.zoom));
+                layers = layers.push(branch_handle(b.id, point, self.viewport.zoom()));
             }
         }
         for b in &doc.layout().boxes {
             layers = layers.push(pin(self.node_view(doc, b)).position(b.rect.position()));
             if b.folded {
-                layers = layers.push(fold_marker(b, doc.map().children(b.id).len(), self.zoom));
+                layers = layers.push(fold_marker(b, doc.map().children(b.id).len(), self.viewport.zoom()));
             }
         }
         if let Some(target) = self.drop_indicator()
@@ -350,8 +350,8 @@ impl App {
         let id = b.id;
         let map = &doc.map();
         let label = map.text(id);
-        let zoom = self.zoom;
-        let tsize = self.measure_cache.get(&label).copied().unwrap_or(Size::new(NODE_MAX_TEXT_WIDTH, 20.0) * zoom);
+        let zoom = self.viewport.zoom();
+        let tsize = self.viewport.measured(&label).unwrap_or(Size::new(NODE_MAX_TEXT_WIDTH, 20.0) * zoom);
         let (font_size, icon_width) = (NODE_FONT_SIZE * zoom, ICON_WIDTH * zoom);
         let mut content = row![].spacing(ROW_SPACING * zoom).align_y(Alignment::Center);
         for icon in map.icons(id) {

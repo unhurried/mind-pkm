@@ -52,7 +52,7 @@ impl App {
         self.next_generation += 1;
         let mut doc = Doc::new(map, self.next_generation);
         if let Some(view) = &view {
-            self.set_zoom(super::ui::zoom_step(super::viewport::ZOOM_STEPS, view.zoom, 0));
+            self.viewport.set_zoom(super::ui::zoom_step(super::viewport::ZOOM_STEPS, view.zoom, 0));
             // Nodes gone since are left out; hidden ones are handed to a shown ancestor by the relayout.
             doc.select(view.selection.iter().filter_map(|id| doc.map().find_by_freeplane_id(id)).collect());
         }
@@ -72,8 +72,8 @@ impl App {
         // The focused node last.
         let nodes = doc.selection().iter().copied().filter(|&n| n != doc.focus()).chain([doc.focus()]);
         let selection = nodes.map(|n| doc.map().freeplane_id(n).to_string()).collect();
-        let scroll = (self.scroll_offset.x, self.scroll_offset.y);
-        Some((path, MapView { zoom: self.zoom, scroll, selection }))
+        let scroll = (self.viewport.scroll.x, self.viewport.scroll.y);
+        Some((path, MapView { zoom: self.viewport.zoom(), scroll, selection }))
     }
 
     /// Remembers how the open map is shown, for when it is opened again.

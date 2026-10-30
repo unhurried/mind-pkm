@@ -5,8 +5,9 @@ use super::ui::zoom_step;
 use super::{App, MAP_SCROLL_ID, MapMsg, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
-use iced::widget::{operation, scrollable};
+use iced::widget::{canvas, operation, scrollable};
 use iced::{Point, Size, Task, Vector, window};
+use std::collections::HashMap;
 
 /// Room kept around the focused node when it is scrolled into view.
 const REVEAL_PADDING: f32 = 24.0;
@@ -19,6 +20,65 @@ const BARS_HEIGHT: f32 = 64.0;
 pub const ZOOM_STEPS: &[f32] = &[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 /// Wheel movement in pixels (touchpads) that counts as one notch.
 const WHEEL_PIXELS_PER_STEP: f32 = 60.0;
+
+/// What the map window shows of the map: the zoom, the scroll position, the
+/// viewport's size, a pan in progress, and what is drawn at the zoom (the
+/// measured text sizes, which hold the current zoom only, and the edges).
+pub struct MapViewport {
+    /// One of `ZOOM_STEPS`.
+    zoom: f32,
+    /// Ctrl+wheel movement not yet turned into a zoom step, in notches.
+    wheel_zoom: f32,
+    /// Node text sizes at the current zoom, by text.
+    measure_cache: HashMap<String, Size>,
+    /// The drawn edges, cleared on every relayout.
+    pub(super) edges: canvas::Cache,
+    /// The scroll position, as last scrolled to or reported.
+    pub(super) scroll: Vector,
+    /// The size of the map's scrollable as last reported; None when it may have changed.
+    pub(super) size: Option<Size>,
+    /// Set by a move among siblings: the parent stays in place on screen
+    /// after the message, not the moved node.
+    pub(super) keep_parent_in_place: bool,
+    pub(super) pan: Option<Pan>,
+}
+
+impl Default for MapViewport {
+    fn default() -> Self {
+        MapViewport {
+            zoom: 1.0,
+            wheel_zoom: 0.0,
+            measure_cache: HashMap::new(),
+            edges: canvas::Cache::default(),
+            scroll: Vector::ZERO,
+            size: None,
+            keep_parent_in_place: false,
+            pan: None,
+        }
+    }
+}
+
+impl MapViewport {
+    pub(super) fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
+    /// Sets the zoom level; the text sizes measured at the old one go.
+    /// Returns whether it changed.
+    pub(super) fn set_zoom(&mut self, zoom: f32) -> bool {
+        if zoom == self.zoom {
+            return false;
+        }
+        self.zoom = zoom;
+        self.measure_cache.clear();
+        true
+    }
+
+    /// The size of a node's text, as measured at the current zoom.
+    pub(super) fn measured(&self, text: &str) -> Option<Size> {
+        self.measure_cache.get(text).copied()
+    }
+}
 
 /// Panning by dragging empty map space.
 #[derive(Debug, Clone, Copy)]
@@ -39,8 +99,8 @@ impl App {
 
     /// The size of the map's scrollable: as last measured, else estimated
     /// from the window size.
-    pub(super) fn viewport(&self) -> Size {
-        self.viewport_size.unwrap_or_else(|| {
+    pub(super) fn viewport_size(&self) -> Size {
+        self.viewport.size.unwrap_or_else(|| {
             let search = if self.search.open { self.search_panel_height() } else { 0.0 };
             Size::new(self.window_size.width, (self.window_size.height - BARS_HEIGHT - search).max(100.0))
         })
@@ -49,19 +109,8 @@ impl App {
     /// Recomputes the layout.
     pub(super) fn relayout(&mut self) {
         let Some(doc) = &mut self.doc else { return };
-        doc.relayout(Size::new(MAP_MARGIN, MAP_MARGIN), self.zoom, &mut self.measure_cache);
-        self.edges.clear();
-    }
-
-    /// Sets the zoom level; the measured text sizes are for the old one.
-    /// Returns whether it changed.
-    pub(super) fn set_zoom(&mut self, zoom: f32) -> bool {
-        if zoom == self.zoom {
-            return false;
-        }
-        self.zoom = zoom;
-        self.measure_cache.clear();
-        true
+        doc.relayout(Size::new(MAP_MARGIN, MAP_MARGIN), self.viewport.zoom, &mut self.viewport.measure_cache);
+        self.viewport.edges.clear();
     }
 
     /// Ctrl+wheel: zooms by the notches turned (pixel deltas are added up),
@@ -71,21 +120,21 @@ impl App {
             ScrollDelta::Lines { y, .. } => y,
             ScrollDelta::Pixels { y, .. } => y / WHEEL_PIXELS_PER_STEP,
         };
-        if notches * self.wheel_zoom < 0.0 {
-            self.wheel_zoom = 0.0;
+        if notches * self.viewport.wheel_zoom < 0.0 {
+            self.viewport.wheel_zoom = 0.0;
         }
-        self.wheel_zoom += notches;
-        let steps = self.wheel_zoom.trunc();
-        self.wheel_zoom -= steps;
-        let old = self.zoom;
-        if self.doc.is_none() || !self.set_zoom(zoom_step(ZOOM_STEPS, old, steps as i32)) {
+        self.viewport.wheel_zoom += notches;
+        let steps = self.viewport.wheel_zoom.trunc();
+        self.viewport.wheel_zoom -= steps;
+        let old = self.viewport.zoom;
+        if self.doc.is_none() || !self.viewport.set_zoom(zoom_step(ZOOM_STEPS, old, steps as i32)) {
             return Task::none();
         }
         // The layout is the margin plus the map scaled by the zoom.
         let margin = Vector::new(MAP_MARGIN, MAP_MARGIN);
         self.relayout();
-        let point = self.scroll_offset + Vector::new(at.x, at.y) - margin;
-        let moved = margin + point * (self.zoom / old) - Vector::new(at.x, at.y);
+        let point = self.viewport.scroll + Vector::new(at.x, at.y) - margin;
+        let moved = margin + point * (self.viewport.zoom / old) - Vector::new(at.x, at.y);
         self.scroll_to(Vector::new(moved.x.max(0.0), moved.y.max(0.0)))
     }
 
@@ -114,26 +163,26 @@ impl App {
         if delta == Vector::ZERO {
             return Task::none();
         }
-        self.scroll_offset += delta;
+        self.viewport.scroll += delta;
         operation::scroll_by(MAP_SCROLL_ID, scrollable::AbsoluteOffset { x: delta.x, y: delta.y })
     }
 
     pub(super) fn scroll_to(&mut self, offset: Vector) -> Task<Message> {
-        self.scroll_offset = offset;
+        self.viewport.scroll = offset;
         operation::scroll_to(MAP_SCROLL_ID, scrollable::AbsoluteOffset { x: offset.x, y: offset.y })
     }
 
     pub(super) fn center_on_focus(&mut self) -> Task<Message> {
         let Some(r) = self.focus_rect() else { return Task::none() };
-        let vp = self.viewport();
+        let vp = self.viewport_size();
         self.scroll_to(Vector::new((r.center_x() - vp.width / 2.0).max(0.0), (r.center_y() - vp.height / 2.0).max(0.0)))
     }
 
     /// Scrolls just enough to bring the focused node into view.
     pub(super) fn reveal_focus(&mut self) -> Task<Message> {
         let Some(r) = self.focus_rect() else { return Task::none() };
-        let vp = self.viewport();
-        let o = self.scroll_offset;
+        let vp = self.viewport_size();
+        let o = self.viewport.scroll;
         let axis = |start: f32, len: f32, off: f32, view: f32| {
             if start - REVEAL_PADDING < off {
                 (start - REVEAL_PADDING).max(0.0)
@@ -149,17 +198,17 @@ impl App {
 
     pub(super) fn map_scrolled(&mut self, viewport: scrollable::Viewport) {
         let o = viewport.absolute_offset();
-        self.scroll_offset = Vector::new(o.x, o.y);
+        self.viewport.scroll = Vector::new(o.x, o.y);
         let size = viewport.bounds().size();
-        if self.viewport_size != Some(size) {
-            self.viewport_size = Some(size);
+        if self.viewport.size != Some(size) {
+            self.viewport.size = Some(size);
             self.relayout();
         }
     }
 
     pub(super) fn window_resized(&mut self, size: Size) -> Task<Message> {
         self.window_size = size;
-        self.viewport_size = None;
+        self.viewport.size = None;
         ask_window_state(self.main_window)
     }
 
@@ -183,14 +232,14 @@ impl App {
 
     pub(super) fn pan_start(&mut self) {
         self.menu = None;
-        self.pan = Some(Pan::Pressed);
+        self.viewport.pan = Some(Pan::Pressed);
     }
 
     pub(super) fn pan_move(&mut self, position: Point) -> Task<Message> {
-        match self.pan {
+        match self.viewport.pan {
             None => Task::none(),
             Some(Pan::Pressed) => {
-                self.pan = Some(Pan::Dragging { anchor: position, start: self.scroll_offset });
+                self.viewport.pan = Some(Pan::Dragging { anchor: position, start: self.viewport.scroll });
                 Task::none()
             }
             // The map moves with the pointer; the scrollable clamps the far edges.
@@ -202,7 +251,7 @@ impl App {
     }
 
     pub(super) fn pan_end(&mut self) {
-        self.pan = None;
+        self.viewport.pan = None;
     }
 }
 
