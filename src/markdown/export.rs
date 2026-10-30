@@ -29,7 +29,7 @@ pub fn html_document(page: &Path, text: &str, base_dir: Option<&Path>, css: &str
         None => src.to_string(),
     };
     let body = html::body(&doc, &HtmlOptions { math: &math, mermaid: &mermaid, image_src: &image_src });
-    let title = page.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let title = paths::file_stem(page);
     html::page(&title, &body, css)
 }
 

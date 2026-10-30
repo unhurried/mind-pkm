@@ -37,7 +37,7 @@ impl Default for ImageOptions {
 /// The folder images of the page at `page` are copied into: the page's
 /// `typora-copy-images-to`, else the options' folder.
 pub fn image_folder(page: &Path, text: &str, opts: &ImageOptions) -> PathBuf {
-    let stem = page.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = paths::file_stem(page);
     let folder = front_matter_value(text, "typora-copy-images-to").unwrap_or_else(|| opts.folder.clone());
     let folder = folder.replace("${filename}", &stem);
     let dir = page.parent().unwrap_or(Path::new("."));
@@ -52,7 +52,7 @@ pub fn free_name(dir: &Path, name: &str) -> PathBuf {
         return candidate;
     }
     let path = Path::new(name);
-    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = paths::file_stem(path);
     let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
     (1..).map(|n| dir.join(format!("{stem}-{n}{ext}"))).find(|p| !p.exists()).unwrap_or(candidate)
 }
@@ -125,7 +125,7 @@ pub fn markdown_for(page: &Path, file: &Path, opts: &ImageOptions) -> String {
     if is_image(file) {
         format!("![]({r})")
     } else {
-        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = paths::file_name(file);
         format!("[{name}]({r})")
     }
 }

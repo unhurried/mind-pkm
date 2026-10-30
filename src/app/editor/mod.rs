@@ -291,7 +291,7 @@ impl Editor {
     }
 
     pub fn title(&self) -> String {
-        let name = self.page.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = crate::paths::file_name(&self.page.path);
         format!("{name}{} - Mind PKM", if self.page.is_dirty() { " *" } else { "" })
     }
 
@@ -1060,7 +1060,7 @@ impl Editor {
     /// The save dialog for an export: the page's name with `.html` / `.pdf`, next to it.
     fn ask_export_file(&self, pdf: bool) -> Task<EditorMsg> {
         let (ext, filter) = if pdf { ("pdf", "PDF") } else { ("html", "HTML") };
-        let stem = self.page.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let stem = crate::paths::file_stem(&self.page.path);
         let dir = self.page.path.parent().map(Path::to_path_buf);
         Task::perform(
             async move {
@@ -1945,11 +1945,7 @@ impl App {
 
     /// The names of the pages with unsaved changes.
     pub(super) fn unsaved_pages(&self) -> Vec<String> {
-        self.editors
-            .values()
-            .filter(|e| e.page.is_dirty())
-            .map(|e| e.page.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
-            .collect()
+        self.editors.values().filter(|e| e.page.is_dirty()).map(|e| crate::paths::file_name(&e.page.path)).collect()
     }
 
     /// Saves every page with unsaved changes; the errors of those that fail.

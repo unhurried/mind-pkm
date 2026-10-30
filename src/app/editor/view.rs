@@ -1950,8 +1950,6 @@ fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::widget::Id) ->
             .on_press(EditorMsg::Dialog(a))
             .into()
     };
-    let file_name =
-        |path: &std::path::Path| path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut input = None;
     let (body, buttons): (String, Vec<Element<EditorMsg>>) = match dialog {
         EditorDialog::Message(m) => (m.clone(), vec![answer("OK", DialogAnswer::Ok, true)]),
@@ -1965,12 +1963,12 @@ fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::widget::Id) ->
                     .padding([4, 6]),
             );
             (
-                format!("Rename {} to:", file_name(path)),
+                format!("Rename {} to:", crate::paths::file_name(path)),
                 vec![answer("Rename", DialogAnswer::Ok, true), answer("Cancel", DialogAnswer::Cancel, false)],
             )
         }
         EditorDialog::DeleteAsset(path) => (
-            format!("Delete {}?", file_name(path)),
+            format!("Delete {}?", crate::paths::file_name(path)),
             vec![answer("Delete", DialogAnswer::Ok, true), answer("Cancel", DialogAnswer::Cancel, false)],
         ),
         EditorDialog::Unsaved => (

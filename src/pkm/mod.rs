@@ -87,13 +87,9 @@ pub fn directory_dir(doc_dir: &Path, name: &str) -> PathBuf {
     doc_dir.join(name)
 }
 
-fn file_name(path: &Path) -> String {
-    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-}
-
 /// The page name of a `<name>.md` file, or None when the name has no ".md" suffix.
 pub fn page_name_of(path: &Path) -> Option<String> {
-    file_name(path).strip_suffix(PAGE_SUFFIX).map(str::to_string)
+    paths::file_name(path).strip_suffix(PAGE_SUFFIX).map(str::to_string)
 }
 
 /// Whether a path relative to the document directory ("/"-separated) is a page:
@@ -108,7 +104,7 @@ pub fn is_page_path(rel_path: &str) -> bool {
 
 /// The page file an assets directory belongs to, or None when the name has no ".assets" suffix.
 pub fn page_file_of_assets_dir(dir: &Path) -> Option<PathBuf> {
-    let name = file_name(dir);
+    let name = paths::file_name(dir);
     let page = name.strip_suffix(ASSETS_SUFFIX)?;
     Some(page_file(dir.parent()?, page))
 }

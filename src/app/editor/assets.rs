@@ -254,7 +254,7 @@ impl Editor {
             AssetsMsg::CloseMenu => pane.menu = None,
             AssetsMsg::Rename => {
                 if let Some(menu) = pane.menu.take().filter(|m| m.can_change) {
-                    let name = menu.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = paths::file_name(&menu.path);
                     self.dialogs.push_back(EditorDialog::RenameAsset { path: menu.path, name });
                     return iced::widget::operation::focus(self.id("rename"));
                 }
@@ -306,7 +306,7 @@ impl Editor {
     /// After the pane's item `old` was renamed to `new`: the page's links to
     /// it point at the new name (one undoable change), the pane follows.
     pub fn asset_renamed(&mut self, old: &Path, new: &Path) {
-        let name = new.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = paths::file_name(new);
         self.leave_source_for_history();
         let (text, n) = images::rename_destinations(&self.page.path, &self.page.text, old, &name);
         if n > 0 {
@@ -472,7 +472,7 @@ impl Editor {
 
     /// The name of the item being dragged, beside the pointer.
     pub(super) fn drag_label(&self, drag: &AssetDrag, p: Palette) -> Element<'_, EditorMsg> {
-        let name = drag.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = paths::file_name(&drag.path);
         let label = container(text(name).size(12).color(p.text).wrapping(Wrapping::None))
             .padding([3, 8])
             .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(4)));

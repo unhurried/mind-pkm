@@ -273,7 +273,7 @@ pub fn update_index(doc_dir: &Path) -> Result<(), String> {
         writer.delete_term(Term::from_field_text(f.path, rel));
         let text = extract::extract_text(path);
         let preview = extract::truncate_chars(text.clone(), PREVIEW_CHARS);
-        let filename = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let filename = crate::paths::file_name(path);
         writer
             .add_document(doc!(
                 f.path => rel.as_str(),
