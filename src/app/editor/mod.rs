@@ -783,6 +783,10 @@ impl Editor {
         if self.page.pending().is_some() || before == after {
             let column = self.page.column();
             match self.page.neighbor(down) {
+                // Below code ending a quote or list item: a new paragraph in it.
+                Some(_) if down && self.page.pending().is_none() && self.page.ends_container() => {
+                    self.page.new_paragraph_after()
+                }
                 Some(b) => self.page.enter_block(b, down, Some(column)),
                 // Below the last block, when it is code: a new paragraph.
                 None if down && self.page.pending().is_none() => self.page.new_paragraph_after(),
