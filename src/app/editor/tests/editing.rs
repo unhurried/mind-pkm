@@ -12,7 +12,7 @@ fn type_key(app: &mut App, id: window::Id, c: char) {
 fn typing_with_nothing_active_types_into_the_first_block() {
     let (mut app, _f, _, _) = app_with_page("# Page1\n\nHello world.\n");
     let id = open_with_f1(&mut app);
-    assert!(app.editors[&id].page.active.is_none());
+    assert!(app.editors[&id].page.active().is_none());
     // The first key starts editing and is typed too; then the widget has the keys.
     type_key(&mut app, id, 'a');
     typing(&mut app, id, "bc");
@@ -49,7 +49,7 @@ fn an_empty_template_item_is_typed_into() {
     let (mut app, _f, _, _) = app_with_page("### Next Steps\r\n\r\n* \r\n");
     let id = open_with_f1(&mut app);
     // A click beside the item's (missing) text, on its bullet.
-    let item = app.editors[&id].page.doc.blocks.len() - 1;
+    let item = app.editors[&id].page.doc().blocks.len() - 1;
     editor(&mut app, id, EditorMsg::BlockPressed(item));
     typing(&mut app, id, "step");
     assert_eq!(page_text(&app, id), "### Next Steps\n\n* step\n");
@@ -59,13 +59,13 @@ fn an_empty_template_item_is_typed_into() {
 fn a_click_in_the_gap_between_blocks_goes_to_the_nearer_block() {
     let (mut app, _f, _, _) = app_with_page("* one\n* two\n\nAfter\n");
     let id = open_with_f1(&mut app);
-    let blocks = app.editors[&id].page.doc.blocks.clone();
+    let blocks = app.editors[&id].page.doc().blocks.clone();
     // The upper half of the gap: the end of the block above.
     editor(&mut app, id, EditorMsg::PressedAt(blocks[1].range.end));
     typing(&mut app, id, "!");
     assert_eq!(page_text(&app, id), "* one\n* two!\n\nAfter\n");
     // The lower half: the start of the block below.
-    let below = app.editors[&id].page.doc.blocks[2].range.start;
+    let below = app.editors[&id].page.doc().blocks[2].range.start;
     editor(&mut app, id, EditorMsg::PressedAt(below));
     typing(&mut app, id, "?");
     assert_eq!(page_text(&app, id), "* one\n* two!\n\n?After\n");
@@ -78,7 +78,7 @@ fn a_click_right_of_a_line_with_math_puts_the_cursor_at_its_end() {
     // The view reports the end of the clicked line: its last inline's end.
     let end_of = |app: &App, line: usize| {
         let editor = &app.editors[&id];
-        let doc = &editor.page.doc;
+        let doc = editor.page.doc();
         let inlines = crate::markdown::content::inlines(doc, doc.block_events(0));
         inlines
             .split(|i| matches!(i, crate::markdown::content::Inline::Break { .. }))
@@ -124,7 +124,7 @@ fn backspace_at_the_start_joins_paragraphs() {
     editor(&mut app, id, EditorMsg::PressedAt(5));
     editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
     assert_eq!(page_text(&app, id), "onetwo\n");
-    assert_eq!(app.editors[&id].page.sel.head, 3);
+    assert_eq!(app.editors[&id].page.sel().head, 3);
 }
 
 #[test]
@@ -152,7 +152,7 @@ fn paragraph_shortcuts() {
     click_after(&mut app, id, "one");
     editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
     editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
-    assert_eq!(app.editors[&id].page.blocks, Some((1, 2)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 2)));
     press(&mut app, id, "]", Modifiers::CTRL | Modifiers::SHIFT);
     assert_eq!(page_text(&app, id), "Plan\n\n- one\n- two\n");
     click_after(&mut app, id, "two");
@@ -219,8 +219,8 @@ fn ctrl_click_on_an_anchor_goes_to_the_heading() {
     send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::CTRL)));
     editor(&mut app, id, EditorMsg::Link("#part-b".into(), 1));
     let page = &app.editors[&id].page;
-    assert!(page.active.is_none());
-    assert_eq!(page.sel.head, page.text.find("# Part B").unwrap());
+    assert!(page.active().is_none());
+    assert_eq!(page.sel().head, page.text().find("# Part B").unwrap());
 }
 
 #[test]
@@ -230,20 +230,20 @@ fn dragging_onto_other_blocks_selects_them() {
     // A press in a block's text, then the pointer onto the blocks below and back.
     click_after(&mut app, id, "two");
     live(&mut app, id, LiveMsg::Click { at: 1, extend: false });
-    assert_eq!(app.editors[&id].page.blocks, None);
+    assert_eq!(app.editors[&id].page.selected_blocks(), None);
     editor(&mut app, id, EditorMsg::BlockEntered(3));
-    assert_eq!(app.editors[&id].page.blocks, Some((1, 3)));
-    assert!(app.editors[&id].page.active.is_none());
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 3)));
+    assert!(app.editors[&id].page.active().is_none());
     editor(&mut app, id, EditorMsg::BlockEntered(2));
-    assert_eq!(app.editors[&id].page.blocks, Some((1, 2)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 2)));
     editor(&mut app, id, EditorMsg::BlockEntered(1));
-    assert_eq!(app.editors[&id].page.blocks, Some((1, 1)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 1)));
     editor(&mut app, id, EditorMsg::BlockEntered(0));
-    assert_eq!(app.editors[&id].page.blocks, Some((1, 0)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 0)));
     // Released: moving over blocks changes nothing.
     editor(&mut app, id, EditorMsg::Released);
     editor(&mut app, id, EditorMsg::BlockEntered(3));
-    assert_eq!(app.editors[&id].page.blocks, Some((1, 0)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 0)));
     send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::Delete), Modifiers::empty())));
     assert_eq!(page_text(&app, id), "three\n\nfour\n");
 
@@ -252,13 +252,13 @@ fn dragging_onto_other_blocks_selects_them() {
     let id = open_with_f1(&mut app);
     editor(&mut app, id, EditorMsg::BlockPressed(2));
     editor(&mut app, id, EditorMsg::BlockEntered(0));
-    assert_eq!(app.editors[&id].page.blocks, Some((2, 0)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((2, 0)));
     editor(&mut app, id, EditorMsg::Released);
     // In source mode, no block is selected.
     editor(&mut app, id, EditorMsg::Command(EditorCommand::SourceMode));
     editor(&mut app, id, EditorMsg::Action(Action::Click(iced::Point::ORIGIN)));
     editor(&mut app, id, EditorMsg::BlockEntered(1));
-    assert_eq!(app.editors[&id].page.blocks, None);
+    assert_eq!(app.editors[&id].page.selected_blocks(), None);
 }
 
 #[test]
@@ -270,12 +270,12 @@ fn whole_blocks_are_selected_and_replaced() {
     press(&mut app, id, "a", Modifiers::CTRL);
     assert_eq!(app.editors[&id].page.selected_source(), "two");
     press(&mut app, id, "a", Modifiers::CTRL);
-    assert_eq!(app.editors[&id].page.blocks, Some((0, 2)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((0, 2)));
     // Shift+click from the active block.
     click_after(&mut app, id, "one");
     send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::SHIFT)));
     editor(&mut app, id, EditorMsg::BlockPressed(1));
-    assert_eq!(app.editors[&id].page.blocks, Some((0, 1)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((0, 1)));
     send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::empty())));
     // Typing replaces them.
     send(&mut app, Message::KeyIn(id, typing_event(Key::Character("z".into()), Modifiers::empty(), "z")));
@@ -297,7 +297,7 @@ fn source_mode_keeps_the_cursor_and_the_history() {
     // Back: the cursor where it was in the source; the typing can be undone.
     press(&mut app, id, "/", Modifiers::CTRL);
     assert!(app.editors[&id].source.is_none());
-    assert_eq!(app.editors[&id].page.sel.head, 10);
+    assert_eq!(app.editors[&id].page.sel().head, 10);
     press(&mut app, id, "z", Modifiers::CTRL);
     assert_eq!(page_text(&app, id), "# one\n\ntwo\n");
 }
@@ -322,7 +322,7 @@ fn deleting_three_blocks() {
     // From the text editor's last line to the next block; then the window's keys.
     editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
     send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::ArrowDown), Modifiers::SHIFT)));
-    assert_eq!(app.editors[&id].page.blocks, Some((0, 2)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((0, 2)));
     send(&mut app, Message::KeyIn(id, key_event(Key::Named(Named::Delete), Modifiers::empty())));
     assert_eq!(page_text(&app, id), "four\n");
     press(&mut app, id, "z", Modifiers::CTRL);
@@ -331,7 +331,7 @@ fn deleting_three_blocks() {
 
 /// The text the text editor of the block being edited holds.
 fn editor_text(app: &App, id: window::Id) -> String {
-    app.editors[&id].page.active.as_ref().and_then(|a| a.content()).map(|c| c.text()).unwrap_or_default()
+    app.editors[&id].page.active().and_then(|a| a.content()).map(|c| c.text()).unwrap_or_default()
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn code_blocks_are_edited_without_their_fences() {
     // Its language.
     editor(&mut app, id, EditorMsg::CodeLanguage("python".into()));
     assert_eq!(page_text(&app, id), "> ```python\n> let x = 1;\n> x\n> ```\n");
-    assert_eq!(app.editors[&id].page.sel.head, page_text(&app, id).find("\n> ```\n").unwrap());
+    assert_eq!(app.editors[&id].page.sel().head, page_text(&app, id).find("\n> ```\n").unwrap());
     // Undo takes back the language, the typing and the line break.
     for _ in 0..3 {
         editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
@@ -366,11 +366,11 @@ fn leaving_and_removing_code_blocks() {
     assert_eq!(editor_text(&app, id), "code");
     editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
     assert_eq!(page_text(&app, id), "a\n\n```\ncode\n```\n");
-    assert_eq!(app.editors[&id].page.sel.head, 1);
+    assert_eq!(app.editors[&id].page.sel().head, 1);
     // Down at the last line of the code ending the page: a new paragraph after it.
     click_after(&mut app, id, "cod");
     editor(&mut app, id, EditorMsg::Bind(Bind::Down));
-    assert!(app.editors[&id].page.pending.is_some());
+    assert!(app.editors[&id].page.pending().is_some());
     typing(&mut app, id, "z");
     assert_eq!(page_text(&app, id), "a\n\n```\ncode\n```\n\nz\n");
     // Backspace in an empty code block: an empty paragraph in its place.
@@ -380,7 +380,7 @@ fn leaving_and_removing_code_blocks() {
     assert!(matches!(active_kind(&app, id), BlockKind::Code { .. }));
     assert_eq!(editor_text(&app, id), "");
     editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
-    assert!(app.editors[&id].page.pending.is_some());
+    assert!(app.editors[&id].page.pending().is_some());
     typing(&mut app, id, "p");
     assert_eq!(page_text(&app, id), "a\n\np\n\nb\n");
 }

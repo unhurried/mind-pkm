@@ -71,8 +71,8 @@ impl Editor {
             None => {
                 let mut col = Column::new().width(width);
                 let page = &self.page;
-                let active = page.active.as_ref();
-                let selected = page.blocks.map(|(a, b)| a.min(b)..=a.max(b));
+                let active = page.active();
+                let selected = page.selected_blocks().map(|(a, b)| a.min(b)..=a.max(b));
                 let mut previous_end = None;
                 for entry in column::entries(page) {
                     let space_above = gap_height(entry.gap, ctx.zoom);
@@ -80,7 +80,7 @@ impl Editor {
                         // A click in the gap goes to the nearer block: the upper
                         // half to the end of the one above, the lower half to the
                         // start of the one below.
-                        let after = previous_end.map_or(0, |end| content_end(&page.text, 0..end));
+                        let after = previous_end.map_or(0, |end| content_end(page.text(), 0..end));
                         let half = |at: usize| -> Element<EditorMsg> {
                             let mut area = mouse_area(space().width(Fill).height(space_above / 2.0))
                                 .on_press(EditorMsg::PressedAt(at));
@@ -131,7 +131,7 @@ impl Editor {
                     col = col.push(shown);
                     // Where a dragged item would go as a paragraph of its own.
                     if let Some(DropTarget::Paragraph { at }) = ctx.editor.drop_target()
-                        && content_end(&page.text, entry.covers.clone()) == *at
+                        && content_end(page.text(), entry.covers.clone()) == *at
                     {
                         col = col.push(
                             container(space().height(2)).width(Fill).style(move |_| container::background(p.link)),
@@ -140,9 +140,9 @@ impl Editor {
                     previous_end = Some(entry.covers.end);
                 }
                 // Room to click below the last block.
-                let last = previous_end.map_or(0, |end| content_end(&page.text, 0..end));
+                let last = previous_end.map_or(0, |end| content_end(page.text(), 0..end));
                 let mut room = mouse_area(container(space()).width(Fill).height(120.0 * ctx.zoom))
-                    .on_press(EditorMsg::PressedAt(page.text.len()));
+                    .on_press(EditorMsg::PressedAt(page.text().len()));
                 if dragging {
                     room = room.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(last)));
                 }

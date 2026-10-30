@@ -191,32 +191,35 @@ pub fn move_content(content: &mut Content, text: &str, sel: Sel) {
     content.move_to(Cursor { position, selection });
 }
 
+/// The page's state is changed only through its methods, which keep it
+/// consistent: the parse with the text, the active region with both, the
+/// history with every change.
 pub struct Page {
-    pub path: PathBuf,
-    pub text: String,
+    path: PathBuf,
+    text: String,
     crlf: bool,
-    pub doc: Document,
+    doc: Document,
     /// The text as last loaded or saved.
     saved: String,
     /// The file's modification time when it was last loaded or saved.
-    pub modified: Option<SystemTime>,
+    modified: Option<SystemTime>,
     /// The cursor and selection in `text`.
-    pub sel: Sel,
-    pub active: Option<Active>,
+    sel: Sel,
+    active: Option<Active>,
     /// The active region is a new empty paragraph without source yet.
-    pub pending: Option<Pending>,
+    pending: Option<Pending>,
     /// A byte of the block being edited the parse leaves out: where a block
     /// marker was typed whose element is not determined yet (it shows as
     /// typed until then).
-    pub tentative: Option<usize>,
+    tentative: Option<usize>,
     /// The next `place` comes from an edit: a line break typed at the end of
     /// a block's text stays the block's (Shift+Enter at its end).
     hold_break: bool,
     /// Whole blocks selected (anchor, head), while no region is active.
-    pub blocks: Option<(usize, usize)>,
+    blocks: Option<(usize, usize)>,
     history: History,
     /// Counts the changes of the text.
-    pub revision: u64,
+    revision: u64,
 }
 
 fn modified_time(path: &Path) -> Option<SystemTime> {
@@ -251,6 +254,44 @@ impl Page {
         }
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The text parsed into blocks.
+    pub fn doc(&self) -> &Document {
+        &self.doc
+    }
+
+    /// The cursor and selection in the text.
+    pub fn sel(&self) -> Sel {
+        self.sel
+    }
+
+    /// The region the cursor is in, being edited.
+    pub fn active(&self) -> Option<&Active> {
+        self.active.as_ref()
+    }
+
+    /// The active region is a new empty paragraph without source yet.
+    pub fn pending(&self) -> Option<&Pending> {
+        self.pending.as_ref()
+    }
+
+    /// Whole blocks selected (anchor, head), while no region is active.
+    pub fn selected_blocks(&self) -> Option<(usize, usize)> {
+        self.blocks
+    }
+
+    /// Counts the changes of the text.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.text != self.saved
     }
@@ -260,6 +301,12 @@ impl Page {
         self.saved = self.text.clone();
         self.modified = modified_time(&self.path);
         Ok(())
+    }
+
+    /// Takes the file as it is on disk as seen, keeping the text, which is
+    /// what is saved next.
+    pub fn ignore_disk_change(&mut self) {
+        self.modified = modified_time(&self.path);
     }
 
     /// Whether the file changed on disk since it was loaded or saved.
@@ -755,6 +802,30 @@ impl Page {
         self.live_select_shown(Some(range));
     }
 
+    /// Leaves the active region (see `deactivate`), the cursor at `sel` in no
+    /// block: a key or typing places it.
+    pub fn leave_at(&mut self, sel: Sel) {
+        self.deactivate();
+        self.sel = sel;
+    }
+
+    /// Drops the active region as it is, without leaving it: the source mode
+    /// edits the text instead.
+    pub fn forget_active(&mut self) {
+        self.active = None;
+        self.pending = None;
+    }
+
+    /// The selection of the source mode's text editor, as page offsets.
+    pub fn set_source_sel(&mut self, sel: Sel) {
+        self.sel = sel;
+    }
+
+    /// The range of cells selected in the table being edited.
+    pub fn cell_range_mut(&mut self) -> Option<&mut Option<CellRange>> {
+        Some(&mut self.active.as_mut()?.table_mut()?.range)
+    }
+
     /// Leaves the active region: an empty new paragraph disappears, and so do
     /// the blank lines of a block whose text was all deleted.
     pub fn deactivate(&mut self) {
@@ -1005,8 +1076,7 @@ impl Page {
     pub fn set_source_text(&mut self, text: String, sel: Sel) {
         if text != self.text {
             self.set_text(text, sel);
-            self.active = None;
-            self.pending = None;
+            self.forget_active();
         }
         self.sel = sel;
     }
@@ -1097,6 +1167,17 @@ impl Page {
             None => r.end,
         };
         self.place(Sel::caret(at));
+    }
+
+    /// Moves the head of the selected blocks.
+    pub fn set_blocks_head(&mut self, head: usize) {
+        if let Some((anchor, _)) = self.blocks {
+            self.blocks = Some((anchor, head));
+        }
+    }
+
+    pub fn deselect_blocks(&mut self) {
+        self.blocks = None;
     }
 
     /// Selects whole blocks from `anchor` to `head`, leaving the active region.

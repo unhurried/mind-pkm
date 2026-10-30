@@ -183,7 +183,7 @@ impl Editor {
     pub(super) fn outline_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, EditorMsg> {
         let p = ctx.p;
         let mut list = Column::new().spacing(2).padding(10);
-        for (i, h) in self.page.doc.headings.iter().enumerate() {
+        for (i, h) in self.page.doc().headings.iter().enumerate() {
             list = list.push(
                 button(text(h.text.clone()).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph))
                     .padding(iced::Padding { left: 6.0 + 12.0 * f32::from(h.level - 1), ..iced::Padding::from([2, 6]) })

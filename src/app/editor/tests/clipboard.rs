@@ -99,7 +99,7 @@ fn cutting_whole_blocks() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "one");
     editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
-    assert_eq!(app.editors[&id].page.blocks, Some((0, 1)));
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((0, 1)));
     press(&mut app, id, "x", Modifiers::CTRL);
     assert_eq!(clipboard(&app).text.as_deref(), Some("one\n\ntwo"));
     assert_eq!(page_text(&app, id), "three\n");

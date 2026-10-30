@@ -7,7 +7,7 @@ fn f1_opens_a_page_in_an_editor_window_once() {
     let (mut app, _f, _, page) = app_with_page("# Plan\n");
     let id = open_with_f1(&mut app);
     assert_eq!(app.editors.len(), 1);
-    assert_eq!(app.editors[&id].page.path, page);
+    assert_eq!(app.editors[&id].page.path(), page);
     assert_eq!(app.title(id), "Plan.md - Mind PKM");
     // Again: the same window comes to the front.
     open_with_f1(&mut app);
@@ -136,7 +136,7 @@ fn ctrl_click_on_a_link_to_another_page_opens_it() {
     send(&mut app, Message::KeyIn(id, keyboard::Event::ModifiersChanged(Modifiers::CTRL)));
     editor(&mut app, id, EditorMsg::Link("Other.md".into(), 5));
     assert_eq!(app.editors.len(), 2);
-    assert!(app.editors.values().any(|e| e.page.path == other));
+    assert!(app.editors.values().any(|e| e.page.path() == other));
 }
 
 #[test]
@@ -155,9 +155,9 @@ fn outline_zoom_theme_and_full_screen() {
     // The outline lists the headings; a click goes to one.
     press(&mut app, id, "1", Modifiers::CTRL | Modifiers::SHIFT);
     assert!(app.editors[&id].outline);
-    assert_eq!(app.editors[&id].page.doc.headings.len(), 2);
+    assert_eq!(app.editors[&id].page.doc().headings.len(), 2);
     editor(&mut app, id, EditorMsg::HeadingClicked(1));
-    assert_eq!(app.editors[&id].page.sel.head, page_text(&app, id).find("## B").unwrap());
+    assert_eq!(app.editors[&id].page.sel().head, page_text(&app, id).find("## B").unwrap());
     // Zoom steps and back, remembered with the theme in the preferences.
     press(&mut app, id, "=", Modifiers::CTRL | Modifiers::SHIFT);
     assert!(app.editor_prefs.zoom > 1.0);
@@ -216,9 +216,9 @@ fn the_diagram_being_edited_is_keyed_like_its_render() {
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "A-->B");
     let e = &app.editors[&id];
-    let a = e.page.active.as_ref().unwrap();
+    let a = e.page.active().unwrap();
     let key = RenderKey::Mermaid(e.active_diagram(a));
-    assert!(keys_of(&e.page.doc, false).contains(&key), "{key:?}");
+    assert!(keys_of(e.page.doc(), false).contains(&key), "{key:?}");
 }
 
 #[test]

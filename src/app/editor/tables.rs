@@ -39,17 +39,17 @@ pub(super) struct TableUi {
 
 impl Editor {
     fn table_cell(&self) -> Option<((usize, usize), usize, usize)> {
-        let state = self.page.active.as_ref()?.table()?;
+        let state = self.page.active()?.table()?;
         Some((state.cell, state.table.rows.len(), state.table.columns()))
     }
 
     fn range_mut(&mut self) -> Option<&mut Option<CellRange>> {
-        Some(&mut self.page.active.as_mut()?.table_mut()?.range)
+        self.page.cell_range_mut()
     }
 
     /// The selected range of cells, or the cursor's cell.
     fn cells(&self) -> Option<CellRange> {
-        let state = self.page.active.as_ref()?.table()?;
+        let state = self.page.active()?.table()?;
         Some(state.range.unwrap_or(CellRange::new(state.cell, state.cell)))
     }
 
@@ -128,7 +128,7 @@ impl Editor {
 
     /// Delete or Backspace on a range of cells: they become empty.
     pub(super) fn clear_cells(&mut self) {
-        let Some(range) = self.page.active.as_ref().and_then(|a| a.table()).and_then(|s| s.range) else {
+        let Some(range) = self.page.active().and_then(|a| a.table()).and_then(|s| s.range) else {
             return;
         };
         self.page.change_table(|t, _| {
@@ -139,15 +139,14 @@ impl Editor {
 
     fn delete_table(&mut self) {
         let Some(block) = self.page.active_block() else { return };
-        self.page.deactivate();
-        self.page.blocks = Some((block, block));
+        self.page.select_blocks(block, block);
         self.delete_blocks(None);
     }
 
     /// Keys bound in a table's cell.
     pub(super) fn table_bind(&mut self, bind: Bind) -> Task<EditorMsg> {
         let Some(((r, c), rows, cols)) = self.table_cell() else { return Task::none() };
-        let range = self.page.active.as_ref().and_then(|a| a.table()).and_then(|s| s.range);
+        let range = self.page.active().and_then(|a| a.table()).and_then(|s| s.range);
         if range.is_some() {
             match bind {
                 Bind::Delete | Bind::Backspace => {
@@ -288,7 +287,7 @@ impl Editor {
             return Task::none();
         }
         // A table inside another block (a footnote...): as a press on that block.
-        let Some(b) = self.page.doc.blocks.get(block).filter(|b| b.kind == crate::markdown::BlockKind::Table) else {
+        let Some(b) = self.page.doc().blocks.get(block).filter(|b| b.kind == crate::markdown::BlockKind::Table) else {
             return self.block_pressed(block);
         };
         self.page.place(Sel::caret(b.range.start));

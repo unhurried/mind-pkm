@@ -53,7 +53,7 @@ fn the_assets_pane_is_shown_per_window_and_hidden_when_a_window_opens() {
     // Another page opens without it; the first keeps it.
     let other = f.write_page("Other", "y\n");
     let _ = app.open_in_editor(&other);
-    let other_id = *app.editors.iter().find(|(_, e)| e.page.path == other).unwrap().0;
+    let other_id = *app.editors.iter().find(|(_, e)| e.page.path() == other).unwrap().0;
     assert!(app.editors[&other_id].assets.is_none());
     assert!(app.editors[&id].assets.is_some());
     // The View menu entry toggles it too.
@@ -221,7 +221,7 @@ fn assets_outside_the_document_directory_or_open_are_not_changed() {
     let kept = f.dir.path().join("Loose.assets").join("keep.png");
     std::fs::write(&kept, "").unwrap();
     let _ = app.open_in_editor(&outside);
-    let loose = *app.editors.iter().find(|(_, e)| e.page.path == outside).unwrap().0;
+    let loose = *app.editors.iter().find(|(_, e)| e.page.path() == outside).unwrap().0;
     press(&mut app, loose, "2", Modifiers::CTRL | Modifiers::SHIFT);
     finish_read(&mut app, loose);
     assert_eq!(pane(&app, loose).shown().unwrap(), vec!["keep.png"]);
@@ -321,9 +321,9 @@ fn dragging_an_asset_leaves_the_active_block() {
     // The page is all rendered: nothing goes into the Markdown the block shows at its cursor.
     let (mut app, f, id) = app_with_assets("see ![](Plan.assets/map.png)\n", &["map.png", "a.txt"]);
     click_after(&mut app, id, "see ");
-    assert!(app.editors[&id].page.active.is_some());
+    assert!(app.editors[&id].page.active().is_some());
     start_drag(&mut app, id, &asset(&f, "a.txt"));
-    assert!(app.editors[&id].page.active.is_none());
+    assert!(app.editors[&id].page.active().is_none());
 }
 
 #[test]

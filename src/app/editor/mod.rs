@@ -289,7 +289,7 @@ impl Editor {
     }
 
     pub fn title(&self) -> String {
-        let name = crate::paths::file_name(&self.page.path);
+        let name = crate::paths::file_name(self.page.path());
         format!("{name}{} - Mind PKM", if self.page.is_dirty() { " *" } else { "" })
     }
 
@@ -323,18 +323,18 @@ impl Editor {
                     | EditorMsg::TableCellPressed(..)
             );
         let before = self.cursor_state();
-        let revision = self.page.revision;
+        let revision = self.page.revision();
         let shown = self.status.text().to_string();
         let task = self.handle(msg, prefs, effects);
         if press {
-            self.block_drag = self.page.active_block().or(self.page.blocks.map(|b| b.0));
+            self.block_drag = self.page.active_block().or(self.page.selected_blocks().map(|b| b.0));
         }
         // An edit clears the message about what came before it.
-        if self.page.revision != revision && self.status.text() == shown {
+        if self.page.revision() != revision && self.status.text() == shown {
             self.status.clear();
         }
         self.refresh_find();
-        if !self.page.active.as_ref().is_some_and(|a| a.table().is_some()) {
+        if !self.page.active().is_some_and(|a| a.table().is_some()) {
             self.table_ui = TableUi::default();
         }
         let reveals = command || (may_reveal && self.cursor_state() != before);
@@ -345,23 +345,23 @@ impl Editor {
     /// source mode's editor too), the table cell, the text.
     fn cursor_state(&self) -> CursorState {
         CursorState {
-            sel: self.page.sel,
-            blocks: self.page.blocks,
-            revision: self.page.revision,
-            region: self.page.active.as_ref().map(|a| a.region.clone()),
-            cell: self.page.active.as_ref().and_then(|a| a.table()).map(|t| (t.cell, t.cell_sel)),
+            sel: self.page.sel(),
+            blocks: self.page.selected_blocks(),
+            revision: self.page.revision(),
+            region: self.page.active().map(|a| a.region.clone()),
+            cell: self.page.active().and_then(|a| a.table()).map(|t| (t.cell, t.cell_sel)),
             source: self.source.as_ref().map(Content::cursor),
         }
     }
 
     /// Scrolls the page to show the cursor.
     fn reveal(&self, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        if self.source.is_none() && self.page.active.as_ref().is_some_and(|a| a.live().is_some()) {
+        if self.source.is_none() && self.page.active().is_some_and(|a| a.live().is_some()) {
             return scroll::reveal_live(self.id("active"), self.id("doc"));
         }
-        let (before, kind) = match (&self.source, &self.page.active) {
+        let (before, kind) = match (&self.source, self.page.active()) {
             (Some(_), _) => (
-                self.page.text[..self.page.sel.head.min(self.page.text.len())].to_string(),
+                self.page.text()[..self.page.sel().head.min(self.page.text().len())].to_string(),
                 crate::markdown::BlockKind::Paragraph,
             ),
             (None, Some(a)) if a.table().is_some() => {
@@ -369,7 +369,7 @@ impl Editor {
             }
             (None, Some(a)) if a.code().is_some() => {
                 let code = a.code().map_or("", |c| c.text());
-                let at = a.code().map_or(0, |c| c.to_body(self.page.sel.head)).min(code.len());
+                let at = a.code().map_or(0, |c| c.to_body(self.page.sel().head)).min(code.len());
                 let (size, font, padding) = view::code_text_style(prefs.zoom);
                 let caret = scroll::CaretText {
                     before: code[..at].to_string(),
@@ -381,8 +381,8 @@ impl Editor {
                 return scroll::reveal_caret(self.id("active-box"), self.id("doc"), caret);
             }
             (None, Some(a)) => {
-                let text = &self.page.text[a.region.clone()];
-                let at = self.page.sel.head.clamp(a.region.start, a.region.end) - a.region.start;
+                let text = &self.page.text()[a.region.clone()];
+                let at = self.page.sel().head.clamp(a.region.start, a.region.end) - a.region.start;
                 (text[..at].to_string(), a.kind.clone())
             }
             _ => return Task::none(),
@@ -413,10 +413,10 @@ impl Editor {
                     Ok(pieces) if !pieces.is_empty() => {
                         let recent = self
                             .last_insert
-                            .is_some_and(|(t, at)| t.elapsed().as_secs() < 2 && at == self.page.sel.head);
+                            .is_some_and(|(t, at)| t.elapsed().as_secs() < 2 && at == self.page.sel().head);
                         let text = format!("{}{}", if recent { "\n" } else { "" }, pieces.join("\n"));
                         self.insert_text(&text);
-                        self.last_insert = Some((std::time::Instant::now(), self.page.sel.head));
+                        self.last_insert = Some((std::time::Instant::now(), self.page.sel().head));
                         self.assets_stale();
                     }
                     Ok(_) => {}
@@ -454,7 +454,7 @@ impl Editor {
             }
             EditorMsg::BlockEntered(block) => {
                 if let Some(anchor) = self.block_drag
-                    && (block != anchor || self.page.blocks.is_some())
+                    && (block != anchor || self.page.selected_blocks().is_some())
                 {
                     self.menu = None;
                     self.page.select_blocks(anchor, block);
@@ -478,12 +478,11 @@ impl Editor {
             }
             EditorMsg::Link(dest, at) => self.link_clicked(&dest, at, effects),
             EditorMsg::TaskToggled(block) => {
-                let start = self.page.doc.blocks.get(block).map(|b| b.range.start);
-                if let Some(e) = start.and_then(|s| format::toggle_task(&self.page.text, s)) {
-                    let sel = self.page.sel;
+                let start = self.page.doc().blocks.get(block).map(|b| b.range.start);
+                if let Some(e) = start.and_then(|s| format::toggle_task(self.page.text(), s)) {
+                    let sel = self.page.sel();
                     self.page.apply(e);
-                    self.page.deactivate();
-                    self.page.sel = sel;
+                    self.page.leave_at(sel);
                 }
                 Task::none()
             }
@@ -534,7 +533,7 @@ impl Editor {
             self.menu = None;
             return self.run(cmd, prefs, effects);
         }
-        if self.page.blocks.is_some() {
+        if self.page.selected_blocks().is_some() {
             return self.blocks_key(&key, modifiers, text.as_deref());
         }
         // Nothing active: arrow keys and typing start at the cursor, and
@@ -546,8 +545,8 @@ impl Editor {
         let starts =
             matches!(key, Key::Named(Named::ArrowUp | Named::ArrowDown | Named::Enter | Named::Home | Named::End))
                 || typed.is_some();
-        if starts && self.page.active.is_none() && self.source.is_none() {
-            self.page.place(self.page.sel);
+        if starts && self.page.active().is_none() && self.source.is_none() {
+            self.page.place(self.page.sel());
             self.page.snap_to_shown();
             match key {
                 Key::Named(Named::Home) => self.page.perform(Action::Move(Motion::Home)),
@@ -576,8 +575,8 @@ impl Editor {
             }
         } else if self.find.is_some() {
             return self.close_find();
-        } else if self.page.blocks.is_some() {
-            self.page.blocks = None;
+        } else if self.page.selected_blocks().is_some() {
+            self.page.deselect_blocks();
         } else if self.fullscreen {
             self.fullscreen = false;
             if let Some(id) = self.window {
@@ -589,24 +588,24 @@ impl Editor {
 
     /// Keys while whole blocks are selected.
     fn blocks_key(&mut self, key: &Key, m: Modifiers, text: Option<&str>) -> Task<EditorMsg> {
-        let Some((anchor, head)) = self.page.blocks else { return Task::none() };
-        let last = self.page.doc.blocks.len().saturating_sub(1);
+        let Some((anchor, head)) = self.page.selected_blocks() else { return Task::none() };
+        let last = self.page.doc().blocks.len().saturating_sub(1);
         match key {
             Key::Named(Named::ArrowUp | Named::ArrowDown) if m.shift() => {
                 let up = *key == Key::Named(Named::ArrowUp);
                 let head = if up { head.saturating_sub(1) } else { (head + 1).min(last) };
-                self.page.blocks = Some((anchor, head));
+                self.page.set_blocks_head(head);
                 Task::none()
             }
             Key::Named(Named::ArrowUp) | Key::Named(Named::ArrowLeft) => {
                 let first = anchor.min(head);
-                self.page.blocks = None;
+                self.page.deselect_blocks();
                 self.page.enter_block(first, true, None);
                 self.focus()
             }
             Key::Named(Named::ArrowDown) | Key::Named(Named::ArrowRight) => {
                 let end = anchor.max(head);
-                self.page.blocks = None;
+                self.page.deselect_blocks();
                 self.page.enter_block(end, false, None);
                 self.focus()
             }
@@ -627,7 +626,7 @@ impl Editor {
     /// Removes the selected blocks; typing `with` puts a paragraph of it in their place.
     fn delete_blocks(&mut self, with: Option<char>) {
         let Some(range) = self.page.blocks_range() else { return };
-        let text = &self.page.text;
+        let text = self.page.text();
         let insert = with.map(String::from).unwrap_or_default();
         let (new, at) = if !insert.is_empty() {
             (edit::splice(text, range.clone(), &insert), range.start + insert.len())
@@ -641,7 +640,7 @@ impl Editor {
             let end = range.end + (text.len() - range.end - text[range.end..].trim_start().len());
             (edit::splice(text, range.start..end, ""), range.start)
         };
-        self.page.blocks = None;
+        self.page.deselect_blocks();
         self.page.set_text(new, Sel::caret(at));
     }
 
@@ -661,7 +660,7 @@ impl Editor {
             return Task::none();
         }
         if matches!(action, Action::Click(_)) {
-            self.page.blocks = None;
+            self.page.deselect_blocks();
         }
         self.page.perform(action);
         Task::none()
@@ -673,18 +672,18 @@ impl Editor {
         if self.source.is_some() {
             return self.source_bind(bind, prefs);
         }
-        let Some(active) = &self.page.active else { return Task::none() };
+        let Some(active) = self.page.active() else { return Task::none() };
         let region = active.region.clone();
         let in_table = active.table().is_some();
         if in_table {
             return self.table_bind(bind);
         }
-        let text = self.page.text.clone();
+        let text = self.page.text().to_string();
         // The rules work on the source: at the start / end of what a block
         // shows, that is its content's start / end.
         let sel = self.page.rule_sel();
-        let doc = &self.page.doc;
-        let pending = self.page.pending.is_some();
+        let doc = self.page.doc();
+        let pending = self.page.pending().is_some();
         match bind {
             Bind::Enter => {
                 if pending {
@@ -723,7 +722,7 @@ impl Editor {
                     }
                     return self.focus();
                 }
-                let code = self.page.active.as_ref().and_then(|a| a.code());
+                let code = self.page.active().and_then(|a| a.code());
                 if let Some(code) = code.filter(|c| sel.is_empty() && c.to_body(sel.head) == 0) {
                     // At the start of the code: an empty block goes, else to the block before.
                     if code.text().is_empty() {
@@ -763,7 +762,7 @@ impl Editor {
                 self.page.perform(Action::Select(if bind == Bind::ShiftRight { Motion::Right } else { Motion::Left }));
             }
             Bind::Type(c) => {
-                let code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
+                let code = self.page.active().is_some_and(|a| a.kind.is_code());
                 match prefs.auto_pair.then(|| format::auto_pair(&text, sel, c, code)).flatten() {
                     Some(e) if !pending => self.page.apply_typed(e, c),
                     _ => self.page.perform(Action::Edit(Edit::Insert(c))),
@@ -777,16 +776,16 @@ impl Editor {
     fn vertical(&mut self, down: bool) -> Task<EditorMsg> {
         let motion = if down { Motion::Down } else { Motion::Up };
         let before = self.page.cursor_token();
-        if self.page.pending.is_none() {
+        if self.page.pending().is_none() {
             self.page.perform(Action::Move(motion));
         }
         let after = self.page.cursor_token();
-        if self.page.pending.is_some() || before == after {
+        if self.page.pending().is_some() || before == after {
             let column = self.page.column();
             match self.page.neighbor(down) {
                 Some(b) => self.page.enter_block(b, down, Some(column)),
                 // Below the last block, when it is code: a new paragraph.
-                None if down && self.page.pending.is_none() => self.page.new_paragraph_after(),
+                None if down && self.page.pending().is_none() => self.page.new_paragraph_after(),
                 None => {}
             }
         }
@@ -797,11 +796,11 @@ impl Editor {
     fn extend_vertically(&mut self, down: bool) -> Task<EditorMsg> {
         let motion = if down { Motion::Down } else { Motion::Up };
         let before = self.page.cursor_token();
-        if self.page.pending.is_none() {
+        if self.page.pending().is_none() {
             self.page.perform(Action::Select(motion));
         }
         let after = self.page.cursor_token();
-        if self.page.pending.is_some() || before == after {
+        if self.page.pending().is_some() || before == after {
             let anchor = self.page.active_block().or_else(|| self.page.neighbor(down));
             if let Some(anchor) = anchor {
                 let head = self.page.neighbor(down).unwrap_or(anchor);
@@ -813,13 +812,13 @@ impl Editor {
 
     /// Left at the start / Right at the end of the region move into the block before / after.
     fn horizontal(&mut self, right: bool) -> Task<EditorMsg> {
-        if self.page.active.is_none() {
+        if self.page.active().is_none() {
             return Task::none();
         }
-        if self.page.at_edge(right) || self.page.pending.is_some() {
+        if self.page.at_edge(right) || self.page.pending().is_some() {
             match self.page.neighbor(right) {
                 Some(b) => self.page.enter_block(b, right, None),
-                None if right && self.page.pending.is_none() => self.page.new_paragraph_after(),
+                None if right && self.page.pending().is_none() => self.page.new_paragraph_after(),
                 None => {}
             }
         } else {
@@ -835,7 +834,7 @@ impl Editor {
             return Task::none();
         }
         self.menu = None;
-        let offset = view::hit_test(&info, p).or_else(|| self.page.doc.blocks.get(info.block).map(|b| b.range.start));
+        let offset = view::hit_test(&info, p).or_else(|| self.page.doc().blocks.get(info.block).map(|b| b.range.start));
         if let Some(offset) = offset {
             self.page.place(Sel::caret(offset));
         }
@@ -847,12 +846,12 @@ impl Editor {
         if self.shift_selects(block) {
             return Task::none();
         }
-        if let Some(b) = self.page.doc.blocks.get(block) {
+        if let Some(b) = self.page.doc().blocks.get(block) {
             // Beside a list item's text (on its bullet): where its text starts.
             let at = match b.kind {
                 crate::markdown::BlockKind::ListItem(_) => {
-                    let region = edit::region_at(&self.page.doc, b.range.start).unwrap_or(b.range.clone());
-                    edit::content_start(&self.page.text, b.range.start).min(region.end)
+                    let region = edit::region_at(self.page.doc(), b.range.start).unwrap_or(b.range.clone());
+                    edit::content_start(self.page.text(), b.range.start).min(region.end)
                 }
                 _ => b.range.start,
             };
@@ -866,7 +865,7 @@ impl Editor {
         if !self.modifiers.shift() {
             return false;
         }
-        let Some(anchor) = self.page.active_block().or(self.page.blocks.map(|b| b.0)) else { return false };
+        let Some(anchor) = self.page.active_block().or(self.page.selected_blocks().map(|b| b.0)) else { return false };
         self.page.select_blocks(anchor, block);
         true
     }
@@ -876,7 +875,7 @@ impl Editor {
         if let Some(label) = dest.strip_prefix('^') {
             let block = self
                 .page
-                .doc
+                .doc()
                 .blocks
                 .iter()
                 .position(|b| b.kind == crate::markdown::BlockKind::Footnote(label.to_string()));
@@ -890,13 +889,13 @@ impl Editor {
             return self.focus();
         }
         if let Some(anchor) = dest.strip_prefix('#') {
-            if let Some(h) = self.page.doc.heading_for_anchor(anchor) {
-                let index = self.page.doc.headings.iter().position(|x| x.block == h.block).unwrap_or(0);
+            if let Some(h) = self.page.doc().heading_for_anchor(anchor) {
+                let index = self.page.doc().headings.iter().position(|x| x.block == h.block).unwrap_or(0);
                 return self.go_to_heading(index);
             }
             return Task::none();
         }
-        match resolve_link(&self.page.path, dest) {
+        match resolve_link(self.page.path(), dest) {
             LinkTarget::Page(path) => effects.push(Effect::OpenPage(path)),
             LinkTarget::External(target) => effects.push(Effect::OpenExternal(target)),
         }
@@ -904,10 +903,9 @@ impl Editor {
     }
 
     fn go_to_heading(&mut self, index: usize) -> Task<EditorMsg> {
-        let Some(h) = self.page.doc.headings.get(index) else { return Task::none() };
+        let Some(h) = self.page.doc().headings.get(index) else { return Task::none() };
         let block = h.block;
-        self.page.deactivate();
-        self.page.sel = Sel::caret(self.page.doc.blocks[block].range.start);
+        self.page.leave_at(Sel::caret(self.page.doc().blocks[block].range.start));
         self.scroll_to_block(block)
     }
 
@@ -947,16 +945,16 @@ impl Editor {
             }
             C::SelectAll => self.select_all(),
             C::SelectWord => self.with_active(|p| {
-                if let Some(w) = format::word_at(&p.text, p.sel.head) {
+                if let Some(w) = format::word_at(p.text(), p.sel().head) {
                     p.place(Sel { anchor: w.start, head: w.end });
                 }
             }),
             C::SelectLine => self.with_active(|p| {
-                let line = edit::line_range(&p.text, p.sel.head);
+                let line = edit::line_range(p.text(), p.sel().head);
                 p.place(Sel { anchor: line.start, head: line.end });
             }),
             C::SelectSpan => self.with_active(|p| {
-                if let Some(r) = format::styled_span_at(&p.text, &p.doc, p.sel.head) {
+                if let Some(r) = format::styled_span_at(p.text(), p.doc(), p.sel().head) {
                     p.place(Sel { anchor: r.start, head: r.end });
                 }
             }),
@@ -1009,7 +1007,7 @@ impl Editor {
                 Task::none()
             }
             C::Image => {
-                let dir = self.page.path.parent().map(Path::to_path_buf);
+                let dir = self.page.path().parent().map(Path::to_path_buf);
                 Task::perform(
                     async move {
                         let mut dialog = rfd::AsyncFileDialog::new().add_filter("Images", images::IMAGE_EXTENSIONS);
@@ -1059,8 +1057,8 @@ impl Editor {
     /// The save dialog for an export: the page's name with `.html` / `.pdf`, next to it.
     fn ask_export_file(&self, pdf: bool) -> Task<EditorMsg> {
         let (ext, filter) = if pdf { ("pdf", "PDF") } else { ("html", "HTML") };
-        let stem = crate::paths::file_stem(&self.page.path);
-        let dir = self.page.path.parent().map(Path::to_path_buf);
+        let stem = crate::paths::file_stem(self.page.path());
+        let dir = self.page.path().parent().map(Path::to_path_buf);
         Task::perform(
             async move {
                 let mut dialog =
@@ -1077,7 +1075,7 @@ impl Editor {
     /// Exports the page in the background.
     fn export_to(&mut self, pdf: bool, out: Option<PathBuf>) -> Task<EditorMsg> {
         let Some(out) = out else { return Task::none() };
-        let (page, text) = (self.page.path.clone(), self.page.text.clone());
+        let (page, text) = (self.page.path().to_path_buf(), self.page.text().to_string());
         self.status.set(format!("exporting {}", file_name(&out)));
         Task::perform(
             blocking(move || {
@@ -1096,7 +1094,7 @@ impl Editor {
 
     pub fn save(&mut self) -> Task<EditorMsg> {
         match self.page.save() {
-            Ok(()) => self.status.set(format!("saved {}", file_name(&self.page.path))),
+            Ok(()) => self.status.set(format!("saved {}", file_name(self.page.path()))),
             Err(e) => self.dialogs.push_back(EditorDialog::Message(e)),
         }
         Task::none()
@@ -1141,8 +1139,7 @@ impl Editor {
             }
             (EditorDialog::ChangedOnDisk, _) => {
                 self.dialogs.pop_front();
-                // Keep the editor's text: it is what is saved next.
-                self.page.modified = std::fs::metadata(&self.page.path).and_then(|m| m.modified()).ok();
+                self.page.ignore_disk_change();
             }
             _ => {
                 self.dialogs.pop_front();
@@ -1187,8 +1184,8 @@ impl Editor {
 
     /// Runs `f` with the page when a region is active.
     fn with_active(&mut self, f: impl FnOnce(&mut Page)) -> Task<EditorMsg> {
-        if self.page.active.is_none() {
-            self.page.place(self.page.sel);
+        if self.page.active().is_none() {
+            self.page.place(self.page.sel());
         }
         f(&mut self.page);
         self.focus()
@@ -1200,15 +1197,15 @@ impl Editor {
 
     fn edit_selection(&mut self, f: impl FnOnce(&str, Sel) -> edit::Edited) -> Task<EditorMsg> {
         if self.source.is_some() {
-            let e = f(&self.page.text, self.page.sel);
+            let e = f(self.page.text(), self.page.sel());
             self.page.set_text(e.text, e.sel);
             self.refresh_source();
             return self.focus();
         }
-        if self.page.active.is_none() || self.page.pending.is_some() {
+        if self.page.active().is_none() || self.page.pending().is_some() {
             return Task::none();
         }
-        let e = f(&self.page.text, self.page.sel);
+        let e = f(self.page.text(), self.page.sel());
         self.page.apply(e);
         self.focus()
     }
@@ -1218,11 +1215,11 @@ impl Editor {
         &mut self,
         f: impl FnOnce(&str, &crate::markdown::Document, std::ops::Range<usize>, Sel) -> Option<edit::Edited>,
     ) -> Task<EditorMsg> {
-        let Some(a) = &self.page.active else { return Task::none() };
-        if self.page.pending.is_some() {
+        let Some(a) = self.page.active() else { return Task::none() };
+        if self.page.pending().is_some() {
             return Task::none();
         }
-        if let Some(e) = edit::nested(&self.page.text, &self.page.doc, a.region.clone(), self.page.sel, f) {
+        if let Some(e) = edit::nested(self.page.text(), self.page.doc(), a.region.clone(), self.page.sel(), f) {
             self.page.apply(e);
         }
         self.focus()
@@ -1235,13 +1232,13 @@ impl Editor {
         nested: bool,
         f: impl FnOnce(&str, &crate::markdown::Document, std::ops::Range<usize>, Sel) -> Option<edit::Edited>,
     ) -> Task<EditorMsg> {
-        let range = match (self.page.blocks_range(), &self.page.active) {
+        let range = match (self.page.blocks_range(), self.page.active()) {
             (Some(r), _) => r,
-            (None, Some(a)) if self.page.pending.is_none() => a.region.clone(),
+            (None, Some(a)) if self.page.pending().is_none() => a.region.clone(),
             _ => return Task::none(),
         };
-        self.page.blocks = None;
-        let (text, doc, sel) = (&self.page.text, &self.page.doc, self.page.sel);
+        self.page.deselect_blocks();
+        let (text, doc, sel) = (self.page.text(), self.page.doc(), self.page.sel());
         let e = if nested { edit::nested_blocks(text, doc, range, sel, f) } else { f(text, doc, range, sel) };
         if let Some(e) = e {
             self.page.apply(e);
@@ -1254,17 +1251,17 @@ impl Editor {
         &mut self,
         f: impl FnOnce(&str, &crate::markdown::Document, std::ops::Range<usize>, Sel) -> Option<edit::Edited>,
     ) -> Task<EditorMsg> {
-        let range = if !self.page.sel.is_empty() {
-            self.page.sel.range()
+        let range = if !self.page.sel().is_empty() {
+            self.page.sel().range()
         } else if let Some(r) = self.page.blocks_range() {
             r
-        } else if let Some(a) = &self.page.active {
+        } else if let Some(a) = self.page.active() {
             a.region.clone()
         } else {
             return Task::none();
         };
-        self.page.blocks = None;
-        if let Some(e) = f(&self.page.text, &self.page.doc, range, self.page.sel) {
+        self.page.deselect_blocks();
+        if let Some(e) = f(self.page.text(), self.page.doc(), range, self.page.sel()) {
             self.page.apply(e);
         }
         self.focus()
@@ -1273,19 +1270,19 @@ impl Editor {
     /// Inserts a new block after the active one (or at the end): `open`, the
     /// cursor, `close`.
     fn insert_block(&mut self, open: &str, close: &str) -> Task<EditorMsg> {
-        let text = &self.page.text;
-        let at = match (&self.page.active, &self.page.pending) {
+        let text = self.page.text();
+        let at = match (self.page.active(), self.page.pending()) {
             (Some(_), Some(p)) => p.at,
             (Some(a), None) => a.region.end,
             _ => self.page.blocks_range().map_or(text.len(), |r| r.end),
         };
-        let pending = match &self.page.pending {
-            Some(p) if self.page.active.is_some() => p.clone(),
-            _ => edit::gap_pending(text, &self.page.doc, at, None),
+        let pending = match self.page.pending() {
+            Some(p) if self.page.active().is_some() => p.clone(),
+            _ => edit::gap_pending(text, self.page.doc(), at, None),
         };
         let (new, start) = pending.materialize(text, &format!("{open}{close}"));
         let cursor = start + pending.prefixed(open).len();
-        self.page.blocks = None;
+        self.page.deselect_blocks();
         self.page.set_text(new, Sel::caret(cursor));
         self.focus()
     }
@@ -1295,17 +1292,17 @@ impl Editor {
             source.perform(Action::SelectAll);
             return Task::none();
         }
-        let whole_region = self.page.active.as_ref().is_some_and(|a| {
-            let s = self.page.sel.range();
+        let whole_region = self.page.active().is_some_and(|a| {
+            let s = self.page.sel().range();
             s.start <= a.region.start && s.end >= a.region.end && !a.region.is_empty()
         });
-        if self.select_all_again || whole_region || self.page.active.is_none() {
-            let last = self.page.doc.blocks.len().saturating_sub(1);
+        if self.select_all_again || whole_region || self.page.active().is_none() {
+            let last = self.page.doc().blocks.len().saturating_sub(1);
             self.page.select_blocks(0, last);
             self.select_all_again = false;
             return Task::none();
         }
-        if let Some(a) = &self.page.active {
+        if let Some(a) = self.page.active() {
             let r = a.region.clone();
             if a.table().is_some() {
                 self.page.select_blocks(self.page.active_block().unwrap_or(0), self.page.active_block().unwrap_or(0));
@@ -1323,7 +1320,7 @@ impl Editor {
     /// Returns whether there was something to copy.
     fn copy(&mut self, markdown_only: bool, effects: &mut Vec<Effect>) -> bool {
         // A range of table cells: tab-separated text and an HTML table, or a Markdown table.
-        if let Some(a) = &self.page.active
+        if let Some(a) = self.page.active()
             && let Some(state) = a.table()
             && let Some(range) = state.range
         {
@@ -1352,14 +1349,14 @@ impl Editor {
 
     /// Removes what is selected (after a cut).
     fn delete_selection(&mut self) {
-        if self.page.blocks.is_some() {
+        if self.page.selected_blocks().is_some() {
             self.delete_blocks(None);
         } else if let Some(source) = &mut self.source {
             source.perform(Action::Edit(Edit::Delete));
             let text = source.text();
             let sel = content_sel(source, &text);
             self.page.set_source_text(text, sel);
-        } else if self.page.active.as_ref().and_then(|a| a.table()).is_some_and(|t| t.range.is_some()) {
+        } else if self.page.active().and_then(|a| a.table()).is_some_and(|t| t.range.is_some()) {
             self.clear_cells();
         } else {
             self.page.perform(Action::Edit(Edit::Delete));
@@ -1370,7 +1367,7 @@ impl Editor {
     /// converted to Markdown (a table as a table), text as it is (see
     /// `markdown::paste`).
     fn pasted(&mut self, content: ClipboardContent, plain: bool, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        let in_code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
+        let in_code = self.page.active().is_some_and(|a| a.kind.is_code());
         let text = paste::clipboard_text(content.text.as_deref(), content.html.as_deref(), in_code);
         if !plain {
             if !content.files.is_empty() {
@@ -1381,7 +1378,7 @@ impl Editor {
             }
         }
         match paste::convert(&text, content.html.as_deref(), in_code, plain, self.copied.as_deref()) {
-            Paste::Cells(grid) if self.page.active.as_ref().is_some_and(|a| a.table().is_some()) => {
+            Paste::Cells(grid) if self.page.active().is_some_and(|a| a.table().is_some()) => {
                 self.page.change_table(|t, cell| {
                     t.paste(cell, &grid);
                     cell
@@ -1396,10 +1393,10 @@ impl Editor {
 
     /// Inserts text at the cursor (in place of the selected blocks).
     fn insert_text(&mut self, text: &str) {
-        if self.page.blocks.is_some() {
+        if self.page.selected_blocks().is_some() {
             let Some(range) = self.page.blocks_range() else { return };
-            let new = edit::splice(&self.page.text, range.clone(), text);
-            self.page.blocks = None;
+            let new = edit::splice(self.page.text(), range.clone(), text);
+            self.page.deselect_blocks();
             self.page.set_text(new, Sel::caret(range.start + text.len()));
             return;
         }
@@ -1410,8 +1407,8 @@ impl Editor {
             self.page.set_source_text(t, sel);
             return;
         }
-        if self.page.active.is_none() {
-            self.page.place(self.page.sel);
+        if self.page.active().is_none() {
+            self.page.place(self.page.sel());
         }
         self.page.perform(Action::Edit(Edit::Paste(Arc::new(text.to_string()))));
     }
@@ -1421,13 +1418,13 @@ impl Editor {
         if files.is_empty() {
             return Task::none();
         }
-        let (page, text, opts) = (self.page.path.clone(), self.page.text.clone(), prefs.images.clone());
+        let (page, text, opts) = (self.page.path().to_path_buf(), self.page.text().to_string(), prefs.images.clone());
         Task::perform(blocking(move || images::files_markdown(&page, &text, &files, &opts)), EditorMsg::Inserted)
     }
 
     /// Saves pasted image data as a PNG in the image folder and inserts it.
     fn insert_image_data(&mut self, image: clipboard::PastedImage, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        let (page, text, opts) = (self.page.path.clone(), self.page.text.clone(), prefs.images.clone());
+        let (page, text, opts) = (self.page.path().to_path_buf(), self.page.text().to_string(), prefs.images.clone());
         let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
         Task::perform(
             blocking(move || {
@@ -1445,17 +1442,15 @@ impl Editor {
             Some(content) => {
                 let text = content.text();
                 let sel = content_sel(&content, &text);
-                self.page.active = None;
-                self.page.pending = None;
+                self.page.forget_active();
                 self.page.place(sel);
             }
             None => {
-                let sel = self.page.sel;
-                self.page.deactivate();
-                self.page.blocks = None;
-                let mut content = Content::with_text(&self.page.text);
-                move_content(&mut content, &self.page.text, sel);
-                self.page.sel = sel;
+                let sel = self.page.sel();
+                self.page.leave_at(sel);
+                self.page.deselect_blocks();
+                let mut content = Content::with_text(self.page.text());
+                move_content(&mut content, self.page.text(), sel);
                 self.source = Some(content);
             }
         }
@@ -1465,17 +1460,16 @@ impl Editor {
     /// The source mode's text editor shows the page's text again (after undo or a reload).
     fn refresh_source(&mut self) {
         if let Some(source) = &mut self.source {
-            *source = Content::with_text(&self.page.text);
-            move_content(source, &self.page.text, self.page.sel);
-            self.page.active = None;
-            self.page.pending = None;
+            *source = Content::with_text(self.page.text());
+            move_content(source, self.page.text(), self.page.sel());
+            self.page.forget_active();
         }
     }
 
     fn leave_source_for_history(&mut self) {
         if let Some(source) = &self.source {
             let text = source.text();
-            if text != self.page.text {
+            if text != self.page.text() {
                 let sel = content_sel(source, &text);
                 self.page.set_source_text(text, sel);
             }
@@ -1547,7 +1541,7 @@ impl Editor {
 
     /// Words and characters for the status bar.
     pub fn counts(&self) -> (count::Counts, Option<count::Counts>) {
-        let all = count::count(&count::shown_text(&self.page.doc));
+        let all = count::count(&count::shown_text(self.page.doc()));
         let selected = self.page.selected_source();
         let sel = (!selected.is_empty()).then(|| count::count_source(&selected));
         (all, sel)

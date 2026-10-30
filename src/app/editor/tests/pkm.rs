@@ -17,8 +17,8 @@ fn renaming_an_open_page_saves_it_and_the_editor_follows() {
     assert!(!page.exists());
     assert_eq!(crate::markdown::page::read_page(&renamed).unwrap(), "[assets](Done.assets)\n\nold new\n");
     let editor = &app.editors[&id];
-    assert_eq!(editor.page.path, renamed);
-    assert_eq!(editor.page.text, "[assets](Done.assets)\n\nold new\n");
+    assert_eq!(editor.page.path(), renamed);
+    assert_eq!(editor.page.text(), "[assets](Done.assets)\n\nold new\n");
     assert!(!editor.page.is_dirty());
     assert_eq!(app.title(id), "Done.md - Mind PKM");
 }
@@ -108,7 +108,7 @@ fn pages_in_a_renamed_directory_follow_it() {
     send(&mut app, Message::DialogInput("Areas".into()));
     send(&mut app, Message::DialogOk);
     let moved = f.doc_dir.join("Areas").join("Note.md");
-    assert_eq!(app.editors[&id].page.path, moved);
+    assert_eq!(app.editors[&id].page.path(), moved);
     assert_eq!(crate::markdown::page::read_page(&moved).unwrap(), "note!\n");
 }
 

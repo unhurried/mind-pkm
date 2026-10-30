@@ -195,7 +195,7 @@ pub(super) fn image_view<'a>(inline: &Inline, ctx: &Ctx<'a>, width: f32, block: 
     let Inline::Image { src, alt, width: w, source, .. } = inline else { return space().into() };
     let editor = ctx.editor;
     let at = source.start;
-    let path = images::image_path(&editor.page.path, &editor.page.text, src);
+    let path = images::image_path(editor.page.path(), editor.page.text(), src);
     let max = w.map_or(width, |w| (w * ctx.zoom).min(width));
     let shown: Element<EditorMsg> = match path {
         Some(path) if path.is_file() => {
@@ -295,7 +295,7 @@ pub(super) fn cell_frame<'a>(width: impl Into<Length>, bg: Color, p: Palette) ->
 
 impl Editor {
     pub(super) fn block_view<'a>(&'a self, i: usize, ctx: &Ctx<'a>, width: f32) -> Element<'a, EditorMsg> {
-        let doc = &self.page.doc;
+        let doc = self.page.doc();
         let block = &doc.blocks[i];
         let p = ctx.p;
         let base = TextBase { size: ctx.size(1.0), font: APP_FONT, color: p.text };
@@ -351,7 +351,7 @@ impl Editor {
             }
             BlockKind::Table => table_view(&content::table_block(doc, i), ctx, i),
             BlockKind::FrontMatter => {
-                let source = &self.page.text[block.range.clone()];
+                let source = &self.page.text()[block.range.clone()];
                 container(text(source.to_string()).font(CODE_FONT).size(ctx.size(0.85)).color(p.muted))
                     .padding(CODE_PADDING)
                     .width(Fill)
@@ -374,7 +374,7 @@ impl Editor {
                 list.into()
             }
             BlockKind::Other => {
-                let source = &self.page.text[block.range.clone()];
+                let source = &self.page.text()[block.range.clone()];
                 text(source.to_string()).size(ctx.size(0.9)).color(p.muted).into()
             }
             BlockKind::ListItem(item) => self.list_item_view(i, item, ctx, width),
@@ -403,7 +403,7 @@ impl Editor {
     }
 
     fn list_item_view<'a>(&'a self, i: usize, item: &ListItem, ctx: &Ctx<'a>, width: f32) -> Element<'a, EditorMsg> {
-        let doc = &self.page.doc;
+        let doc = self.page.doc();
         let p = ctx.p;
         let indent = LIST_INDENT * ctx.zoom * item.depth as f32;
         let marker_w = LIST_INDENT * ctx.zoom;

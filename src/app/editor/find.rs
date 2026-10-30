@@ -67,10 +67,10 @@ impl Editor {
     pub(super) fn refresh_find(&mut self) {
         let text = match &self.source {
             Some(source) => source.text(),
-            None => self.page.text.clone(),
+            None => self.page.text().to_string(),
         };
         if let Some(bar) = &mut self.find {
-            bar.refresh(&text, self.page.revision);
+            bar.refresh(&text, self.page.revision());
         }
     }
 
@@ -78,7 +78,7 @@ impl Editor {
     fn current_sel(&self) -> Sel {
         match &self.source {
             Some(source) => content_sel(source, &source.text()),
-            None => self.page.sel,
+            None => self.page.sel(),
         }
     }
 
@@ -140,7 +140,7 @@ impl Editor {
             Some(source) => {
                 let text = source.text();
                 move_content(source, &text, sel);
-                self.page.sel = sel;
+                self.page.set_source_sel(sel);
             }
             None => self.page.place(sel),
         }
@@ -151,7 +151,7 @@ impl Editor {
         let Some(m) = self.current_match() else { return self.find_next(false) };
         let with = self.find.as_ref().map(|b| b.replacement.clone()).unwrap_or_default();
         self.leave_source_for_history();
-        let new = edit::splice(&self.page.text, m.clone(), &with);
+        let new = edit::splice(self.page.text(), m.clone(), &with);
         self.page.set_text(new, Sel::caret(m.start + with.len()));
         self.refresh_source();
         self.refresh_find();
@@ -163,9 +163,9 @@ impl Editor {
         let Some(bar) = &self.find else { return Task::none() };
         let (query, with, case) = (bar.query.clone(), bar.replacement.clone(), bar.match_case);
         self.leave_source_for_history();
-        let (new, n) = find::replace_all(&self.page.text, &query, &with, case);
+        let (new, n) = find::replace_all(self.page.text(), &query, &with, case);
         if n > 0 {
-            let head = self.page.sel.head.min(new.len());
+            let head = self.page.sel().head.min(new.len());
             self.page.set_text(new, Sel::caret(head));
             self.page.deactivate();
             self.refresh_source();
@@ -178,7 +178,7 @@ impl Editor {
     /// Esc: the bar closes, the focus goes back to the page with the match selected.
     pub(super) fn close_find(&mut self) -> Task<EditorMsg> {
         self.find = None;
-        if self.source.is_none() && self.page.active.is_none() {
+        if self.source.is_none() && self.page.active().is_none() {
             return Task::none();
         }
         self.focus()

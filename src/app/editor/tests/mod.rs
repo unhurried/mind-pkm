@@ -58,7 +58,7 @@ fn typing(app: &mut App, id: window::Id, s: &str) {
 }
 
 fn page_text(app: &App, id: window::Id) -> String {
-    app.editors[&id].page.text.clone()
+    app.editors[&id].page.text().to_string()
 }
 
 /// Puts the cursor at the end of `after` in the page.
@@ -94,7 +94,7 @@ fn pasted(app: &mut App, id: window::Id, text: &str, html: Option<&str>, plain: 
 }
 
 fn cell(app: &App, id: window::Id) -> (usize, usize) {
-    app.editors[&id].page.active.as_ref().unwrap().table().unwrap().cell
+    app.editors[&id].page.active().unwrap().table().unwrap().cell
 }
 
 fn live(app: &mut App, id: window::Id, msg: LiveMsg) {
@@ -103,5 +103,5 @@ fn live(app: &mut App, id: window::Id, msg: LiveMsg) {
 
 /// The kind of the block being edited.
 fn active_kind(app: &App, id: window::Id) -> crate::markdown::BlockKind {
-    app.editors[&id].page.active.as_ref().map(|a| a.kind.clone()).unwrap_or(crate::markdown::BlockKind::Other)
+    app.editors[&id].page.active().map(|a| a.kind.clone()).unwrap_or(crate::markdown::BlockKind::Other)
 }

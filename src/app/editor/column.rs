@@ -54,22 +54,22 @@ impl Entry {
 
 /// The entries of the column for `page`.
 pub fn entries(page: &Page) -> Vec<Entry> {
-    let doc = &page.doc;
-    let active = page.active.as_ref();
+    let doc = &page.doc();
+    let active = page.active();
     let mut shown = Vec::new();
     let mut active_block = None;
     for (i, block) in doc.blocks.iter().enumerate() {
         if let Some(a) = active {
             let overlaps = block.range.end >= a.region.start && block.range.start <= a.region.end;
             let placed = shown.contains(&Shown::Active);
-            if page.pending.is_none() && overlaps {
+            if page.pending().is_none() && overlaps {
                 if !placed {
                     shown.push(Shown::Active);
                     active_block = Some(i);
                 }
                 continue;
             }
-            if !placed && page.pending.as_ref().is_some_and(|pd| pd.at <= block.range.start) {
+            if !placed && page.pending().is_some_and(|pd| pd.at <= block.range.start) {
                 shown.push(Shown::Active);
             }
         }
@@ -84,13 +84,13 @@ pub fn entries(page: &Page) -> Vec<Entry> {
     };
     let mut entries: Vec<Entry> = Vec::new();
     for s in shown {
-        let (kind, outer) = match (s, &page.pending, active_block) {
+        let (kind, outer) = match (s, &page.pending(), active_block) {
             (Shown::Block(i), _, _) => of_block(i),
             (Shown::Active, Some(pd), _) => (BlockKind::Paragraph, pd.outer.iter().map(|&k| (k, None)).collect()),
             (Shown::Active, None, Some(i)) => (active.map_or(BlockKind::Paragraph, |a| a.kind.clone()), of_block(i).1),
             (Shown::Active, None, None) => (BlockKind::Paragraph, Vec::new()),
         };
-        let covers = match (s, &page.pending, active) {
+        let covers = match (s, &page.pending(), active) {
             (Shown::Block(i), _, _) => doc.blocks[i].range.clone(),
             (Shown::Active, Some(pd), _) => pd.at..pd.at,
             (Shown::Active, None, Some(a)) => a.region.clone(),
@@ -162,9 +162,9 @@ mod tests {
     #[test]
     fn a_new_paragraph_goes_before_the_block_after_it() {
         let mut p = page("one\n\ntwo\n");
-        let e = edit::enter(&p.text.clone(), &p.doc.clone(), 0..3, Sel::caret(3)).unwrap();
+        let e = edit::enter(p.text(), p.doc(), 0..3, Sel::caret(3)).unwrap();
         p.apply(e);
-        let at = p.pending.as_ref().unwrap().at;
+        let at = p.pending().unwrap().at;
         let entries = entries(&p);
         assert_eq!(
             entries.iter().map(|e| e.shown).collect::<Vec<_>>(),

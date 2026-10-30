@@ -109,7 +109,7 @@ fn live_runs(
             Look::Object(o) | Look::Preview(o) => {
                 let kind = match o {
                     Object::Image { src, alt, width: w, link, .. } => {
-                        let path = images::image_path(&page.path, &page.text, src);
+                        let path = images::image_path(page.path(), page.text(), src);
                         let max_width = w.map(|w| w * ctx.zoom);
                         match path {
                             Some(path) if path.is_file() => {
@@ -217,7 +217,7 @@ impl Editor {
         // Math and diagrams show what they become below their source.
         let preview: Option<Element<EditorMsg>> = match &a.kind {
             BlockKind::Math => {
-                let tex = self.page.text[a.region.clone()].trim().trim_start_matches("$$").trim_end_matches("$$");
+                let tex = self.page.text()[a.region.clone()].trim().trim_start_matches("$$").trim_end_matches("$$");
                 Some(math_view(tex.trim(), true, ctx))
             }
             k if k.is_mermaid() => Some(mermaid_view(&self.active_diagram(a), ctx, width)),
@@ -233,11 +233,11 @@ impl Editor {
     /// The source of the Mermaid block being edited, keyed like the renders
     /// requested for the page's blocks.
     pub(in crate::app::editor) fn active_diagram(&self, a: &Active) -> String {
-        let block = self.page.active_block().filter(|&b| self.page.doc.blocks[b].kind.is_mermaid());
+        let block = self.page.active_block().filter(|&b| self.page.doc().blocks[b].kind.is_mermaid());
         if let Some(b) = block {
-            return crate::app::editor::render::mermaid_source(&self.page.doc, b);
+            return crate::app::editor::render::mermaid_source(self.page.doc(), b);
         }
-        let src = &self.page.text[a.region.clone()];
+        let src = &self.page.text()[a.region.clone()];
         let body = src.split_once('\n').map_or("", |(_, b)| b);
         let body = body.rsplit_once('\n').map_or(body, |(b, last)| {
             if last.trim().starts_with("```") || last.trim().starts_with("~~~") { b } else { body }
@@ -369,7 +369,7 @@ impl Editor {
             }
             BlockKind::Quote => quote_view(body(base, width - QUOTE_PADDING - QUOTE_BAR, marks), p),
             BlockKind::Footnote(label) => {
-                let number = self.page.doc.footnotes.get(label).copied().unwrap_or(0);
+                let number = self.page.doc().footnotes.get(label).copied().unwrap_or(0);
                 let label_w = 32.0 * ctx.zoom;
                 row![
                     text(format!("[{number}]")).size(ctx.size(0.85)).color(p.muted).width(label_w),

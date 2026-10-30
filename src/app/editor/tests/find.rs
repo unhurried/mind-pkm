@@ -7,7 +7,7 @@ fn find(app: &mut App, id: window::Id, msg: FindMsg) {
 }
 
 fn selected(app: &App, id: window::Id) -> std::ops::Range<usize> {
-    app.editors[&id].page.sel.range()
+    app.editors[&id].page.sel().range()
 }
 
 #[test]

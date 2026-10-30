@@ -160,7 +160,7 @@ impl App {
     /// Opens a Markdown file in an editor window.
     pub(super) fn open_in_editor(&mut self, path: &Path) -> Task<Message> {
         let key = crate::paths::key(path);
-        if let Some((&id, _)) = self.editors.iter().find(|(_, e)| crate::paths::key(&e.page.path) == key) {
+        if let Some((&id, _)) = self.editors.iter().find(|(_, e)| crate::paths::key(e.page.path()) == key) {
             return window::gain_focus(id);
         }
         match Editor::open(path, self.editor_prefs.window) {
@@ -209,7 +209,7 @@ impl App {
         let depth = old.components().count();
         for id in self.editors_of(old) {
             let Some(editor) = self.editors.get_mut(&id) else { continue };
-            let rest: PathBuf = editor.page.path.components().skip(depth).collect();
+            let rest: PathBuf = editor.page.path().components().skip(depth).collect();
             editor.moved_to(if rest.as_os_str().is_empty() { new.to_path_buf() } else { new.join(rest) });
         }
     }
@@ -227,7 +227,7 @@ impl App {
     pub(super) fn close_deleted_editors(&mut self, paths: &[PathBuf]) -> Task<Message> {
         let ids: Vec<window::Id> = paths.iter().flat_map(|p| self.editors_of(p)).collect();
         let gone: Vec<window::Id> =
-            ids.into_iter().filter(|id| self.editors.get(id).is_some_and(|e| !e.page.path.exists())).collect();
+            ids.into_iter().filter(|id| self.editors.get(id).is_some_and(|e| !e.page.path().exists())).collect();
         Task::batch(gone.into_iter().map(|id| self.close_editor(id)))
     }
 
@@ -237,7 +237,7 @@ impl App {
         self.editors
             .iter()
             .filter(|(_, e)| {
-                let k = crate::paths::key(&e.page.path);
+                let k = crate::paths::key(e.page.path());
                 k == key || k.starts_with(&key) && k[key.len()..].starts_with(std::path::MAIN_SEPARATOR)
             })
             .map(|(&id, _)| id)
@@ -254,7 +254,7 @@ impl App {
 
     /// The names of the pages with unsaved changes.
     pub(super) fn unsaved_pages(&self) -> Vec<String> {
-        self.editors.values().filter(|e| e.page.is_dirty()).map(|e| crate::paths::file_name(&e.page.path)).collect()
+        self.editors.values().filter(|e| e.page.is_dirty()).map(|e| crate::paths::file_name(e.page.path())).collect()
     }
 
     /// Saves every page with unsaved changes; the errors of those that fail.

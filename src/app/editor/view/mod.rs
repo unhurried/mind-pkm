@@ -106,7 +106,7 @@ impl Editor {
         // While a table is edited or the assets pane is shown, where the
         // pointer is (a menu opens there, a dragged item follows it).
         let mut root = mouse_area(layers);
-        if self.page.active.as_ref().is_some_and(|a| a.table().is_some()) || self.assets.is_some() {
+        if self.page.active().is_some_and(|a| a.table().is_some()) || self.assets.is_some() {
             root = root.on_move(EditorMsg::PointerAt);
         }
         arrow_cursor(root).into()

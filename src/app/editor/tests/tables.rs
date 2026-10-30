@@ -9,7 +9,7 @@ fn table_of(app: &App, id: window::Id) -> crate::markdown::table::Table {
 }
 
 fn cell_range(app: &App, id: window::Id) -> Option<crate::markdown::table::CellRange> {
-    app.editors[&id].page.active.as_ref().unwrap().table().unwrap().range
+    app.editors[&id].page.active().unwrap().table().unwrap().range
 }
 
 fn rows(app: &App, id: window::Id) -> Vec<Vec<String>> {
@@ -126,7 +126,7 @@ fn clicking_a_cell_of_an_inactive_table_puts_the_cursor_in_that_cell() {
     let (mut app, _f, _, _) = app_with_page(&format!("Intro\n\n{TABLE}"));
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "Intro");
-    let table = app.editors[&id].page.doc.blocks.iter().position(|b| b.kind == crate::markdown::BlockKind::Table);
+    let table = app.editors[&id].page.doc().blocks.iter().position(|b| b.kind == crate::markdown::BlockKind::Table);
     editor(&mut app, id, EditorMsg::TableCellPressed(table.unwrap(), 2, 1));
     assert_eq!(cell(&app, id), (2, 1));
     typing(&mut app, id, "Q");

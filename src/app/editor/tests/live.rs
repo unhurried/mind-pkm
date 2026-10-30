@@ -3,7 +3,7 @@
 use super::*;
 
 fn shown(app: &App, id: window::Id) -> String {
-    app.editors[&id].page.active.as_ref().and_then(|a| a.live()).map(|l| l.display.text.clone()).unwrap_or_default()
+    app.editors[&id].page.active().and_then(|a| a.live()).map(|l| l.display.text.clone()).unwrap_or_default()
 }
 
 #[test]
@@ -16,7 +16,7 @@ fn only_the_element_at_the_cursor_shows_its_markdown() {
     assert_eq!(shown(&app, id), "some **bold** link");
     // Clicking the rendered text puts the cursor there.
     live(&mut app, id, LiveMsg::Click { at: 2, extend: false });
-    assert_eq!(app.editors[&id].page.sel.head, 2);
+    assert_eq!(app.editors[&id].page.sel().head, 2);
     assert_eq!(shown(&app, id), "some bold link");
 }
 
@@ -44,7 +44,7 @@ fn deleting_rendered_text_keeps_or_removes_its_markup() {
     assert_eq!(shown(&app, id), "bold x");
     // Selecting `bo` of the rendered word and deleting it.
     live(&mut app, id, LiveMsg::Click { at: 0, extend: false });
-    let l = app.editors[&id].page.active.as_ref().unwrap().live().cloned().unwrap();
+    let l = app.editors[&id].page.active().unwrap().live().cloned().unwrap();
     let start = l.display.text.find("bo").unwrap();
     live(&mut app, id, LiveMsg::Click { at: start, extend: false });
     live(&mut app, id, LiveMsg::Drag(start + 2));
@@ -58,7 +58,7 @@ fn deleting_rendered_text_keeps_or_removes_its_markup() {
     assert_eq!(shown(&app, id), "a bold b");
     live(&mut app, id, LiveMsg::Click { at: 2, extend: false });
     // From the bold's start (now shown with its markers) to its end.
-    let l = app.editors[&id].page.active.as_ref().unwrap().live().cloned().unwrap();
+    let l = app.editors[&id].page.active().unwrap().live().cloned().unwrap();
     let (s, e) = (l.display.text.find("**").unwrap(), l.display.text.rfind("**").unwrap() + 2);
     live(&mut app, id, LiveMsg::Click { at: s, extend: false });
     live(&mut app, id, LiveMsg::Drag(e));
@@ -73,7 +73,7 @@ fn enter_twice_leaves_a_quote() {
     click_after(&mut app, id, "one");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     // A new paragraph in the quote, without source until typed into.
-    let pending = app.editors[&id].page.pending.clone().expect("a new paragraph");
+    let pending = app.editors[&id].page.pending().expect("a new paragraph");
     assert_eq!(pending.outer, vec![crate::markdown::parse::ContainerKind::Quote]);
     assert_eq!(page_text(&app, id), "> one\n");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
@@ -100,7 +100,7 @@ fn moving_by_characters_and_words_in_rendered_text() {
     right(&mut app);
     // Next to the bold: its markers show, the cursor before them.
     assert_eq!(shown(&app, id), "ab **cd** ef");
-    assert_eq!(app.editors[&id].page.sel.head, 3);
+    assert_eq!(app.editors[&id].page.sel().head, 3);
     live(&mut app, id, LiveMsg::Motion { motion: Motion::WordRight, select: false });
     live(&mut app, id, LiveMsg::Motion { motion: Motion::End, select: true });
     assert!(app.editors[&id].page.selected_source().ends_with("ef"));
@@ -172,7 +172,7 @@ fn a_marker_shows_as_typed_until_its_space() {
     }
     let (mut app, id, _f) = new_paragraph_after_first("a\n");
     type_keys(&mut app, id, "- [ ] x");
-    let item = app.editors[&id].page.doc.blocks.iter().find_map(|b| match &b.kind {
+    let item = app.editors[&id].page.doc().blocks.iter().find_map(|b| match &b.kind {
         BlockKind::ListItem(i) => Some(i.task),
         _ => None,
     });
@@ -189,8 +189,8 @@ fn a_list_in_a_quote_as_it_is_typed() {
     assert_eq!(shown(&app, id), "x");
     let page = &app.editors[&id].page;
     let b = page.active_block().unwrap();
-    assert!(matches!(page.doc.blocks[b].kind, BlockKind::ListItem(_)));
-    assert_eq!(page.doc.outer_kinds(b), vec![ContainerKind::Quote]);
+    assert!(matches!(page.doc().blocks[b].kind, BlockKind::ListItem(_)));
+    assert_eq!(page.doc().outer_kinds(b), vec![ContainerKind::Quote]);
     // Enter: the next item in the quote.
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     type_keys(&mut app, id, "y");
@@ -205,7 +205,7 @@ fn line_syntax_waits_for_enter() {
     type_keys(&mut app, id, "```");
     assert_eq!(page_text(&app, id), "a\n\n```\n\nb\n\nc\n");
     assert_eq!(shown(&app, id), "```");
-    let kinds: Vec<BlockKind> = app.editors[&id].page.doc.blocks.iter().map(|b| b.kind.clone()).collect();
+    let kinds: Vec<BlockKind> = app.editors[&id].page.doc().blocks.iter().map(|b| b.kind.clone()).collect();
     assert_eq!(kinds, vec![BlockKind::Paragraph; 4]);
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     assert_eq!(page_text(&app, id), "a\n\n```\n\n```\n\nb\n\nc\n");
@@ -217,8 +217,8 @@ fn line_syntax_waits_for_enter() {
     assert_eq!(shown(&app, id), "---");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     let page = &app.editors[&id].page;
-    assert!(page.doc.blocks.iter().any(|b| b.kind == BlockKind::ThematicBreak));
-    assert!(page.pending.is_some());
+    assert!(page.doc().blocks.iter().any(|b| b.kind == BlockKind::ThematicBreak));
+    assert!(page.pending().is_some());
 
     // A setext underline.
     let (mut app, _f, _, _) = app_with_page("Title\n");
@@ -235,7 +235,7 @@ fn an_undetermined_marker_left_behind_is_what_the_text_says() {
     let (mut app, id, _f) = new_paragraph_after_first("a\n");
     type_keys(&mut app, id, "#");
     click_after(&mut app, id, "a");
-    let kinds: Vec<BlockKind> = app.editors[&id].page.doc.blocks.iter().map(|b| b.kind.clone()).collect();
+    let kinds: Vec<BlockKind> = app.editors[&id].page.doc().blocks.iter().map(|b| b.kind.clone()).collect();
     assert_eq!(kinds, vec![BlockKind::Paragraph, BlockKind::Heading(1)]);
     // Undo takes the marker back as typed.
     assert!(app.editors.get_mut(&id).unwrap().page.undo());
@@ -249,7 +249,7 @@ fn shift_enter_at_the_end_of_a_paragraph() {
     click_after(&mut app, id, "one");
     editor(&mut app, id, EditorMsg::Bind(Bind::ShiftEnter));
     // The cursor on a new line of the paragraph.
-    assert!(app.editors[&id].page.pending.is_none());
+    assert!(app.editors[&id].page.pending().is_none());
     assert_eq!(shown(&app, id), "one\n");
     type_keys(&mut app, id, "two");
     assert_eq!(page_text(&app, id), "one\ntwo\n\nnext\n");
@@ -310,7 +310,7 @@ fn blocks_typed_under_a_list_item() {
     assert_eq!(page_text(&app, id), "* aaa\n* \n");
     editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
     assert_eq!(page_text(&app, id), "* aaa\n");
-    let pending = app.editors[&id].page.pending.clone().expect("a new paragraph");
+    let pending = app.editors[&id].page.pending().expect("a new paragraph");
     assert_eq!(pending.outer, vec![crate::markdown::parse::ContainerKind::Item { depth: 0, indent: 2 }]);
     type_keys(&mut app, id, "| bbb | ccc |");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
