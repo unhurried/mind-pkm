@@ -5,8 +5,8 @@
 //! editor of that window first. `App::update` handles a map message, then
 //! recomputes the layout. The handling itself lives with its topic: documents
 //! (`file`), dialogs (`dialog`), commands (`command`), keyboard input (`keys`),
-//! scrolling and zooming (`viewport`) and the search panel (`search_panel`);
-//! `doc` holds an open map and its edits.
+//! scrolling and zooming (`viewport`), the search panel (`search_panel`) and
+//! the editor windows (`editors`); `doc` holds an open map and its edits.
 
 mod arrow_cursor;
 mod command;
@@ -15,6 +15,7 @@ mod dialog;
 mod doc;
 mod drag;
 mod editor;
+mod editors;
 mod file;
 mod ime;
 mod keys;
