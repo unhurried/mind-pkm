@@ -15,6 +15,7 @@ pub mod images;
 pub mod live;
 pub mod page;
 pub mod parse;
+pub mod paste;
 pub mod render;
 pub mod table;
 

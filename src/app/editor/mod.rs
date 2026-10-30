@@ -31,6 +31,7 @@ use crate::markdown::count;
 use crate::markdown::edit::{self, Sel};
 use crate::markdown::format::{self, InlineStyle};
 use crate::markdown::images::{self, ImageOptions};
+use crate::markdown::paste::{self, Paste};
 use crate::markdown::{export, html, table};
 pub use assets::AssetsMsg;
 use clipboard::ClipboardContent;
@@ -1370,20 +1371,11 @@ impl Editor {
     }
 
     /// Pastes what the clipboard held: files and images inserted, HTML
-    /// converted to Markdown (a table as a table), text as it is. In code
-    /// (a code block, math, ...) the text is inserted as it is, never the
-    /// HTML converted.
+    /// converted to Markdown (a table as a table), text as it is (see
+    /// `markdown::paste`).
     fn pasted(&mut self, content: ClipboardContent, plain: bool, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        let mut text = content.text.clone().unwrap_or_default().replace("\r\n", "\n");
         let in_code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
-        if in_code
-            && text.is_empty()
-            && let Some(html) = &content.html
-        {
-            // Code is code: with no text flavor, what the HTML says.
-            text = html::to_plain_text(html).replace("\r\n", "\n");
-        }
-        let in_table = self.page.active.as_ref().is_some_and(|a| a.table.is_some());
+        let text = paste::clipboard_text(content.text.as_deref(), content.html.as_deref(), in_code);
         if !plain {
             if !content.files.is_empty() {
                 return self.insert_files(content.files, prefs);
@@ -1391,59 +1383,17 @@ impl Editor {
             if let Some(image) = content.image.filter(|_| text.trim().is_empty()) {
                 return self.insert_image_data(image, prefs);
             }
-            if !in_code && (self.copied.as_deref() != Some(text.as_str()) || text.is_empty()) {
-                // A table (from a spreadsheet or a web page), alone or with
-                // other content around it.
-                let parts = content
-                    .html
-                    .as_deref()
-                    .map(|h| table::split_html_tables(h, |cell| htmd::convert(cell).unwrap_or_default()))
-                    .unwrap_or_default();
-                let has_table = parts.iter().any(|p| matches!(p, table::HtmlPart::Table(_)));
-                let content_parts: Vec<_> = parts
-                    .iter()
-                    .filter(|p| !matches!(p, table::HtmlPart::Html(h) if html::to_plain_text(h).trim().is_empty()))
-                    .collect();
-                let grid = match content_parts.as_slice() {
-                    [table::HtmlPart::Table(grid)] => Some(grid.clone()),
-                    _ if has_table => None,
-                    _ => table::parse_tsv(&text),
-                }
-                .filter(|g| g.len() > 1 || g.first().is_some_and(|r| r.len() > 1));
-                if let Some(grid) = grid {
-                    if in_table {
-                        self.page.change_table(|t, cell| {
-                            t.paste(cell, &grid);
-                            cell
-                        });
-                    } else {
-                        return self.insert_block(&grid_markdown(&grid), "");
-                    }
-                    return self.focus();
-                }
-                let markdown = if has_table {
-                    let pieces: Vec<String> = content_parts
-                        .iter()
-                        .map(|p| match p {
-                            table::HtmlPart::Html(h) => htmd::convert(h).unwrap_or_default().trim().to_string(),
-                            table::HtmlPart::Table(grid) => grid_markdown(grid),
-                        })
-                        .filter(|m| !m.is_empty())
-                        .collect();
-                    Some(pieces.join("\n\n"))
-                } else {
-                    content.html.as_deref().and_then(|h| htmd::convert(h).ok())
-                };
-                if let Some(markdown) = markdown
-                    && !markdown.trim().is_empty()
-                {
-                    self.insert_text(markdown.trim());
-                    return self.focus();
-                }
-            }
         }
-        if !text.is_empty() {
-            self.insert_text(&text);
+        match paste::convert(&text, content.html.as_deref(), in_code, plain, self.copied.as_deref()) {
+            Paste::Cells(grid) if self.page.active.as_ref().is_some_and(|a| a.table.is_some()) => {
+                self.page.change_table(|t, cell| {
+                    t.paste(cell, &grid);
+                    cell
+                });
+            }
+            Paste::Cells(grid) => return self.insert_block(&paste::cells_markdown(&grid), ""),
+            Paste::Text(text) => self.insert_text(&text),
+            Paste::Nothing => {}
         }
         self.focus()
     }
@@ -1635,13 +1585,6 @@ struct CursorState {
     region: Option<std::ops::Range<usize>>,
     cell: Option<((usize, usize), Sel)>,
     source: Option<iced::widget::text_editor::Cursor>,
-}
-
-/// Pasted cells as a Markdown table, the first row its header.
-fn grid_markdown(grid: &[Vec<String>]) -> String {
-    let mut t = table::Table::new(grid.len().saturating_sub(1), grid.iter().map(Vec::len).max().unwrap_or(1));
-    t.paste((0, 0), grid);
-    t.to_markdown()
 }
 
 impl Page {
