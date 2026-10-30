@@ -15,7 +15,7 @@ fn renaming_an_open_page_saves_it_and_the_editor_follows() {
     send(&mut app, Message::DialogOk);
     let renamed = f.doc_dir.join("Done.md");
     assert!(!page.exists());
-    assert_eq!(crate::pkm::read_page(&renamed).unwrap(), "[assets](Done.assets)\n\nold new\n");
+    assert_eq!(crate::markdown::page::read_page(&renamed).unwrap(), "[assets](Done.assets)\n\nold new\n");
     let editor = &app.editors[&id];
     assert_eq!(editor.page.path, renamed);
     assert_eq!(editor.page.text, "[assets](Done.assets)\n\nold new\n");
@@ -74,7 +74,7 @@ fn renaming_a_directory_keeps_the_undo_of_an_open_page() {
     let dir = f.add_dir_node(root, "Area");
     std::fs::create_dir(f.doc_dir.join("Area")).unwrap();
     let page = f.doc_dir.join("Area").join("Note.md");
-    crate::pkm::write_page(&page, "note\n").unwrap();
+    crate::markdown::page::write_page(&page, "note\n").unwrap();
     let mut app = App::new();
     let _ = app.set_doc(f.map.clone(), None);
     app.doc.as_mut().unwrap().select(vec![dir]);
@@ -96,7 +96,7 @@ fn pages_in_a_renamed_directory_follow_it() {
     let dir = f.add_dir_node(root, "Area");
     std::fs::create_dir(f.doc_dir.join("Area")).unwrap();
     let page = f.doc_dir.join("Area").join("Note.md");
-    crate::pkm::write_page(&page, "note\n").unwrap();
+    crate::markdown::page::write_page(&page, "note\n").unwrap();
     let mut app = App::new();
     let _ = app.set_doc(f.map.clone(), None);
     app.doc.as_mut().unwrap().select(vec![dir]);
@@ -109,7 +109,7 @@ fn pages_in_a_renamed_directory_follow_it() {
     send(&mut app, Message::DialogOk);
     let moved = f.doc_dir.join("Areas").join("Note.md");
     assert_eq!(app.editors[&id].page.path, moved);
-    assert_eq!(crate::pkm::read_page(&moved).unwrap(), "note!\n");
+    assert_eq!(crate::markdown::page::read_page(&moved).unwrap(), "note!\n");
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn add_assets_saves_the_open_page_and_reloads_it() {
     typing(&mut app, id, "y");
     send(&mut app, Message::Command(Command::AddAssets));
     assert!(f.doc_dir.join("Plan.assets").is_dir());
-    assert_eq!(crate::pkm::read_page(&page).unwrap(), "[assets](Plan.assets)\n\nxy\n");
+    assert_eq!(crate::markdown::page::read_page(&page).unwrap(), "[assets](Plan.assets)\n\nxy\n");
     assert_eq!(page_text(&app, id), "[assets](Plan.assets)\n\nxy\n");
     assert!(!app.editors[&id].page.is_dirty());
 }
@@ -134,7 +134,7 @@ fn the_editors_of_deleted_pages_close() {
     click_after(&mut app, id, "x");
     typing(&mut app, id, "y");
     app.save_editors_of(std::slice::from_ref(&page)).unwrap();
-    assert_eq!(crate::pkm::read_page(&page).unwrap(), "xy\n");
+    assert_eq!(crate::markdown::page::read_page(&page).unwrap(), "xy\n");
     std::fs::remove_file(&page).unwrap();
     let _ = app.close_deleted_editors(std::slice::from_ref(&page));
     assert!(app.editors.is_empty());

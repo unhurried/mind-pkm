@@ -130,7 +130,7 @@ pub fn new_page(map: &mut MindMap, id: NodeId, template: &str, today: NaiveDate)
     }
     std::fs::create_dir(&assets).map_err(|e| e.to_string())?;
 
-    let template = template.strip_prefix(BOM).unwrap_or(template);
+    let template = strip_bom(template);
     let text = template
         .replace("${page_assets_name}", &paths::file_name(&assets))
         .replace("${today}", &today.format(DATE_FORMAT).to_string());

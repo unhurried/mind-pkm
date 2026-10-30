@@ -17,6 +17,7 @@ use super::{
     DUE_TODAY_NODE_NAME, DocType, PAST_DUE_NODE_NAME, TODO_NODE_NAME, doc_type_of, page_file, page_name_of,
     todo_item_text,
 };
+use crate::markdown::page::read_page;
 use crate::mindmap::{MindMap, NodeId};
 use crate::paths;
 use chrono::NaiveDate;
@@ -71,7 +72,7 @@ pub fn snapshot(map: &MindMap, doc_dir: &Path) -> Snapshot {
 /// marker. None when the file can't be read, so one broken link doesn't
 /// interrupt the scan of the rest of the map.
 pub fn read_next_step_items(page_file: &Path) -> Option<Vec<String>> {
-    let text = super::read_page(page_file).ok()?;
+    let text = read_page(page_file).ok()?;
     let lines: Vec<&str> = text.lines().collect();
     let Some(start) = lines.iter().position(|l| *l == NEXT_STEPS_HEADING) else {
         return Some(Vec::new());
