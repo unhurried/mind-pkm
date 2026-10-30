@@ -52,7 +52,7 @@ impl App {
         self.next_generation += 1;
         let mut doc = Doc::new(map, self.next_generation);
         if let Some(view) = &view {
-            self.set_zoom(super::viewport::zoom_step(view.zoom, 0));
+            self.set_zoom(super::ui::zoom_step(super::viewport::ZOOM_STEPS, view.zoom, 0));
             // Nodes gone since are left out; hidden ones are handed to a shown ancestor by the relayout.
             doc.select(view.selection.iter().filter_map(|id| doc.map.find_by_freeplane_id(id)).collect());
         }

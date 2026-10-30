@@ -2,6 +2,7 @@
 
 use super::dialog::{ConfirmAction, InputAction};
 use super::file::{AfterUnsaved, FileAction};
+use super::ui::zoom_step;
 use super::{App, Message, blocking, settings, viewport};
 use crate::mindmap::{MindMap, NodeId, Subtree};
 use crate::pkm::commands::{self, EditKind};
@@ -142,8 +143,8 @@ impl App {
             // The relayout after the command keeps the focused node in place.
             Command::ZoomIn | Command::ZoomOut | Command::ZoomReset => {
                 let zoom = match cmd {
-                    Command::ZoomIn => viewport::zoom_step(self.zoom, 1),
-                    Command::ZoomOut => viewport::zoom_step(self.zoom, -1),
+                    Command::ZoomIn => zoom_step(viewport::ZOOM_STEPS, self.zoom, 1),
+                    Command::ZoomOut => zoom_step(viewport::ZOOM_STEPS, self.zoom, -1),
                     _ => 1.0,
                 };
                 self.set_zoom(zoom);

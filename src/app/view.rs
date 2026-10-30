@@ -6,6 +6,7 @@ use super::doc::Doc;
 use super::drag::DropPlace;
 use super::layout::{MapLayout, NodeBox};
 use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SCOPES, SEARCH_INPUT_ID, SORTS, SearchMsg};
+use super::ui::{self, DialogStyle, Menu, MenuStyle};
 use super::{App, DIALOG_INPUT_ID, MAP_SCROLL_ID, Message};
 use crate::mindmap::{ICON_CHECKMARK, MindMap, NodeId};
 use crate::pkm;
@@ -14,8 +15,8 @@ use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
 use iced::widget::canvas::{self, Cache, Path, Stroke};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::{
-    Column, Stack, button, canvas as canvas_widget, center, column, container, mouse_area, opaque, pick_list, pin,
-    rich_text, row, scrollable, space, stack, text, text_input, tooltip,
+    Column, Stack, button, canvas as canvas_widget, center, column, container, mouse_area, pick_list, pin, rich_text,
+    row, scrollable, space, stack, text, text_input, tooltip,
 };
 use iced::{
     Alignment, Background, Color, Element, Fill, Font, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector, border,
@@ -46,11 +47,6 @@ const EDGE_WIDTH: f32 = 1.0;
 const EDGE_BRANCH: f32 = 0.5;
 /// The radius of the edges' corners (at 100% zoom).
 const EDGE_RADIUS: f32 = 12.0;
-const MENU_FONT_SIZE: f32 = 12.0;
-/// The padding on each side of a menu bar label: the gap between two labels
-/// is twice this, the same for every pair.
-const MENU_PADDING: f32 = 10.0;
-const MENU_BAR_HEIGHT: f32 = 30.0;
 
 const EDGE_COLOR: Color = Color::from_rgb(0.55, 0.58, 0.62);
 const SELECTED_BG: Color = Color::from_rgb(0.80, 0.88, 1.0);
@@ -67,9 +63,41 @@ const BAR_BORDER: Color = Color::from_rgb(0.85, 0.86, 0.88);
 const MENU_OPEN_BG: Color = Color::from_rgb(0.88, 0.90, 0.94);
 const PANEL_BORDER: Color = Color::from_rgb(0.8, 0.82, 0.85);
 
-type Menu = (&'static str, &'static [(&'static str, &'static str, Command)]);
+/// The menu bar and menus.
+const MENU_STYLE: MenuStyle = MenuStyle {
+    padding: 10.0,
+    label: None,
+    bar: BAR_BG,
+    bar_border: BAR_BORDER,
+    open: MENU_OPEN_BG,
+    width: 340.0,
+    item_padding: [5.0, 12.0],
+    mark_width: 14.0,
+    item_text: Color::BLACK,
+    shortcut: MUTED,
+    item_hover: SELECTED_BG,
+    background: Color::WHITE,
+    border: Color::from_rgb(0.75, 0.77, 0.80),
+    shadow: Some(Shadow {
+        color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
+        offset: Vector::new(0.0, 2.0),
+        blur_radius: 8.0,
+    }),
+};
 
-pub const MENUS: &[Menu] = &[
+const DIALOG_STYLE: DialogStyle = DialogStyle {
+    background: Color::WHITE,
+    border: Color::from_rgb(0.7, 0.72, 0.75),
+    shadow: Some(Shadow {
+        color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
+        offset: Vector::new(0.0, 4.0),
+        blur_radius: 16.0,
+    }),
+    text: Some(Color::BLACK),
+    button_width: 100.0,
+};
+
+pub const MENUS: &[Menu<Command>] = &[
     (
         "File",
         &[
@@ -131,27 +159,6 @@ pub const MENUS: &[Menu] = &[
 ];
 
 // --- Measuring ---
-
-/// The width of a menu bar label's button: the text and its padding.
-fn menu_button_width(label: &str) -> f32 {
-    let paragraph = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
-        content: label,
-        bounds: Size::new(f32::INFINITY, f32::INFINITY),
-        size: MENU_FONT_SIZE.into(),
-        line_height: LineHeight::default(),
-        font: APP_FONT,
-        align_x: iced::advanced::text::Alignment::Default,
-        align_y: iced::alignment::Vertical::Top,
-        shaping: Shaping::Basic,
-        wrapping: Wrapping::None,
-    });
-    paragraph.min_bounds().width.ceil() + 2.0 * MENU_PADDING
-}
-
-/// Where a menu's button starts in the menu bar (and its dropdown opens).
-fn menu_x(index: usize) -> f32 {
-    MENUS.iter().take(index).map(|(label, _)| menu_button_width(label)).sum()
-}
 
 /// The size of a node's text as the text widget will lay it out at the zoom
 /// (the same font size for every node, the root included).
@@ -244,69 +251,13 @@ impl App {
     }
 
     fn menu_bar(&self) -> Element<'_, Message> {
-        let mut bar = row![].spacing(0);
-        for (i, (label, _)) in MENUS.iter().enumerate() {
-            let open = self.menu == Some(i);
-            bar = bar.push(
-                button(text(*label).size(MENU_FONT_SIZE))
-                    .padding([4.0, MENU_PADDING])
-                    .style(move |theme: &Theme, status| {
-                        let mut s = button::text(theme, status);
-                        if open || matches!(status, button::Status::Hovered) {
-                            s.background = Some(Background::Color(MENU_OPEN_BG));
-                        }
-                        s
-                    })
-                    .on_press(Message::Menu(if open { None } else { Some(i) })),
-            );
-        }
-        container(bar)
-            .width(Fill)
-            .style(|_| container::background(BAR_BG).border(border::color(BAR_BORDER).width(1)))
-            .into()
+        ui::menu_bar(MENUS, self.menu, MENU_STYLE, Message::Menu)
     }
 
     fn menu_dropdown(&self, index: usize) -> Element<'_, Message> {
-        let (_, items) = MENUS[index];
-        let mut list = Column::new().spacing(0).width(340);
-        for (label, shortcut, cmd) in items.iter() {
-            let checked = *cmd == Command::ToggleBuiltinEditor && self.editor_prefs.builtin;
-            list = list.push(
-                button(
-                    row![
-                        text(if checked { "✓" } else { "" }).size(12).width(14),
-                        text(*label).size(12).width(Fill),
-                        text(*shortcut).size(11).color(MUTED)
-                    ]
-                    .align_y(Alignment::Center),
-                )
-                .width(Fill)
-                .padding([5, 12])
-                .style(|theme: &Theme, status| {
-                    let mut s = button::text(theme, status);
-                    s.text_color = Color::BLACK;
-                    if matches!(status, button::Status::Hovered) {
-                        s.background = Some(Background::Color(SELECTED_BG));
-                    }
-                    s
-                })
-                .on_press(Message::Command(*cmd)),
-            );
-        }
-        let dropdown = container(list).padding(4).style(|_| {
-            container::background(Color::WHITE)
-                .border(border::color(Color::from_rgb(0.75, 0.77, 0.80)).width(1).rounded(4))
-                .shadow(Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.2),
-                    offset: Vector::new(0.0, 2.0),
-                    blur_radius: 8.0,
-                })
-        });
-        stack![
-            mouse_area(container(space()).width(Fill).height(Fill)).on_press(Message::Menu(None)),
-            pin(dropdown).position(Point::new(menu_x(index), MENU_BAR_HEIGHT)),
-        ]
-        .into()
+        let builtin = self.editor_prefs.builtin;
+        let checked = move |cmd| cmd == Command::ToggleBuiltinEditor && builtin;
+        ui::menu_dropdown(MENUS, index, MENU_STYLE, checked, Message::Command, Message::Menu)
     }
 
     fn status_bar(&self) -> Element<'_, Message> {
@@ -520,8 +471,9 @@ impl App {
     // --- Dialogs ---
 
     fn dialog_view(&self, dialog: &Dialog) -> Element<'_, Message> {
-        let ok = |label| dialog_button(label, button::primary, Message::DialogOk);
-        let cancel = |label| dialog_button(label, button::secondary, Message::DialogCancel);
+        let answer = |label, primary, message| ui::dialog_button(label, primary, DIALOG_STYLE, message);
+        let ok = |label| answer(label, true, Message::DialogOk);
+        let cancel = |label| answer(label, false, Message::DialogCancel);
         let (body, buttons): (Element<Message>, Vec<Element<Message>>) = match dialog {
             Dialog::Message(msg) => (text(msg.clone()).size(13).into(), vec![ok("OK")]),
             Dialog::Confirm { text: question, .. } => {
@@ -544,42 +496,22 @@ impl App {
             Dialog::UnsavedPages(pages) => (
                 text(format!("These pages have unsaved changes: {}. Save them?", pages.join(", "))).size(13).into(),
                 vec![
-                    dialog_button("Save", button::primary, Message::DialogSave),
-                    dialog_button("Don't Save", button::secondary, Message::DialogDiscard),
+                    answer("Save", true, Message::DialogSave),
+                    answer("Don't Save", false, Message::DialogDiscard),
                     cancel("Cancel"),
                 ],
             ),
             Dialog::Unsaved(_) => (
                 text("The map has unsaved changes. Save them?").size(13).into(),
                 vec![
-                    dialog_button("Save", button::primary, Message::DialogSave),
-                    dialog_button("Don't Save", button::secondary, Message::DialogDiscard),
+                    answer("Save", true, Message::DialogSave),
+                    answer("Don't Save", false, Message::DialogDiscard),
                     cancel("Cancel"),
                 ],
             ),
         };
-        let buttons = row![space().width(Fill)].extend(buttons).spacing(8);
-        let card = container(column![body, buttons].spacing(16)).padding(20).max_width(560).style(|_| {
-            container::background(Color::WHITE)
-                .border(border::color(Color::from_rgb(0.7, 0.72, 0.75)).width(1).rounded(8))
-                .shadow(Shadow {
-                    color: Color::from_rgba(0.0, 0.0, 0.0, 0.3),
-                    offset: Vector::new(0.0, 4.0),
-                    blur_radius: 16.0,
-                })
-                .color(Color::BLACK)
-        });
-        opaque(center(card).style(|_| container::background(Color::from_rgba(0.0, 0.0, 0.0, 0.25))))
+        ui::dialog(vec![body], buttons, DIALOG_STYLE)
     }
-}
-
-/// A dialog's button: all of them have the same width.
-fn dialog_button<'a>(
-    label: &'a str,
-    style: fn(&Theme, button::Status) -> button::Style,
-    on_press: Message,
-) -> Element<'a, Message> {
-    button(text(label).size(13).center()).width(100).style(style).on_press(on_press).into()
 }
 
 const FILE_COLUMN: f32 = 260.0;

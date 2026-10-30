@@ -25,6 +25,7 @@ mod view;
 mod tests;
 
 use super::file::file_name;
+use super::ui::zoom_step;
 use super::{App, Message, Status, blocking, settings};
 use crate::markdown::count;
 use crate::markdown::edit::{self, Sel};
@@ -1042,10 +1043,9 @@ impl Editor {
                 self.window.map_or(Task::none(), |id| window::set_mode(id, mode))
             }
             C::ZoomIn | C::ZoomOut | C::ZoomReset => {
-                let i = ZOOM_STEPS.iter().position(|&z| z >= prefs.zoom - 0.001).unwrap_or(3) as i32;
                 let zoom = match cmd {
-                    C::ZoomIn => ZOOM_STEPS[((i + 1) as usize).min(ZOOM_STEPS.len() - 1)],
-                    C::ZoomOut => ZOOM_STEPS[(i - 1).max(0) as usize],
+                    C::ZoomIn => zoom_step(ZOOM_STEPS, prefs.zoom, 1),
+                    C::ZoomOut => zoom_step(ZOOM_STEPS, prefs.zoom, -1),
                     _ => 1.0,
                 };
                 effects.push(Effect::SetPrefs(EditorPrefs { zoom, ..prefs.clone() }));

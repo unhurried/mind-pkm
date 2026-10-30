@@ -17,6 +17,7 @@ use super::render::{RenderCache, RenderKey, Rendered};
 use super::{AssetsMsg, DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
 use crate::app::arrow_cursor::arrow_cursor;
 use crate::app::ime::ime_aligned;
+use crate::app::ui::{self, DialogStyle, MenuStyle};
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Link, Node, SourceMap, Style, TableNode};
 use crate::markdown::edit::CodeBody;
@@ -26,8 +27,8 @@ use crate::markdown::{BlockKind, ListItem, images, table};
 use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::{
-    Column, Row, Stack, button, center, column, container, image, mouse_area, opaque, pin, rich_text, row, rule,
-    scrollable, space, stack, svg, text, text_editor, text_input,
+    Column, Row, Stack, button, column, container, image, mouse_area, pin, rich_text, row, rule, scrollable, space,
+    stack, svg, text, text_editor, text_input,
 };
 use iced::{Alignment, Background, Border, Color, Element, Fill, Font, Length, Point, Size, Theme, border, font};
 use std::sync::Arc;
@@ -46,32 +47,6 @@ const QUOTE_BAR: f32 = 4.0;
 const QUOTE_PADDING: f32 = 14.0;
 const CODE_PADDING: f32 = 10.0;
 const OUTLINE_WIDTH: f32 = 220.0;
-const MENU_FONT_SIZE: f32 = 12.0;
-/// The padding on each side of a menu bar label: the gap between two labels
-/// is twice this, the same for every pair.
-const MENU_PADDING: f32 = 12.0;
-const MENU_BAR_HEIGHT: f32 = 30.0;
-
-/// The width of a menu bar label's button: the text and its padding.
-fn menu_button_width(label: &str) -> f32 {
-    let paragraph = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
-        content: label,
-        bounds: Size::new(f32::INFINITY, f32::INFINITY),
-        size: MENU_FONT_SIZE.into(),
-        line_height: LineHeight::default(),
-        font: APP_FONT,
-        align_x: iced::advanced::text::Alignment::Default,
-        align_y: iced::alignment::Vertical::Top,
-        shaping: Shaping::Basic,
-        wrapping: Wrapping::None,
-    });
-    paragraph.min_bounds().width.ceil() + 2.0 * MENU_PADDING
-}
-
-/// Where a menu's button starts in the menu bar (and its dropdown opens).
-fn menu_x(index: usize) -> f32 {
-    MENUS.iter().take(index).map(|(label, _)| menu_button_width(label)).sum()
-}
 
 /// The editor's colors in a theme.
 #[derive(Debug, Clone, Copy)]
@@ -154,6 +129,32 @@ impl Palette {
 
     pub fn of(theme: &Theme) -> Palette {
         Palette::new(theme.extended_palette().is_dark)
+    }
+
+    /// The menu bar and menus in these colors. No shadow under a menu: the
+    /// software renderer draws it over the box on partial redraws.
+    fn menu(self) -> MenuStyle {
+        MenuStyle {
+            padding: 12.0,
+            label: Some(self.text),
+            bar: self.bar_bg,
+            bar_border: self.border,
+            open: self.hover,
+            width: 320.0,
+            item_padding: [5.0, 10.0],
+            mark_width: 16.0,
+            item_text: self.text,
+            shortcut: self.muted,
+            item_hover: self.hover,
+            background: self.bg,
+            border: self.muted,
+            shadow: None,
+        }
+    }
+
+    /// Dialogs in these colors.
+    fn dialog(self) -> DialogStyle {
+        DialogStyle { background: self.bg, border: self.muted, shadow: None, text: None, button_width: 110.0 }
     }
 }
 
@@ -364,72 +365,20 @@ impl Editor {
     // --- Bars and menus ---
 
     fn menu_bar(&self, p: Palette) -> Element<'_, EditorMsg> {
-        let mut bar = row![].spacing(0);
-        for (i, (label, _)) in MENUS.iter().enumerate() {
-            let open = self.menu == Some(i);
-            bar = bar.push(
-                button(text(*label).size(MENU_FONT_SIZE).color(p.text))
-                    .padding([4.0, MENU_PADDING])
-                    .style(move |_: &Theme, status| button::Style {
-                        background: (open || matches!(status, button::Status::Hovered))
-                            .then_some(Background::Color(p.hover)),
-                        text_color: p.text,
-                        ..Default::default()
-                    })
-                    .on_press(EditorMsg::Menu(if open { None } else { Some(i) })),
-            );
-        }
-        container(bar)
-            .width(Fill)
-            .style(move |_| container::background(p.bar_bg).border(border::color(p.border).width(1)))
-            .into()
+        ui::menu_bar(MENUS, self.menu, p.menu(), EditorMsg::Menu)
     }
 
     fn menu_dropdown(&self, index: usize, p: Palette, prefs: &EditorPrefs) -> Element<'_, EditorMsg> {
-        let (_, items) = MENUS[index];
-        let mut list = Column::new().spacing(0).width(320);
-        for (label, shortcut, cmd) in items.iter() {
-            let checked = match cmd {
-                keys::EditorCommand::ToggleAutoPair => Some(prefs.auto_pair),
-                keys::EditorCommand::DarkTheme => Some(prefs.dark),
-                keys::EditorCommand::SourceMode => Some(self.source.is_some()),
-                keys::EditorCommand::Outline => Some(self.outline),
-                keys::EditorCommand::Assets => Some(self.assets.is_some()),
-                keys::EditorCommand::FullScreen => Some(self.fullscreen),
-                _ => None,
-            };
-            let mark = match checked {
-                Some(true) => "✓",
-                _ => "",
-            };
-            list = list.push(
-                button(
-                    row![
-                        text(mark).size(12).width(16).color(p.text),
-                        text(*label).size(12).width(Fill).color(p.text),
-                        text(*shortcut).size(11).color(p.muted)
-                    ]
-                    .align_y(Alignment::Center),
-                )
-                .width(Fill)
-                .padding([5, 10])
-                .style(move |_: &Theme, status| button::Style {
-                    background: matches!(status, button::Status::Hovered).then_some(Background::Color(p.hover)),
-                    text_color: p.text,
-                    ..Default::default()
-                })
-                .on_press(EditorMsg::Command(*cmd)),
-            );
-        }
-        let dropdown = container(list).padding(4).style(move |_| {
-            // No shadow: the software renderer draws it over the box on partial redraws.
-            container::background(p.bg).border(border::color(p.muted).width(1).rounded(4))
-        });
-        stack![
-            mouse_area(container(space()).width(Fill).height(Fill)).on_press(EditorMsg::Menu(None)),
-            pin(dropdown).position(Point::new(menu_x(index), MENU_BAR_HEIGHT)),
-        ]
-        .into()
+        let checked = |cmd| match cmd {
+            EditorCommand::ToggleAutoPair => prefs.auto_pair,
+            EditorCommand::DarkTheme => prefs.dark,
+            EditorCommand::SourceMode => self.source.is_some(),
+            EditorCommand::Outline => self.outline,
+            EditorCommand::Assets => self.assets.is_some(),
+            EditorCommand::FullScreen => self.fullscreen,
+            _ => false,
+        };
+        ui::menu_dropdown(MENUS, index, p.menu(), checked, EditorMsg::Command, EditorMsg::Menu)
     }
 
     fn find_bar<'a>(&'a self, bar: &'a FindBar, p: Palette) -> Element<'a, EditorMsg> {
@@ -1944,11 +1893,7 @@ fn cell_frame<'a>(width: impl Into<Length>, bg: Color, p: Palette) -> Element<'a
 
 fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::widget::Id) -> Element<'_, EditorMsg> {
     let answer = |label: &'static str, a: DialogAnswer, primary: bool| -> Element<'_, EditorMsg> {
-        button(text(label).size(13).center())
-            .width(110)
-            .style(if primary { button::primary } else { button::secondary })
-            .on_press(EditorMsg::Dialog(a))
-            .into()
+        ui::dialog_button(label, primary, p.dialog(), EditorMsg::Dialog(a))
     };
     let mut input = None;
     let (body, buttons): (String, Vec<Element<EditorMsg>>) = match dialog {
@@ -1984,21 +1929,11 @@ fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::widget::Id) ->
             vec![answer("Reload", DialogAnswer::Discard, true), answer("Keep Mine", DialogAnswer::Cancel, false)],
         ),
     };
-    let buttons = row![space().width(Fill)].extend(buttons).spacing(8);
-    let mut content = column![text(body).size(13).color(p.text)].spacing(16);
-    if let Some(input) = input {
-        content = content.push(input);
-    }
-    let card = container(content.push(buttons))
-        .padding(20)
-        .max_width(560)
-        .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(8)));
+    let mut content = vec![text(body).size(13).color(p.text).into()];
+    content.extend(input.map(Element::from));
     // The page's text widget keeps its keyboard focus under the dialog; the
     // dialog takes the keys, so that none of them edits the page.
-    modal(opaque(center(card).style(|_| container::background(Color::from_rgba(0.0, 0.0, 0.0, 0.25)))), |event| {
-        EditorMsg::Key(event)
-    })
-    .into()
+    modal(ui::dialog(content, buttons, p.dialog()), EditorMsg::Key).into()
 }
 
 #[cfg(test)]

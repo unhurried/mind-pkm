@@ -21,6 +21,7 @@ mod keys;
 mod layout;
 mod search_panel;
 pub mod settings;
+mod ui;
 mod view;
 mod viewport;
 

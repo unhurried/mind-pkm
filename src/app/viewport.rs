@@ -1,6 +1,7 @@
 //! The visible part of the map: relayout, scrolling, panning, zooming.
 
 use super::search_panel::ROW_HEIGHT;
+use super::ui::zoom_step;
 use super::{App, MAP_SCROLL_ID, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
@@ -18,13 +19,6 @@ const BARS_HEIGHT: f32 = 64.0;
 pub const ZOOM_STEPS: &[f32] = &[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 /// Wheel movement in pixels (touchpads) that counts as one notch.
 const WHEEL_PIXELS_PER_STEP: f32 = 60.0;
-
-/// The zoom level `steps` steps away from `zoom`, within the limits.
-pub fn zoom_step(zoom: f32, steps: i32) -> f32 {
-    let last = ZOOM_STEPS.len() - 1;
-    let i = ZOOM_STEPS.iter().position(|&z| z >= zoom - 0.001).unwrap_or(last);
-    ZOOM_STEPS[(i as i64 + i64::from(steps)).clamp(0, last as i64) as usize]
-}
 
 /// Panning by dragging empty map space.
 #[derive(Debug, Clone, Copy)]
@@ -84,7 +78,7 @@ impl App {
         let steps = self.wheel_zoom.trunc();
         self.wheel_zoom -= steps;
         let old = self.zoom;
-        if self.doc.is_none() || !self.set_zoom(zoom_step(old, steps as i32)) {
+        if self.doc.is_none() || !self.set_zoom(zoom_step(ZOOM_STEPS, old, steps as i32)) {
             return Task::none();
         }
         // The layout is the margin plus the map scaled by the zoom.
@@ -226,12 +220,12 @@ mod tests {
 
     #[test]
     fn zoom_steps_stop_at_the_limits() {
-        assert_eq!(zoom_step(1.0, 1), 1.1);
-        assert_eq!(zoom_step(1.0, -1), 0.9);
-        assert_eq!(zoom_step(1.0, 3), 1.5);
-        assert_eq!(zoom_step(0.5, -1), 0.5);
-        assert_eq!(zoom_step(3.0, 1), 3.0);
-        assert_eq!(zoom_step(1.25, -20), 0.5);
+        assert_eq!(zoom_step(ZOOM_STEPS, 1.0, 1), 1.1);
+        assert_eq!(zoom_step(ZOOM_STEPS, 1.0, -1), 0.9);
+        assert_eq!(zoom_step(ZOOM_STEPS, 1.0, 3), 1.5);
+        assert_eq!(zoom_step(ZOOM_STEPS, 0.5, -1), 0.5);
+        assert_eq!(zoom_step(ZOOM_STEPS, 3.0, 1), 3.0);
+        assert_eq!(zoom_step(ZOOM_STEPS, 1.25, -20), 0.5);
         assert!(ZOOM_STEPS.contains(&1.0));
     }
 }
