@@ -960,6 +960,16 @@ impl Page {
         self.apply(Edited { sel: Sel::caret(at), text, pending: Some(pending) });
     }
 
+    /// Whether the block being edited (shown as source or code) is the last
+    /// block of the quote or list item it is in.
+    pub fn ends_container(&self) -> bool {
+        if !self.active.as_ref().is_some_and(|a| matches!(a.mode, Mode::Code(..) | Mode::Source(_))) {
+            return false;
+        }
+        let Some(&innermost) = self.active_block().and_then(|b| self.doc.blocks[b].outer.last()) else { return false };
+        !self.neighbor(true).is_some_and(|n| self.doc.blocks[n].outer.contains(&innermost))
+    }
+
     /// A new paragraph after the block being edited (shown as source or code).
     pub fn new_paragraph_after(&mut self) {
         let Some(a) = &self.active else { return };

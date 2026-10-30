@@ -403,3 +403,41 @@ fn code_typed_into_an_empty_code_block() {
     assert_eq!(page_text(&app, id), "```js\nx;\n```\n");
     assert_eq!(editor_text(&app, id), "x;");
 }
+
+#[test]
+fn enter_after_an_items_text_keeps_its_code_block() {
+    let (mut app, _f, _, _) = app_with_page("* aaa\n\n  \n  ```json\n  aaa\n  ```\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "* aaa");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    typing(&mut app, id, "b");
+    assert_eq!(page_text(&app, id), "* aaa\n\n  \n  ```json\n  aaa\n  ```\n\n* b\n");
+    assert_eq!(app.editors[&id].page.region_text(), Some("* b"));
+}
+
+#[test]
+fn down_below_code_ending_a_list_item_adds_a_paragraph_in_it() {
+    use crate::markdown::BlockKind;
+    let (mut app, _f, _, _) = app_with_page("* aaa\n\n  ```json\n  aaa\n  ```\n\nnext\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "json\n  aa");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Down));
+    assert!(app.editors[&id].page.pending().is_some());
+    typing(&mut app, id, "z");
+    assert_eq!(page_text(&app, id), "* aaa\n\n  ```json\n  aaa\n  ```\n\n  z\n\nnext\n");
+    // Down again from an empty one: into the block after the item.
+    let (mut app, _f, _, _) = app_with_page("* aaa\n\n  ```json\n  aaa\n  ```\n\nnext\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "json\n  aa");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Down));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Down));
+    assert_eq!(app.editors[&id].page.region_text(), Some("next"));
+    assert_eq!(page_text(&app, id), "* aaa\n\n  ```json\n  aaa\n  ```\n\nnext\n");
+    // Code followed by another block of the item: into that block.
+    let (mut app, _f, _, _) = app_with_page("* aaa\n\n  ```\n  x\n  ```\n\n  more\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "```\n  x");
+    assert!(matches!(active_kind(&app, id), BlockKind::Code { .. }));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Down));
+    assert_eq!(app.editors[&id].page.region_text(), Some("  more"));
+}

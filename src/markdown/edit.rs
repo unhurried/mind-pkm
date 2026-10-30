@@ -7,7 +7,7 @@
 //! a block (or a few, while text is pasted or typed). A new empty paragraph
 //! has no source until something is typed into it; it is `Pending`.
 
-use super::parse::{BlockKind, ContainerKind, Document, prefix_len};
+use super::parse::{BlockKind, ContainerKind, Document, ListItem, prefix_len};
 use std::ops::Range;
 
 /// A selection in the page text: `anchor` stays, `head` is the cursor.
@@ -809,7 +809,7 @@ pub fn enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Opti
             let indent: String = text[line.start..c].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
             Some(Edited::new(splice(text, c..c, &format!("\n{indent}")), c + 1 + indent.len()))
         }
-        BlockKind::ListItem(item) => Some(enter_list_item(text, region, c, item.loose)),
+        BlockKind::ListItem(item) => Some(enter_list_item(text, region, c, &item)),
         BlockKind::Quote => Some(enter_quote(text, region, c, line, line_text)),
         BlockKind::ThematicBreak => Some(Edited::pending(text.to_string(), Pending::after(text, region.end))),
         _ => {
@@ -825,7 +825,7 @@ pub fn enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Opti
     }
 }
 
-fn enter_list_item(text: &str, region: Range<usize>, c: usize, loose: bool) -> Edited {
+fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) -> Edited {
     let first = line_range(text, region.start);
     let Some(m) = line_marker(&text[first.clone()]) else { return Edited::new(splice(text, c..c, "\n"), c + 1) };
     let content = first.start + m.end;
@@ -851,34 +851,45 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, loose: bool) -> E
     };
     let task = if m.task.is_some() { "[ ] " } else { "" };
     let indent = " ".repeat(m.indent);
-    let separator = if loose { "\n\n" } else { "\n" };
+    let separator = if item.loose { "\n\n" } else { "\n" };
     // Text after the cursor moves into the new item, without leading spaces.
     let rest_start = c + (text[c..region.end].len() - text[c..region.end].trim_start_matches(' ').len());
     let insert = format!("{separator}{indent}{marker}{task}");
-    let t = splice(text, c..below_empty_item(text, region.end, rest_start, m.indent), &insert);
+    let end = match below_item_text(text, region.end, m.indent) {
+        _ if rest_start < region.end => rest_start,
+        // Nested items stay nested, in the new item: an empty item can't have
+        // a blank line before its first block, so the blank lines go.
+        Some((pos, true)) => pos,
+        // Other blocks would be the new empty item's first block, which can't
+        // be typed before: they stay the item's, and the new one follows them.
+        Some((_, false)) => {
+            let at = text[..item.subtree_end.max(region.end)].trim_end().len();
+            let t = splice(text, at..at, &insert);
+            return Edited::new(t, at + insert.len());
+        }
+        None => rest_start,
+    };
+    let t = splice(text, c..end, &insert);
     Edited::new(t, c + insert.len())
 }
 
-/// Where the text after a new empty item starts, for the item ending at `end`
-/// (its marker indented by `indent`), `rest` if it moves text into the new
-/// item: an empty item can't have a blank line before its first block, so the
-/// blank lines between the item and the blocks it has below it (nested items,
-/// paragraphs) go, and those blocks stay the new item's.
-fn below_empty_item(text: &str, end: usize, rest: usize, indent: usize) -> usize {
-    if rest < end {
-        return rest;
-    }
+/// The first block an item has below its text ending at `end` (its marker
+/// indented by `indent`): where the blank lines before it start, and whether
+/// it is a nested list item.
+fn below_item_text(text: &str, end: usize, indent: usize) -> Option<(usize, bool)> {
     let mut pos = end;
     while text[pos..].starts_with('\n') {
         let next = line_range(text, pos + 1);
         let line = &text[next.clone()];
         if !line.trim().is_empty() {
             let nested = line.len() - line.trim_start().len() > indent;
-            return if nested { pos } else { rest };
+            let item =
+                line_marker(line).is_some_and(|m| matches!(m.kind, MarkerKind::Bullet(_) | MarkerKind::Ordered(..)));
+            return nested.then_some((pos, item));
         }
         pos = next.end;
     }
-    rest
+    None
 }
 
 /// The indentation of the list item a nested item at `start` (indented by
@@ -1283,8 +1294,15 @@ mod tests {
         // line goes before the new item.
         assert_eq!(enter_at("* a‸\n\n  * b"), "* a\n\n* ‸\n  * b");
         assert_eq!(enter_at("* x\n\n  * a‸\n\n    * b"), "* x\n\n  * a\n\n  * ‸\n    * b");
-        assert_eq!(enter_at("- a‸\n\n  more"), "- a\n\n- ‸\n  more");
         assert_eq!(enter_at("> * a‸\n>\n>   * b"), "> * a\n>\n> * ‸\n>   * b");
+        // Other blocks stay the item's: the new item follows them.
+        assert_eq!(enter_at("- a‸\n\n  more"), "- a\n\n  more\n\n- ‸");
+        assert_eq!(
+            enter_at("* aaa‸\n\n  \n  ```json\n  aaa\n  ```\n"),
+            "* aaa\n\n  \n  ```json\n  aaa\n  ```\n\n* ‸\n"
+        );
+        assert_eq!(enter_at("1. a‸\n   ```\n   x\n   ```\n2. b"), "1. a\n   ```\n   x\n   ```\n2. ‸\n2. b");
+        assert_eq!(enter_at("> - a‸\n>\n>   > q"), "> - a\n>\n>   > q\n>\n> - ‸");
         // With text moving into the new item, the blank line stays.
         assert_eq!(enter_at("* a‸b\n\n  * c"), "* a\n\n* ‸b\n\n  * c");
         // Not the next item at the same level.
