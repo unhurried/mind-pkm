@@ -10,6 +10,7 @@ pub mod commands;
 pub mod filter;
 pub mod next_steps;
 
+use crate::markdown::page::{read_page, strip_bom, write_page};
 use crate::mindmap::{MindMap, NodeId};
 use crate::paths;
 use chrono::NaiveDate;
@@ -37,7 +38,6 @@ const DEVICE_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2",
     "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
-const BOM: char = '\u{feff}';
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocType {
@@ -87,13 +87,9 @@ pub fn directory_dir(doc_dir: &Path, name: &str) -> PathBuf {
     doc_dir.join(name)
 }
 
-fn file_name(path: &Path) -> String {
-    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-}
-
 /// The page name of a `<name>.md` file, or None when the name has no ".md" suffix.
 pub fn page_name_of(path: &Path) -> Option<String> {
-    file_name(path).strip_suffix(PAGE_SUFFIX).map(str::to_string)
+    paths::file_name(path).strip_suffix(PAGE_SUFFIX).map(str::to_string)
 }
 
 /// Whether a path relative to the document directory ("/"-separated) is a page:
@@ -108,7 +104,7 @@ pub fn is_page_path(rel_path: &str) -> bool {
 
 /// The page file an assets directory belongs to, or None when the name has no ".assets" suffix.
 pub fn page_file_of_assets_dir(dir: &Path) -> Option<PathBuf> {
-    let name = file_name(dir);
+    let name = paths::file_name(dir);
     let page = name.strip_suffix(ASSETS_SUFFIX)?;
     Some(page_file(dir.parent()?, page))
 }
@@ -130,18 +126,6 @@ pub fn is_valid_name(name: &str) -> bool {
 /// `.md` / `.assets`, so page names may).
 pub fn is_valid_directory_name(name: &str) -> bool {
     is_valid_name(name) && !name.ends_with(['.', ' '])
-}
-
-/// Reads a page as UTF-8, without the byte-order mark `write_page` puts in front.
-pub fn read_page(path: &Path) -> std::io::Result<String> {
-    let bytes = std::fs::read(path)?;
-    let text = String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    Ok(text.strip_prefix(BOM).map(str::to_string).unwrap_or(text))
-}
-
-/// Writes a page as UTF-8 with a byte-order mark (what Markdown editors on Windows expect).
-pub fn write_page(path: &Path, text: &str) -> std::io::Result<()> {
-    std::fs::write(path, format!("{BOM}{text}"))
 }
 
 /// The file linked from the node, via a linked node's link or directly.

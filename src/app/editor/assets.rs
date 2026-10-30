@@ -157,7 +157,7 @@ impl AssetsPane {
 impl Editor {
     /// The folder the pane shows.
     pub fn assets_dir(&self) -> PathBuf {
-        assets::assets_dir_of(&self.page.path)
+        assets::assets_dir_of(self.page.path())
     }
 
     /// The folder to read now, if the pane wants it read: it was asked for,
@@ -254,7 +254,7 @@ impl Editor {
             AssetsMsg::CloseMenu => pane.menu = None,
             AssetsMsg::Rename => {
                 if let Some(menu) = pane.menu.take().filter(|m| m.can_change) {
-                    let name = menu.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = paths::file_name(&menu.path);
                     self.dialogs.push_back(EditorDialog::RenameAsset { path: menu.path, name });
                     return iced::widget::operation::focus(self.id("rename"));
                 }
@@ -306,11 +306,11 @@ impl Editor {
     /// After the pane's item `old` was renamed to `new`: the page's links to
     /// it point at the new name (one undoable change), the pane follows.
     pub fn asset_renamed(&mut self, old: &Path, new: &Path) {
-        let name = new.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = paths::file_name(new);
         self.leave_source_for_history();
-        let (text, n) = images::rename_destinations(&self.page.path, &self.page.text, old, &name);
+        let (text, n) = images::rename_destinations(self.page.path(), self.page.text(), old, &name);
         if n > 0 {
-            let head = self.page.sel.head.min(text.len());
+            let head = self.page.sel().head.min(text.len());
             self.page.set_text(text, Sel::caret(head));
             self.page.deactivate();
             self.refresh_source();
@@ -339,7 +339,7 @@ impl Editor {
     /// The pointer over a piece of rendered text while an item is dragged:
     /// into it, unless it is code or the pointer is well beside its text.
     pub(super) fn drag_over_text(&mut self, info: &HitInfo, p: Point) {
-        let code = self.page.doc.blocks.get(info.block).is_some_and(|b| b.kind.is_code());
+        let code = self.page.doc().blocks.get(info.block).is_some_and(|b| b.kind.is_code());
         let beside = caret_in(info, p).is_none_or(|caret| p.x > caret.x + BESIDE_TEXT);
         let target = (!code && !beside)
             .then(|| hit_test(info, p))
@@ -351,8 +351,8 @@ impl Editor {
     }
 
     fn block_hovered(&mut self, block: usize) {
-        let Some(range) = self.page.doc.blocks.get(block).map(|b| b.range.clone()) else { return };
-        let end = content_end(&self.page.text, range);
+        let Some(range) = self.page.doc().blocks.get(block).map(|b| b.range.clone()) else { return };
+        let end = content_end(self.page.text(), range);
         if let Some(drag) = self.drag_mut() {
             drag.target = Some(drag.text_hit.take().unwrap_or(DropTarget::Paragraph { at: end }));
             drag.fresh = true;
@@ -378,11 +378,11 @@ impl Editor {
     pub(super) fn assets_released(&mut self, prefs: &EditorPrefs) -> Task<EditorMsg> {
         let Some(drag) = self.assets.as_mut().and_then(|pane| pane.drag.take()) else { return Task::none() };
         let (true, Some(target)) = (drag.dragging, drag.target) else { return Task::none() };
-        let md = images::markdown_for(&self.page.path, &drag.path, &prefs.images);
+        let md = images::markdown_for(self.page.path(), &drag.path, &prefs.images);
         match target {
             DropTarget::Cursor => self.insert_text(&md),
             DropTarget::Text { at, .. } => {
-                let new = edit::splice(&self.page.text, at..at, &md);
+                let new = edit::splice(self.page.text(), at..at, &md);
                 self.page.set_text(new, Sel::caret(at + md.len()));
             }
             DropTarget::Paragraph { at } => {
@@ -390,17 +390,17 @@ impl Editor {
                 // it: the link goes at the end of the block's text instead.
                 let nested = self
                     .page
-                    .doc
+                    .doc()
                     .blocks
                     .iter()
-                    .find(|b| content_end(&self.page.text, b.range.clone()) == at)
+                    .find(|b| content_end(self.page.text(), b.range.clone()) == at)
                     .is_some_and(|b| !b.outer.is_empty() || matches!(b.kind, crate::markdown::BlockKind::ListItem(_)));
                 let piece = match (at, nested) {
-                    (0, _) if self.page.text.trim().is_empty() => md.clone(),
+                    (0, _) if self.page.text().trim().is_empty() => md.clone(),
                     (_, true) => format!(" {md}"),
                     _ => format!("\n\n{md}"),
                 };
-                let new = edit::splice(&self.page.text, at..at, &piece);
+                let new = edit::splice(self.page.text(), at..at, &piece);
                 self.page.set_text(new, Sel::caret(at + piece.len()));
             }
         }
@@ -472,7 +472,7 @@ impl Editor {
 
     /// The name of the item being dragged, beside the pointer.
     pub(super) fn drag_label(&self, drag: &AssetDrag, p: Palette) -> Element<'_, EditorMsg> {
-        let name = drag.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = paths::file_name(&drag.path);
         let label = container(text(name).size(12).color(p.text).wrapping(Wrapping::None))
             .padding([3, 8])
             .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(4)));

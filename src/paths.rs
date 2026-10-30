@@ -35,6 +35,16 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     key(a) == key(b)
 }
 
+/// The last component of a path as text; empty when there is none (`/`, `..`).
+pub fn file_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The last component of a path without its extension, as text; empty when there is none.
+pub fn file_stem(path: &Path) -> String {
+    path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 /// Whether `path` lies inside `dir` and is not `dir` itself, compared like
 /// [`key`]. Every segment below `dir` has to name something once its trailing
 /// dots and spaces are stripped, as Windows does - otherwise (`...`, `. `) it

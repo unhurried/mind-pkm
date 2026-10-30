@@ -42,23 +42,71 @@ pub struct Live {
     pub sel: Sel,
 }
 
+/// How the active region is edited.
+pub enum Mode {
+    /// In its rendered form: a paragraph, heading, list item or quote, or a
+    /// new paragraph.
+    Live(Live),
+    /// A table, cell by cell, the cell in its rendered form.
+    Table(TableState, Live),
+    /// A code block, as its code (without the fences) in a text editor.
+    Code(CodeBody, Content),
+    /// Another code-like block (math, HTML, front matter...), as its source
+    /// in a text editor.
+    Source(Content),
+}
+
 pub struct Active {
     /// Its bytes in the page text.
     pub region: Range<usize>,
-    /// The region's source, for a block shown as source.
-    pub content: Content,
     /// The kind of the region.
     pub kind: BlockKind,
-    pub table: Option<TableState>,
-    /// For a block or table cell edited in its rendered form.
-    pub live: Option<Live>,
-    /// For a code block, edited as its code (`content` holds the code, not the region's source).
-    pub code: Option<CodeBody>,
+    pub mode: Mode,
 }
 
 impl Active {
+    /// The region edited as its source.
     fn new(region: Range<usize>, text: &str) -> Active {
-        Active { region, content: Content::with_text(text), kind: own_kind(text), table: None, live: None, code: None }
+        Active { region, kind: own_kind(text), mode: Mode::Source(Content::with_text(text)) }
+    }
+
+    /// What it shows, when it is edited in its rendered form (a table: its cell).
+    pub fn live(&self) -> Option<&Live> {
+        match &self.mode {
+            Mode::Live(live) | Mode::Table(_, live) => Some(live),
+            Mode::Code(..) | Mode::Source(_) => None,
+        }
+    }
+
+    /// The table, when it is one.
+    pub fn table(&self) -> Option<&TableState> {
+        match &self.mode {
+            Mode::Table(state, _) => Some(state),
+            _ => None,
+        }
+    }
+
+    pub fn table_mut(&mut self) -> Option<&mut TableState> {
+        match &mut self.mode {
+            Mode::Table(state, _) => Some(state),
+            _ => None,
+        }
+    }
+
+    /// The code block's code, when it is one.
+    pub fn code(&self) -> Option<&CodeBody> {
+        match &self.mode {
+            Mode::Code(code, _) => Some(code),
+            _ => None,
+        }
+    }
+
+    /// The text editor, when the region is edited as code or source.
+    pub fn content(&self) -> Option<&Content> {
+        match &self.mode {
+            Mode::Code(_, content) | Mode::Source(content) => Some(content),
+            Mode::Live(_) | Mode::Table(..) => None,
+        }
     }
 }
 
@@ -125,7 +173,7 @@ pub fn position_of(text: &str, offset: usize) -> Position {
 }
 
 /// The selection of a text editor's content, as offsets in its text.
-fn content_sel(content: &Content, text: &str) -> Sel {
+pub fn content_sel(content: &Content, text: &str) -> Sel {
     let c = content.cursor();
     let head = offset_of(text, c.position);
     let anchor = c.selection.map_or(head, |p| offset_of(text, p));
@@ -143,32 +191,35 @@ pub fn move_content(content: &mut Content, text: &str, sel: Sel) {
     content.move_to(Cursor { position, selection });
 }
 
+/// The page's state is changed only through its methods, which keep it
+/// consistent: the parse with the text, the active region with both, the
+/// history with every change.
 pub struct Page {
-    pub path: PathBuf,
-    pub text: String,
+    path: PathBuf,
+    text: String,
     crlf: bool,
-    pub doc: Document,
+    doc: Document,
     /// The text as last loaded or saved.
     saved: String,
     /// The file's modification time when it was last loaded or saved.
-    pub modified: Option<SystemTime>,
+    modified: Option<SystemTime>,
     /// The cursor and selection in `text`.
-    pub sel: Sel,
-    pub active: Option<Active>,
+    sel: Sel,
+    active: Option<Active>,
     /// The active region is a new empty paragraph without source yet.
-    pub pending: Option<Pending>,
+    pending: Option<Pending>,
     /// A byte of the block being edited the parse leaves out: where a block
     /// marker was typed whose element is not determined yet (it shows as
     /// typed until then).
-    pub tentative: Option<usize>,
+    tentative: Option<usize>,
     /// The next `place` comes from an edit: a line break typed at the end of
     /// a block's text stays the block's (Shift+Enter at its end).
     hold_break: bool,
     /// Whole blocks selected (anchor, head), while no region is active.
-    pub blocks: Option<(usize, usize)>,
+    blocks: Option<(usize, usize)>,
     history: History,
     /// Counts the changes of the text.
-    pub revision: u64,
+    revision: u64,
 }
 
 fn modified_time(path: &Path) -> Option<SystemTime> {
@@ -203,6 +254,44 @@ impl Page {
         }
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// The text parsed into blocks.
+    pub fn doc(&self) -> &Document {
+        &self.doc
+    }
+
+    /// The cursor and selection in the text.
+    pub fn sel(&self) -> Sel {
+        self.sel
+    }
+
+    /// The region the cursor is in, being edited.
+    pub fn active(&self) -> Option<&Active> {
+        self.active.as_ref()
+    }
+
+    /// The active region is a new empty paragraph without source yet.
+    pub fn pending(&self) -> Option<&Pending> {
+        self.pending.as_ref()
+    }
+
+    /// Whole blocks selected (anchor, head), while no region is active.
+    pub fn selected_blocks(&self) -> Option<(usize, usize)> {
+        self.blocks
+    }
+
+    /// Counts the changes of the text.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.text != self.saved
     }
@@ -212,6 +301,12 @@ impl Page {
         self.saved = self.text.clone();
         self.modified = modified_time(&self.path);
         Ok(())
+    }
+
+    /// Takes the file as it is on disk as seen, keeping the text, which is
+    /// what is saved next.
+    pub fn ignore_disk_change(&mut self) {
+        self.modified = modified_time(&self.path);
     }
 
     /// Whether the file changed on disk since it was loaded or saved.
@@ -323,28 +418,33 @@ impl Page {
             self.reparse();
         }
         if let Some(a) = &mut self.active
-            && a.table.is_none()
             && self.pending.is_none()
             && a.region.contains(&sel.head).then_some(()).or((sel.head == a.region.end).then_some(())).is_some()
             && a.region.start <= sel.anchor
             && sel.anchor <= a.region.end
         {
-            if a.live.is_some() {
-                self.sel = sel;
-                self.refresh_live();
-                return;
+            match &mut a.mode {
+                // A table is entered anew, at the cell there.
+                Mode::Table(..) => {}
+                Mode::Live(_) => {
+                    self.sel = sel;
+                    self.refresh_live();
+                    return;
+                }
+                Mode::Code(code, content) => {
+                    let local = Sel { anchor: code.to_body(sel.anchor), head: code.to_body(sel.head) };
+                    move_content(content, code.text(), local);
+                    self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
+                    return;
+                }
+                Mode::Source(content) => {
+                    let text = &self.text[a.region.clone()];
+                    let local = Sel { anchor: sel.anchor - a.region.start, head: sel.head - a.region.start };
+                    move_content(content, text, local);
+                    self.sel = sel;
+                    return;
+                }
             }
-            if let Some(code) = &a.code {
-                let local = Sel { anchor: code.to_body(sel.anchor), head: code.to_body(sel.head) };
-                move_content(&mut a.content, code.text(), local);
-                self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
-                return;
-            }
-            let text = &self.text[a.region.clone()];
-            let local = Sel { anchor: sel.anchor - a.region.start, head: sel.head - a.region.start };
-            move_content(&mut a.content, text, local);
-            self.sel = sel;
-            return;
         }
         self.deactivate();
         let head = sel.head;
@@ -371,15 +471,14 @@ impl Page {
                     let same_cell = table::cell_at_offset(source, sel.anchor.saturating_sub(region.start)) == cell;
                     let h = local(head).unwrap_or(0);
                     let a = if same_cell { local(sel.anchor).unwrap_or(h) } else { h };
-                    active.table =
-                        Some(TableState { table: t, cell, range: None, cell_sel: Sel { anchor: a, head: h } });
-                    active.live = Some(Live::default());
+                    let state = TableState { table: t, cell, range: None, cell_sel: Sel { anchor: a, head: h } };
+                    active.mode = Mode::Table(state, Live::default());
                     self.active = Some(active);
                     self.sync_cell_sel();
                     return;
                 } else if let Some(b) = block.filter(|&b| live::editable(&self.doc, b)) {
                     active.kind = self.doc.blocks[b].kind.clone();
-                    active.live = Some(Live::default());
+                    active.mode = Mode::Live(Live::default());
                     self.active = Some(active);
                     let within = |o: usize| o.clamp(region.start, region.end);
                     self.sel = Sel { anchor: within(sel.anchor), head: within(sel.head) };
@@ -389,14 +488,14 @@ impl Page {
                     // A code block: its code, without the fences.
                     let local = Sel { anchor: code.to_body(sel.anchor), head: code.to_body(sel.head) };
                     active.kind = self.doc.blocks[b].kind.clone();
-                    active.content = Content::with_text(code.text());
-                    move_content(&mut active.content, code.text(), local);
+                    let mut content = Content::with_text(code.text());
+                    move_content(&mut content, code.text(), local);
                     self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
-                    active.code = Some(code);
-                } else {
+                    active.mode = Mode::Code(code, content);
+                } else if let Mode::Source(content) = &mut active.mode {
                     let within = |o: usize| o.clamp(region.start, region.end) - region.start;
                     let local = Sel { anchor: within(sel.anchor), head: within(sel.head) };
-                    move_content(&mut active.content, source, local);
+                    move_content(content, source, local);
                     self.sel = Sel { anchor: local.anchor + region.start, head: local.head + region.start };
                 }
                 self.active = Some(active);
@@ -423,11 +522,8 @@ impl Page {
         let at = pending.at;
         self.active = Some(Active {
             region: at..at,
-            content: Content::new(),
             kind: BlockKind::Paragraph,
-            table: None,
-            live: Some(Live { display: Display::empty(at), sel: Sel::default() }),
-            code: None,
+            mode: Mode::Live(Live { display: Display::empty(at), sel: Sel::default() }),
         });
         self.pending = Some(pending);
         self.sel = Sel::caret(at);
@@ -447,8 +543,12 @@ impl Page {
     /// What the live region shows, after the text or the cursor changed.
     fn refresh_live(&mut self) {
         let Some(a) = &mut self.active else { return };
-        let Some(live) = &mut a.live else { return };
-        let (display, sel) = if let Some(state) = &a.table {
+        let (live, cell) = match &mut a.mode {
+            Mode::Live(live) => (live, None),
+            Mode::Table(state, live) => (live, Some(&*state)),
+            Mode::Code(..) | Mode::Source(_) => return,
+        };
+        let (display, sel) = if let Some(state) = cell {
             let raw = &state.table.rows[state.cell.0][state.cell.1];
             (Display::for_cell(raw, state.cell_sel.head.min(raw.len())), state.cell_sel)
         } else if self.pending.is_some() || a.region.is_empty() {
@@ -464,7 +564,7 @@ impl Page {
     /// The page selection of the cell selection, and what the cell shows.
     fn sync_cell_sel(&mut self) {
         let Some(a) = &self.active else { return };
-        let Some(state) = &a.table else { return };
+        let Some(state) = a.table() else { return };
         let base = a.region.start + table::cell_offset(&self.text[a.region.clone()], state.cell);
         self.sel = Sel { anchor: base + state.cell_sel.anchor, head: base + state.cell_sel.head };
         self.refresh_live();
@@ -473,16 +573,14 @@ impl Page {
     /// The selection the live region's motions work on: the page's, or the
     /// cell's in its Markdown.
     pub fn live_sel(&self) -> Sel {
-        match self.active.as_ref().and_then(|a| a.table.as_ref()) {
+        match self.active.as_ref().and_then(Active::table) {
             Some(state) => state.cell_sel,
             None => self.sel,
         }
     }
 
     fn set_live_sel(&mut self, sel: Sel) {
-        if let Some(a) = &mut self.active
-            && let Some(state) = &mut a.table
-        {
+        if let Some(state) = self.active.as_mut().and_then(Active::table_mut) {
             state.cell_sel = sel;
             self.sync_cell_sel();
         } else {
@@ -492,21 +590,21 @@ impl Page {
     }
 
     fn live(&self) -> Option<&Live> {
-        self.active.as_ref()?.live.as_ref()
+        self.active.as_ref()?.live()
     }
 
     /// Something to compare before and after a motion: whether the cursor moved.
     pub fn cursor_token(&self) -> Option<(usize, usize, usize, usize)> {
         let a = self.active.as_ref()?;
-        Some(match &a.live {
-            Some(_) => {
-                let s = self.live_sel();
-                (s.anchor, s.head, 0, 0)
-            }
-            None => {
-                let c = a.content.cursor();
+        Some(match a.content() {
+            Some(content) => {
+                let c = content.cursor();
                 let s = c.selection.unwrap_or(c.position);
                 (c.position.line, c.position.column, s.line, s.column)
+            }
+            None => {
+                let s = self.live_sel();
+                (s.anchor, s.head, 0, 0)
             }
         })
     }
@@ -514,15 +612,17 @@ impl Page {
     /// Whether the cursor is at the start (end) of the active region, with nothing selected.
     pub fn at_edge(&self, right: bool) -> bool {
         let Some(a) = &self.active else { return true };
-        match &a.live {
-            Some(l) => l.sel.is_empty() && if right { l.sel.head >= l.display.text.len() } else { l.sel.head == 0 },
-            None if a.code.is_some() => {
-                let c = a.content.cursor();
-                let text = a.content.text();
+        match &a.mode {
+            Mode::Live(l) | Mode::Table(_, l) => {
+                l.sel.is_empty() && if right { l.sel.head >= l.display.text.len() } else { l.sel.head == 0 }
+            }
+            Mode::Code(_, content) => {
+                let c = content.cursor();
+                let text = content.text();
                 let at = offset_of(&text, c.position);
                 c.selection.is_none() && if right { at >= text.len() } else { at == 0 }
             }
-            None => {
+            Mode::Source(_) => {
                 self.sel.is_empty()
                     && if right { self.sel.head >= a.region.end } else { self.sel.head <= a.region.start }
             }
@@ -534,8 +634,7 @@ impl Page {
     /// the source (after its block syntax, before any inline Markdown).
     pub fn rule_sel(&self) -> Sel {
         if let Some(a) = &self.active
-            && let Some(l) = &a.live
-            && a.table.is_none()
+            && let Mode::Live(l) = &a.mode
             && l.sel.is_empty()
             && l.sel.head == 0
         {
@@ -605,20 +704,23 @@ impl Page {
         }
         let segment = self.segment();
         let Some(a) = &mut self.active else { return };
-        let Some(live) = &a.live else { return };
-        if let Some(state) = &mut a.table {
-            let raw = state.table.rows[state.cell.0][state.cell.1].clone();
-            let (new, cursor) = replace_shown(&raw, &live.display, shown, state.cell_sel.head, &cell_text(insert));
-            state.table.rows[state.cell.0][state.cell.1] = new;
-            state.cell_sel = Sel::caret(cursor);
-            let source = table_source(&state.table, &self.doc, a.region.start);
-            self.text = edit::splice(&self.text, a.region.clone(), &source);
-            a.region.end = a.region.start + source.len();
-            self.reparse();
-            self.sync_cell_sel();
-            self.record(before, typed);
-            return;
-        }
+        let live = match &mut a.mode {
+            Mode::Live(live) => &*live,
+            Mode::Table(state, live) => {
+                let raw = state.table.rows[state.cell.0][state.cell.1].clone();
+                let (new, cursor) = replace_shown(&raw, &live.display, shown, state.cell_sel.head, &cell_text(insert));
+                state.table.rows[state.cell.0][state.cell.1] = new;
+                state.cell_sel = Sel::caret(cursor);
+                let source = table_source(&state.table, &self.doc, a.region.start);
+                self.text = edit::splice(&self.text, a.region.clone(), &source);
+                a.region.end = a.region.start + source.len();
+                self.reparse();
+                self.sync_cell_sel();
+                self.record(before, typed);
+                return;
+            }
+            Mode::Code(..) | Mode::Source(_) => return,
+        };
         let (text, cursor) = replace_shown(&self.text, &live.display, shown, self.sel.head, insert);
         let start = a.region.start;
         let end = (a.region.end + text.len()).saturating_sub(self.text.len()).max(start);
@@ -700,6 +802,30 @@ impl Page {
         self.live_select_shown(Some(range));
     }
 
+    /// Leaves the active region (see `deactivate`), the cursor at `sel` in no
+    /// block: a key or typing places it.
+    pub fn leave_at(&mut self, sel: Sel) {
+        self.deactivate();
+        self.sel = sel;
+    }
+
+    /// Drops the active region as it is, without leaving it: the source mode
+    /// edits the text instead.
+    pub fn forget_active(&mut self) {
+        self.active = None;
+        self.pending = None;
+    }
+
+    /// The selection of the source mode's text editor, as page offsets.
+    pub fn set_source_sel(&mut self, sel: Sel) {
+        self.sel = sel;
+    }
+
+    /// The range of cells selected in the table being edited.
+    pub fn cell_range_mut(&mut self) -> Option<&mut Option<CellRange>> {
+        Some(&mut self.active.as_mut()?.table_mut()?.range)
+    }
+
     /// Leaves the active region: an empty new paragraph disappears, and so do
     /// the blank lines of a block whose text was all deleted.
     pub fn deactivate(&mut self) {
@@ -727,21 +853,22 @@ impl Page {
             self.live_action(action);
             return;
         }
-        if self.active.as_ref().is_some_and(|a| a.code.is_some()) {
+        if self.active.as_ref().is_some_and(|a| a.code().is_some()) {
             self.code_action(action);
             return;
         }
         let Some(active) = &mut self.active else { return };
+        let Mode::Source(content) = &mut active.mode else { return };
         let is_edit = action.is_edit();
         let typed = match &action {
             Action::Edit(Edit::Insert(c)) => Some(*c),
             _ => None,
         };
         let before = Snapshot { text: self.text.clone(), sel: self.sel };
-        active.content.perform(action);
-        let new = active.content.text();
+        content.perform(action);
+        let new = content.text();
         if !is_edit {
-            let local = content_sel(&active.content, &new);
+            let local = content_sel(content, &new);
             self.sel = Sel { anchor: local.anchor + active.region.start, head: local.head + active.region.start };
             self.history.break_typing();
             return;
@@ -760,7 +887,7 @@ impl Page {
             active.region.end = active.region.start + new.len();
         }
         active.kind = own_kind(&new);
-        let local = content_sel(&active.content, &new);
+        let local = content_sel(content, &new);
         self.sel = Sel { anchor: local.anchor + active.region.start, head: local.head + active.region.start };
         self.reparse();
         self.history.record(before, typed.map(|c| (c, self.sel.head.saturating_sub(c.len_utf8()))), Instant::now());
@@ -769,16 +896,16 @@ impl Page {
     /// An action of the text editor holding the code of the code block being edited.
     fn code_action(&mut self, action: Action) {
         let Some(active) = &mut self.active else { return };
-        let Some(code) = &active.code else { return };
+        let Mode::Code(code, content) = &mut active.mode else { return };
         let is_edit = action.is_edit();
         let typed = match &action {
             Action::Edit(Edit::Insert(c)) => Some(*c),
             _ => None,
         };
         let before = Snapshot { text: self.text.clone(), sel: self.sel };
-        active.content.perform(action);
-        let new = active.content.text();
-        let local = content_sel(&active.content, &new);
+        content.perform(action);
+        let new = content.text();
+        let local = content_sel(content, &new);
         if !is_edit {
             self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
             self.history.break_typing();
@@ -796,7 +923,9 @@ impl Page {
         match (code, edit::region_at(&self.doc, start), &mut self.active) {
             (Some(code), Some(region), Some(active)) => {
                 active.region = region;
-                active.code = Some(code);
+                if let Mode::Code(body, _) = &mut active.mode {
+                    *body = code;
+                }
             }
             _ => {
                 self.active = None;
@@ -808,7 +937,7 @@ impl Page {
 
     /// Changes the language (the info string) of the code block being edited.
     pub fn set_code_language(&mut self, language: &str) {
-        let Some(code) = self.active.as_ref().and_then(|a| a.code.as_ref()) else { return };
+        let Some(code) = self.active.as_ref().and_then(Active::code) else { return };
         let language: String = language.chars().filter(|c| *c != '`' && *c != '\n' && *c != '\r').collect();
         let range = code.info_range.clone();
         let text = edit::splice(&self.text, range.clone(), language.trim());
@@ -820,7 +949,7 @@ impl Page {
     /// The code block being edited, holding no code, replaced by a new paragraph.
     pub fn remove_empty_code(&mut self) {
         let Some(a) = &self.active else { return };
-        if !a.code.as_ref().is_some_and(|c| c.text().is_empty()) {
+        if !a.code().is_some_and(|c| c.text().is_empty()) {
             return;
         }
         let start = edit::line_range(&self.text, a.region.start).start;
@@ -834,7 +963,7 @@ impl Page {
     /// A new paragraph after the block being edited (shown as source or code).
     pub fn new_paragraph_after(&mut self) {
         let Some(a) = &self.active else { return };
-        if a.live.is_some() || a.table.is_some() {
+        if matches!(a.mode, Mode::Live(_) | Mode::Table(..)) {
             return;
         }
         let at = a.region.end;
@@ -849,7 +978,7 @@ impl Page {
         let before = self.snapshot();
         self.tentative = None;
         let Some(active) = &mut self.active else { return };
-        let Some(state) = &mut active.table else { return };
+        let Mode::Table(state, _) = &mut active.mode else { return };
         let old = state.cell;
         let cell = change(&mut state.table, state.cell);
         let rows = state.table.rows.len();
@@ -874,8 +1003,7 @@ impl Page {
 
     /// Moves to another cell of the table being edited, selecting its text.
     pub fn go_to_cell(&mut self, cell: (usize, usize)) {
-        let Some(active) = &mut self.active else { return };
-        let Some(state) = &mut active.table else { return };
+        let Some(state) = self.active.as_mut().and_then(Active::table_mut) else { return };
         let cell = (cell.0.min(state.table.rows.len() - 1), cell.1.min(state.table.columns() - 1));
         state.cell = cell;
         state.range = None;
@@ -887,7 +1015,7 @@ impl Page {
     /// Moves to another cell with the cursor at the start (or end) of its text.
     pub fn go_to_cell_at(&mut self, cell: (usize, usize), at_end: bool) {
         self.go_to_cell(cell);
-        if let Some(state) = self.active.as_mut().and_then(|a| a.table.as_mut()) {
+        if let Some(state) = self.active.as_mut().and_then(Active::table_mut) {
             state.cell_sel = Sel::caret(if at_end { state.cell_sel.head } else { 0 });
             self.sync_cell_sel();
         }
@@ -918,7 +1046,9 @@ impl Page {
     /// Applies an edit made by typing `typed` in the live region (auto-pairing):
     /// as `apply`, leaving out a marker whose element it does not determine yet.
     pub fn apply_typed(&mut self, edited: Edited, typed: char) {
-        if self.live().is_none() || self.active.as_ref().is_some_and(|a| a.table.is_some()) || edited.pending.is_some()
+        if self.live().is_none()
+            || self.active.as_ref().is_some_and(|a| a.table().is_some())
+            || edited.pending.is_some()
         {
             return self.apply(edited);
         }
@@ -940,6 +1070,15 @@ impl Page {
     /// Replaces the text (one undoable change) and puts the cursor at `sel`.
     pub fn set_text(&mut self, text: String, sel: Sel) {
         self.apply(Edited { text, sel, pending: None });
+    }
+
+    /// Takes the source mode's text as the page's.
+    pub fn set_source_text(&mut self, text: String, sel: Sel) {
+        if text != self.text {
+            self.set_text(text, sel);
+            self.forget_active();
+        }
+        self.sel = sel;
     }
 
     pub fn undo(&mut self) -> bool {
@@ -971,7 +1110,7 @@ impl Page {
             let r = self.doc.blocks[first].range.start..self.doc.blocks[last].range.end;
             return self.text[r].to_string();
         }
-        if let Some(state) = self.active.as_ref().and_then(|a| a.table.as_ref()) {
+        if let Some(state) = self.active.as_ref().and_then(Active::table) {
             let raw = &state.table.rows[state.cell.0][state.cell.1];
             return raw.get(state.cell_sel.range()).unwrap_or_default().to_string();
         }
@@ -1028,6 +1167,17 @@ impl Page {
             None => r.end,
         };
         self.place(Sel::caret(at));
+    }
+
+    /// Moves the head of the selected blocks.
+    pub fn set_blocks_head(&mut self, head: usize) {
+        if let Some((anchor, _)) = self.blocks {
+            self.blocks = Some((anchor, head));
+        }
+    }
+
+    pub fn deselect_blocks(&mut self) {
+        self.blocks = None;
     }
 
     /// Selects whole blocks from `anchor` to `head`, leaving the active region.
@@ -1108,7 +1258,7 @@ mod tests {
         let mut p = page("x\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");
         let at = p.text.find('2').unwrap();
         p.place(Sel::caret(at));
-        let state = p.active.as_ref().unwrap().table.clone().unwrap();
+        let state = p.active.as_ref().unwrap().table().cloned().unwrap();
         assert_eq!(state.cell, (1, 1));
         p.perform(Action::Edit(Edit::Insert('|')));
         assert!(p.text.contains("| 2\\| |") || p.text.contains("| \\|2 |"), "{}", p.text);
@@ -1118,7 +1268,7 @@ mod tests {
             t.insert_row(r + 1);
             (r + 1, 0)
         });
-        assert_eq!(p.active.as_ref().unwrap().table.as_ref().unwrap().table.rows.len(), 3);
+        assert_eq!(p.active.as_ref().unwrap().table().unwrap().table.rows.len(), 3);
         assert!(p.undo());
         assert!(p.undo());
         assert_eq!(p.text, "x\n\n| a | b |\n|---|---|\n| 1 | 2 |\n");

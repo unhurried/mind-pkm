@@ -1,12 +1,15 @@
 //! The page editor: a window per open Markdown file, showing the page as a
-//! live preview - every block rendered, but the one with the cursor, which
-//! shows its source in a text editor.
+//! live preview - every block rendered, the one with the cursor edited in its
+//! rendered form (code-like blocks as source in a text editor).
 //!
-//! `page` holds the page and its editing state, `keys` the commands and key
-//! bindings, `highlight` the styling of the source, `view` the rendering.
+//! `page` holds the page and its editing state, `live_text` the widget
+//! editing rendered text, `keys` the commands and key bindings, `highlight`
+//! the styling of the source, `view` the rendering; `tables`, `find` and
+//! `assets` handle the table being edited, the find bar and the assets pane.
 
 mod assets;
 pub mod clipboard;
+mod column;
 mod find;
 mod flow;
 mod highlight;
@@ -23,13 +26,14 @@ mod view;
 mod tests;
 
 use super::file::file_name;
-use super::{App, Message, Status, blocking, settings};
+use super::ui::zoom_step;
+use super::{Message, Status, blocking, settings};
 use crate::markdown::count;
 use crate::markdown::edit::{self, Sel};
 use crate::markdown::format::{self, InlineStyle};
 use crate::markdown::images::{self, ImageOptions};
+use crate::markdown::paste::{self, Paste};
 use crate::markdown::{export, html, table};
-use crate::pkm;
 pub use assets::AssetsMsg;
 use clipboard::ClipboardContent;
 pub use find::FindMsg;
@@ -39,13 +43,14 @@ use iced::widget::{operation, scrollable};
 use iced::{Point, Size, Subscription, Task, window};
 pub use keys::{Bind, EditorCommand};
 pub use live_text::LiveMsg;
-use page::Page;
+use page::{Page, content_sel, move_content};
 pub use render::{RenderCache, RenderKey};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 pub use tables::TableMsg;
+use tables::TableUi;
 use view::HitInfo;
 
 /// The size of the first editor window, when none was remembered.
@@ -240,24 +245,20 @@ pub struct Editor {
     /// When and where the last inserted files went (files dropped together go on separate lines).
     last_insert: Option<(std::time::Instant, usize)>,
     pub find: Option<find::FindBar>,
-    /// A press on a cell started dragging over cells.
-    cell_drag: bool,
+    /// The table being edited, as the window shows it.
+    table_ui: TableUi,
     /// The block a press started in, while the button is held: dragging onto
     /// another block selects the blocks between.
     block_drag: Option<usize>,
-    /// Where the cells' range ends (the cursor's cell is where it starts).
-    range_head: Option<(usize, usize)>,
-    /// Where a cell's right-click menu is open.
-    cell_menu: Option<Point>,
-    /// The pointer in the window, while a table is edited.
+    /// The pointer in the window, while a table is edited or the assets pane
+    /// is shown (where a menu opens, a dragged item is).
     pointer_at: Point,
-    /// The table toolbar's body rows and columns as typed.
-    resize_fields: (Option<String>, Option<String>),
 }
 
 impl Editor {
-    pub fn open(path: &Path) -> Result<Editor, String> {
-        Ok(Editor::new(Page::open(path)?))
+    /// An editor of the page at `path`, for a window of `window_size`.
+    pub fn open(path: &Path, window_size: Size) -> Result<Editor, String> {
+        Ok(Editor { window_size, ..Editor::new(Page::open(path)?) })
     }
 
     pub fn new(page: Page) -> Editor {
@@ -281,17 +282,14 @@ impl Editor {
             copied: None,
             last_insert: None,
             find: None,
-            cell_drag: false,
+            table_ui: TableUi::default(),
             block_drag: None,
-            range_head: None,
-            cell_menu: None,
             pointer_at: Point::ORIGIN,
-            resize_fields: (None, None),
         }
     }
 
     pub fn title(&self) -> String {
-        let name = self.page.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = crate::paths::file_name(self.page.path());
         format!("{name}{} - Mind PKM", if self.page.is_dirty() { " *" } else { "" })
     }
 
@@ -325,19 +323,19 @@ impl Editor {
                     | EditorMsg::TableCellPressed(..)
             );
         let before = self.cursor_state();
-        let revision = self.page.revision;
+        let revision = self.page.revision();
         let shown = self.status.text().to_string();
         let task = self.handle(msg, prefs, effects);
         if press {
-            self.block_drag = self.page.active_block().or(self.page.blocks.map(|b| b.0));
+            self.block_drag = self.page.active_block().or(self.page.selected_blocks().map(|b| b.0));
         }
         // An edit clears the message about what came before it.
-        if self.page.revision != revision && self.status.text() == shown {
+        if self.page.revision() != revision && self.status.text() == shown {
             self.status.clear();
         }
         self.refresh_find();
-        if !self.page.active.as_ref().is_some_and(|a| a.table.is_some()) {
-            (self.cell_drag, self.range_head, self.cell_menu, self.resize_fields) = (false, None, None, (None, None));
+        if !self.page.active().is_some_and(|a| a.table().is_some()) {
+            self.table_ui = TableUi::default();
         }
         let reveals = command || (may_reveal && self.cursor_state() != before);
         if reveals { Task::batch([task, self.reveal(prefs)]) } else { task }
@@ -347,29 +345,31 @@ impl Editor {
     /// source mode's editor too), the table cell, the text.
     fn cursor_state(&self) -> CursorState {
         CursorState {
-            sel: self.page.sel,
-            blocks: self.page.blocks,
-            revision: self.page.revision,
-            region: self.page.active.as_ref().map(|a| a.region.clone()),
-            cell: self.page.active.as_ref().and_then(|a| a.table.as_ref()).map(|t| (t.cell, t.cell_sel)),
+            sel: self.page.sel(),
+            blocks: self.page.selected_blocks(),
+            revision: self.page.revision(),
+            region: self.page.active().map(|a| a.region.clone()),
+            cell: self.page.active().and_then(|a| a.table()).map(|t| (t.cell, t.cell_sel)),
             source: self.source.as_ref().map(Content::cursor),
         }
     }
 
     /// Scrolls the page to show the cursor.
     fn reveal(&self, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        if self.source.is_none() && self.page.active.as_ref().is_some_and(|a| a.live.is_some()) {
+        if self.source.is_none() && self.page.active().is_some_and(|a| a.live().is_some()) {
             return scroll::reveal_live(self.id("active"), self.id("doc"));
         }
-        let (before, kind) = match (&self.source, &self.page.active) {
+        let (before, kind) = match (&self.source, self.page.active()) {
             (Some(_), _) => (
-                self.page.text[..self.page.sel.head.min(self.page.text.len())].to_string(),
+                self.page.text()[..self.page.sel().head.min(self.page.text().len())].to_string(),
                 crate::markdown::BlockKind::Paragraph,
             ),
-            (None, Some(a)) if a.table.is_some() => return scroll::reveal_box(self.id("active-cell"), self.id("doc")),
-            (None, Some(a)) if a.code.is_some() => {
-                let code = a.code.as_ref().map_or("", |c| c.text());
-                let at = a.code.as_ref().map_or(0, |c| c.to_body(self.page.sel.head)).min(code.len());
+            (None, Some(a)) if a.table().is_some() => {
+                return scroll::reveal_box(self.id("active-cell"), self.id("doc"));
+            }
+            (None, Some(a)) if a.code().is_some() => {
+                let code = a.code().map_or("", |c| c.text());
+                let at = a.code().map_or(0, |c| c.to_body(self.page.sel().head)).min(code.len());
                 let (size, font, padding) = view::code_text_style(prefs.zoom);
                 let caret = scroll::CaretText {
                     before: code[..at].to_string(),
@@ -381,8 +381,8 @@ impl Editor {
                 return scroll::reveal_caret(self.id("active-box"), self.id("doc"), caret);
             }
             (None, Some(a)) => {
-                let text = &self.page.text[a.region.clone()];
-                let at = self.page.sel.head.clamp(a.region.start, a.region.end) - a.region.start;
+                let text = &self.page.text()[a.region.clone()];
+                let at = self.page.sel().head.clamp(a.region.start, a.region.end) - a.region.start;
                 (text[..at].to_string(), a.kind.clone())
             }
             _ => return Task::none(),
@@ -413,10 +413,10 @@ impl Editor {
                     Ok(pieces) if !pieces.is_empty() => {
                         let recent = self
                             .last_insert
-                            .is_some_and(|(t, at)| t.elapsed().as_secs() < 2 && at == self.page.sel.head);
+                            .is_some_and(|(t, at)| t.elapsed().as_secs() < 2 && at == self.page.sel().head);
                         let text = format!("{}{}", if recent { "\n" } else { "" }, pieces.join("\n"));
                         self.insert_text(&text);
-                        self.last_insert = Some((std::time::Instant::now(), self.page.sel.head));
+                        self.last_insert = Some((std::time::Instant::now(), self.page.sel().head));
                         self.assets_stale();
                     }
                     Ok(_) => {}
@@ -432,7 +432,7 @@ impl Editor {
             }
             EditorMsg::Menu(m) => {
                 self.menu = m;
-                self.cell_menu = None;
+                self.table_ui.menu = None;
                 Task::none()
             }
             EditorMsg::PointerOver(info, p) => {
@@ -454,7 +454,7 @@ impl Editor {
             }
             EditorMsg::BlockEntered(block) => {
                 if let Some(anchor) = self.block_drag
-                    && (block != anchor || self.page.blocks.is_some())
+                    && (block != anchor || self.page.selected_blocks().is_some())
                 {
                     self.menu = None;
                     self.page.select_blocks(anchor, block);
@@ -462,7 +462,7 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::Released => {
-                (self.cell_drag, self.block_drag) = (false, None);
+                (self.table_ui.drag, self.block_drag) = (false, None);
                 self.assets_released(prefs)
             }
             EditorMsg::CodeLanguage(language) => {
@@ -478,12 +478,11 @@ impl Editor {
             }
             EditorMsg::Link(dest, at) => self.link_clicked(&dest, at, effects),
             EditorMsg::TaskToggled(block) => {
-                let start = self.page.doc.blocks.get(block).map(|b| b.range.start);
-                if let Some(e) = start.and_then(|s| format::toggle_task(&self.page.text, s)) {
-                    let sel = self.page.sel;
+                let start = self.page.doc().blocks.get(block).map(|b| b.range.start);
+                if let Some(e) = start.and_then(|s| format::toggle_task(self.page.text(), s)) {
+                    let sel = self.page.sel();
                     self.page.apply(e);
-                    self.page.deactivate();
-                    self.page.sel = sel;
+                    self.page.leave_at(sel);
                 }
                 Task::none()
             }
@@ -534,7 +533,7 @@ impl Editor {
             self.menu = None;
             return self.run(cmd, prefs, effects);
         }
-        if self.page.blocks.is_some() {
+        if self.page.selected_blocks().is_some() {
             return self.blocks_key(&key, modifiers, text.as_deref());
         }
         // Nothing active: arrow keys and typing start at the cursor, and
@@ -546,8 +545,8 @@ impl Editor {
         let starts =
             matches!(key, Key::Named(Named::ArrowUp | Named::ArrowDown | Named::Enter | Named::Home | Named::End))
                 || typed.is_some();
-        if starts && self.page.active.is_none() && self.source.is_none() {
-            self.page.place(self.page.sel);
+        if starts && self.page.active().is_none() && self.source.is_none() {
+            self.page.place(self.page.sel());
             self.page.snap_to_shown();
             match key {
                 Key::Named(Named::Home) => self.page.perform(Action::Move(Motion::Home)),
@@ -566,18 +565,18 @@ impl Editor {
         if !self.dialogs.is_empty() {
             self.dialogs.pop_front();
         } else if self.menu.is_some()
-            || self.cell_menu.is_some()
+            || self.table_ui.menu.is_some()
             || self.assets.as_ref().is_some_and(|a| a.menu.is_some())
         {
             self.menu = None;
-            self.cell_menu = None;
+            self.table_ui.menu = None;
             if let Some(pane) = &mut self.assets {
                 pane.menu = None;
             }
         } else if self.find.is_some() {
             return self.close_find();
-        } else if self.page.blocks.is_some() {
-            self.page.blocks = None;
+        } else if self.page.selected_blocks().is_some() {
+            self.page.deselect_blocks();
         } else if self.fullscreen {
             self.fullscreen = false;
             if let Some(id) = self.window {
@@ -589,24 +588,24 @@ impl Editor {
 
     /// Keys while whole blocks are selected.
     fn blocks_key(&mut self, key: &Key, m: Modifiers, text: Option<&str>) -> Task<EditorMsg> {
-        let Some((anchor, head)) = self.page.blocks else { return Task::none() };
-        let last = self.page.doc.blocks.len().saturating_sub(1);
+        let Some((anchor, head)) = self.page.selected_blocks() else { return Task::none() };
+        let last = self.page.doc().blocks.len().saturating_sub(1);
         match key {
             Key::Named(Named::ArrowUp | Named::ArrowDown) if m.shift() => {
                 let up = *key == Key::Named(Named::ArrowUp);
                 let head = if up { head.saturating_sub(1) } else { (head + 1).min(last) };
-                self.page.blocks = Some((anchor, head));
+                self.page.set_blocks_head(head);
                 Task::none()
             }
             Key::Named(Named::ArrowUp) | Key::Named(Named::ArrowLeft) => {
                 let first = anchor.min(head);
-                self.page.blocks = None;
+                self.page.deselect_blocks();
                 self.page.enter_block(first, true, None);
                 self.focus()
             }
             Key::Named(Named::ArrowDown) | Key::Named(Named::ArrowRight) => {
                 let end = anchor.max(head);
-                self.page.blocks = None;
+                self.page.deselect_blocks();
                 self.page.enter_block(end, false, None);
                 self.focus()
             }
@@ -627,7 +626,7 @@ impl Editor {
     /// Removes the selected blocks; typing `with` puts a paragraph of it in their place.
     fn delete_blocks(&mut self, with: Option<char>) {
         let Some(range) = self.page.blocks_range() else { return };
-        let text = &self.page.text;
+        let text = self.page.text();
         let insert = with.map(String::from).unwrap_or_default();
         let (new, at) = if !insert.is_empty() {
             (edit::splice(text, range.clone(), &insert), range.start + insert.len())
@@ -641,7 +640,7 @@ impl Editor {
             let end = range.end + (text.len() - range.end - text[range.end..].trim_start().len());
             (edit::splice(text, range.start..end, ""), range.start)
         };
-        self.page.blocks = None;
+        self.page.deselect_blocks();
         self.page.set_text(new, Sel::caret(at));
     }
 
@@ -655,13 +654,13 @@ impl Editor {
             source.perform(action);
             if is_edit {
                 let text = source.text();
-                let sel = source_sel(source, &text);
+                let sel = content_sel(source, &text);
                 self.page.set_source_text(text, sel);
             }
             return Task::none();
         }
         if matches!(action, Action::Click(_)) {
-            self.page.blocks = None;
+            self.page.deselect_blocks();
         }
         self.page.perform(action);
         Task::none()
@@ -673,18 +672,18 @@ impl Editor {
         if self.source.is_some() {
             return self.source_bind(bind, prefs);
         }
-        let Some(active) = &self.page.active else { return Task::none() };
+        let Some(active) = self.page.active() else { return Task::none() };
         let region = active.region.clone();
-        let in_table = active.table.is_some();
+        let in_table = active.table().is_some();
         if in_table {
             return self.table_bind(bind);
         }
-        let text = self.page.text.clone();
+        let text = self.page.text().to_string();
         // The rules work on the source: at the start / end of what a block
         // shows, that is its content's start / end.
         let sel = self.page.rule_sel();
-        let doc = &self.page.doc;
-        let pending = self.page.pending.is_some();
+        let doc = self.page.doc();
+        let pending = self.page.pending().is_some();
         match bind {
             Bind::Enter => {
                 if pending {
@@ -723,7 +722,7 @@ impl Editor {
                     }
                     return self.focus();
                 }
-                let code = self.page.active.as_ref().and_then(|a| a.code.as_ref());
+                let code = self.page.active().and_then(|a| a.code());
                 if let Some(code) = code.filter(|c| sel.is_empty() && c.to_body(sel.head) == 0) {
                     // At the start of the code: an empty block goes, else to the block before.
                     if code.text().is_empty() {
@@ -763,7 +762,7 @@ impl Editor {
                 self.page.perform(Action::Select(if bind == Bind::ShiftRight { Motion::Right } else { Motion::Left }));
             }
             Bind::Type(c) => {
-                let code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
+                let code = self.page.active().is_some_and(|a| a.kind.is_code());
                 match prefs.auto_pair.then(|| format::auto_pair(&text, sel, c, code)).flatten() {
                     Some(e) if !pending => self.page.apply_typed(e, c),
                     _ => self.page.perform(Action::Edit(Edit::Insert(c))),
@@ -777,16 +776,16 @@ impl Editor {
     fn vertical(&mut self, down: bool) -> Task<EditorMsg> {
         let motion = if down { Motion::Down } else { Motion::Up };
         let before = self.page.cursor_token();
-        if self.page.pending.is_none() {
+        if self.page.pending().is_none() {
             self.page.perform(Action::Move(motion));
         }
         let after = self.page.cursor_token();
-        if self.page.pending.is_some() || before == after {
+        if self.page.pending().is_some() || before == after {
             let column = self.page.column();
             match self.page.neighbor(down) {
                 Some(b) => self.page.enter_block(b, down, Some(column)),
                 // Below the last block, when it is code: a new paragraph.
-                None if down && self.page.pending.is_none() => self.page.new_paragraph_after(),
+                None if down && self.page.pending().is_none() => self.page.new_paragraph_after(),
                 None => {}
             }
         }
@@ -797,11 +796,11 @@ impl Editor {
     fn extend_vertically(&mut self, down: bool) -> Task<EditorMsg> {
         let motion = if down { Motion::Down } else { Motion::Up };
         let before = self.page.cursor_token();
-        if self.page.pending.is_none() {
+        if self.page.pending().is_none() {
             self.page.perform(Action::Select(motion));
         }
         let after = self.page.cursor_token();
-        if self.page.pending.is_some() || before == after {
+        if self.page.pending().is_some() || before == after {
             let anchor = self.page.active_block().or_else(|| self.page.neighbor(down));
             if let Some(anchor) = anchor {
                 let head = self.page.neighbor(down).unwrap_or(anchor);
@@ -813,13 +812,13 @@ impl Editor {
 
     /// Left at the start / Right at the end of the region move into the block before / after.
     fn horizontal(&mut self, right: bool) -> Task<EditorMsg> {
-        if self.page.active.is_none() {
+        if self.page.active().is_none() {
             return Task::none();
         }
-        if self.page.at_edge(right) || self.page.pending.is_some() {
+        if self.page.at_edge(right) || self.page.pending().is_some() {
             match self.page.neighbor(right) {
                 Some(b) => self.page.enter_block(b, right, None),
-                None if right && self.page.pending.is_none() => self.page.new_paragraph_after(),
+                None if right && self.page.pending().is_none() => self.page.new_paragraph_after(),
                 None => {}
             }
         } else {
@@ -835,7 +834,7 @@ impl Editor {
             return Task::none();
         }
         self.menu = None;
-        let offset = view::hit_test(&info, p).or_else(|| self.page.doc.blocks.get(info.block).map(|b| b.range.start));
+        let offset = view::hit_test(&info, p).or_else(|| self.page.doc().blocks.get(info.block).map(|b| b.range.start));
         if let Some(offset) = offset {
             self.page.place(Sel::caret(offset));
         }
@@ -847,12 +846,12 @@ impl Editor {
         if self.shift_selects(block) {
             return Task::none();
         }
-        if let Some(b) = self.page.doc.blocks.get(block) {
+        if let Some(b) = self.page.doc().blocks.get(block) {
             // Beside a list item's text (on its bullet): where its text starts.
             let at = match b.kind {
                 crate::markdown::BlockKind::ListItem(_) => {
-                    let region = edit::region_at(&self.page.doc, b.range.start).unwrap_or(b.range.clone());
-                    edit::content_start(&self.page.text, b.range.start).min(region.end)
+                    let region = edit::region_at(self.page.doc(), b.range.start).unwrap_or(b.range.clone());
+                    edit::content_start(self.page.text(), b.range.start).min(region.end)
                 }
                 _ => b.range.start,
             };
@@ -866,7 +865,7 @@ impl Editor {
         if !self.modifiers.shift() {
             return false;
         }
-        let Some(anchor) = self.page.active_block().or(self.page.blocks.map(|b| b.0)) else { return false };
+        let Some(anchor) = self.page.active_block().or(self.page.selected_blocks().map(|b| b.0)) else { return false };
         self.page.select_blocks(anchor, block);
         true
     }
@@ -876,7 +875,7 @@ impl Editor {
         if let Some(label) = dest.strip_prefix('^') {
             let block = self
                 .page
-                .doc
+                .doc()
                 .blocks
                 .iter()
                 .position(|b| b.kind == crate::markdown::BlockKind::Footnote(label.to_string()));
@@ -890,13 +889,13 @@ impl Editor {
             return self.focus();
         }
         if let Some(anchor) = dest.strip_prefix('#') {
-            if let Some(h) = self.page.doc.heading_for_anchor(anchor) {
-                let index = self.page.doc.headings.iter().position(|x| x.block == h.block).unwrap_or(0);
+            if let Some(h) = self.page.doc().heading_for_anchor(anchor) {
+                let index = self.page.doc().headings.iter().position(|x| x.block == h.block).unwrap_or(0);
                 return self.go_to_heading(index);
             }
             return Task::none();
         }
-        match resolve_link(&self.page.path, dest) {
+        match resolve_link(self.page.path(), dest) {
             LinkTarget::Page(path) => effects.push(Effect::OpenPage(path)),
             LinkTarget::External(target) => effects.push(Effect::OpenExternal(target)),
         }
@@ -904,10 +903,9 @@ impl Editor {
     }
 
     fn go_to_heading(&mut self, index: usize) -> Task<EditorMsg> {
-        let Some(h) = self.page.doc.headings.get(index) else { return Task::none() };
+        let Some(h) = self.page.doc().headings.get(index) else { return Task::none() };
         let block = h.block;
-        self.page.deactivate();
-        self.page.sel = Sel::caret(self.page.doc.blocks[block].range.start);
+        self.page.leave_at(Sel::caret(self.page.doc().blocks[block].range.start));
         self.scroll_to_block(block)
     }
 
@@ -916,7 +914,7 @@ impl Editor {
     fn run(&mut self, cmd: EditorCommand, prefs: &EditorPrefs, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         use EditorCommand as C;
         self.select_all_again &= cmd == C::SelectAll;
-        self.cell_menu = None;
+        self.table_ui.menu = None;
         if self.source.is_none() && self.table_command(cmd) {
             return self.focus();
         }
@@ -947,16 +945,16 @@ impl Editor {
             }
             C::SelectAll => self.select_all(),
             C::SelectWord => self.with_active(|p| {
-                if let Some(w) = format::word_at(&p.text, p.sel.head) {
+                if let Some(w) = format::word_at(p.text(), p.sel().head) {
                     p.place(Sel { anchor: w.start, head: w.end });
                 }
             }),
             C::SelectLine => self.with_active(|p| {
-                let line = edit::line_range(&p.text, p.sel.head);
+                let line = edit::line_range(p.text(), p.sel().head);
                 p.place(Sel { anchor: line.start, head: line.end });
             }),
             C::SelectSpan => self.with_active(|p| {
-                if let Some(r) = format::styled_span_at(&p.text, &p.doc, p.sel.head) {
+                if let Some(r) = format::styled_span_at(p.text(), p.doc(), p.sel().head) {
                     p.place(Sel { anchor: r.start, head: r.end });
                 }
             }),
@@ -1009,7 +1007,7 @@ impl Editor {
                 Task::none()
             }
             C::Image => {
-                let dir = self.page.path.parent().map(Path::to_path_buf);
+                let dir = self.page.path().parent().map(Path::to_path_buf);
                 Task::perform(
                     async move {
                         let mut dialog = rfd::AsyncFileDialog::new().add_filter("Images", images::IMAGE_EXTENSIONS);
@@ -1040,10 +1038,9 @@ impl Editor {
                 self.window.map_or(Task::none(), |id| window::set_mode(id, mode))
             }
             C::ZoomIn | C::ZoomOut | C::ZoomReset => {
-                let i = ZOOM_STEPS.iter().position(|&z| z >= prefs.zoom - 0.001).unwrap_or(3) as i32;
                 let zoom = match cmd {
-                    C::ZoomIn => ZOOM_STEPS[((i + 1) as usize).min(ZOOM_STEPS.len() - 1)],
-                    C::ZoomOut => ZOOM_STEPS[(i - 1).max(0) as usize],
+                    C::ZoomIn => zoom_step(ZOOM_STEPS, prefs.zoom, 1),
+                    C::ZoomOut => zoom_step(ZOOM_STEPS, prefs.zoom, -1),
                     _ => 1.0,
                 };
                 effects.push(Effect::SetPrefs(EditorPrefs { zoom, ..prefs.clone() }));
@@ -1060,8 +1057,8 @@ impl Editor {
     /// The save dialog for an export: the page's name with `.html` / `.pdf`, next to it.
     fn ask_export_file(&self, pdf: bool) -> Task<EditorMsg> {
         let (ext, filter) = if pdf { ("pdf", "PDF") } else { ("html", "HTML") };
-        let stem = self.page.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let dir = self.page.path.parent().map(Path::to_path_buf);
+        let stem = crate::paths::file_stem(self.page.path());
+        let dir = self.page.path().parent().map(Path::to_path_buf);
         Task::perform(
             async move {
                 let mut dialog =
@@ -1078,7 +1075,7 @@ impl Editor {
     /// Exports the page in the background.
     fn export_to(&mut self, pdf: bool, out: Option<PathBuf>) -> Task<EditorMsg> {
         let Some(out) = out else { return Task::none() };
-        let (page, text) = (self.page.path.clone(), self.page.text.clone());
+        let (page, text) = (self.page.path().to_path_buf(), self.page.text().to_string());
         self.status.set(format!("exporting {}", file_name(&out)));
         Task::perform(
             blocking(move || {
@@ -1097,7 +1094,7 @@ impl Editor {
 
     pub fn save(&mut self) -> Task<EditorMsg> {
         match self.page.save() {
-            Ok(()) => self.status.set(format!("saved {}", file_name(&self.page.path))),
+            Ok(()) => self.status.set(format!("saved {}", file_name(self.page.path()))),
             Err(e) => self.dialogs.push_back(EditorDialog::Message(e)),
         }
         Task::none()
@@ -1130,10 +1127,7 @@ impl Editor {
             }
             (EditorDialog::ChangedOnDisk, DialogAnswer::Discard) => {
                 self.dialogs.pop_front();
-                if let Err(e) = self.page.reload() {
-                    self.dialogs.push_back(EditorDialog::Message(e));
-                }
-                self.refresh_source();
+                self.reload();
             }
             (EditorDialog::RenameAsset { path, name }, DialogAnswer::Ok) => {
                 self.dialogs.pop_front();
@@ -1145,14 +1139,30 @@ impl Editor {
             }
             (EditorDialog::ChangedOnDisk, _) => {
                 self.dialogs.pop_front();
-                // Keep the editor's text: it is what is saved next.
-                self.page.modified = std::fs::metadata(&self.page.path).and_then(|m| m.modified()).ok();
+                self.page.ignore_disk_change();
             }
             _ => {
                 self.dialogs.pop_front();
             }
         }
         Task::none()
+    }
+
+    /// Reads the file again, losing unsaved changes (they can be undone).
+    pub fn reload(&mut self) {
+        if let Err(e) = self.page.reload() {
+            self.dialogs.push_back(EditorDialog::Message(e));
+        }
+        self.refresh_source();
+    }
+
+    /// Follows the file to `path`, where a PKM command renamed it (or the
+    /// directory it is in), reading it again.
+    pub fn moved_to(&mut self, path: PathBuf) {
+        if let Err(e) = self.page.moved_to(path) {
+            self.dialogs.push_back(EditorDialog::Message(e));
+        }
+        self.refresh_source();
     }
 
     /// A check on the file (on focus and every tick): reloads it when it
@@ -1174,8 +1184,8 @@ impl Editor {
 
     /// Runs `f` with the page when a region is active.
     fn with_active(&mut self, f: impl FnOnce(&mut Page)) -> Task<EditorMsg> {
-        if self.page.active.is_none() {
-            self.page.place(self.page.sel);
+        if self.page.active().is_none() {
+            self.page.place(self.page.sel());
         }
         f(&mut self.page);
         self.focus()
@@ -1187,15 +1197,15 @@ impl Editor {
 
     fn edit_selection(&mut self, f: impl FnOnce(&str, Sel) -> edit::Edited) -> Task<EditorMsg> {
         if self.source.is_some() {
-            let e = f(&self.page.text, self.page.sel);
+            let e = f(self.page.text(), self.page.sel());
             self.page.set_text(e.text, e.sel);
             self.refresh_source();
             return self.focus();
         }
-        if self.page.active.is_none() || self.page.pending.is_some() {
+        if self.page.active().is_none() || self.page.pending().is_some() {
             return Task::none();
         }
-        let e = f(&self.page.text, self.page.sel);
+        let e = f(self.page.text(), self.page.sel());
         self.page.apply(e);
         self.focus()
     }
@@ -1205,11 +1215,11 @@ impl Editor {
         &mut self,
         f: impl FnOnce(&str, &crate::markdown::Document, std::ops::Range<usize>, Sel) -> Option<edit::Edited>,
     ) -> Task<EditorMsg> {
-        let Some(a) = &self.page.active else { return Task::none() };
-        if self.page.pending.is_some() {
+        let Some(a) = self.page.active() else { return Task::none() };
+        if self.page.pending().is_some() {
             return Task::none();
         }
-        if let Some(e) = edit::nested(&self.page.text, &self.page.doc, a.region.clone(), self.page.sel, f) {
+        if let Some(e) = edit::nested(self.page.text(), self.page.doc(), a.region.clone(), self.page.sel(), f) {
             self.page.apply(e);
         }
         self.focus()
@@ -1222,13 +1232,13 @@ impl Editor {
         nested: bool,
         f: impl FnOnce(&str, &crate::markdown::Document, std::ops::Range<usize>, Sel) -> Option<edit::Edited>,
     ) -> Task<EditorMsg> {
-        let range = match (self.page.blocks_range(), &self.page.active) {
+        let range = match (self.page.blocks_range(), self.page.active()) {
             (Some(r), _) => r,
-            (None, Some(a)) if self.page.pending.is_none() => a.region.clone(),
+            (None, Some(a)) if self.page.pending().is_none() => a.region.clone(),
             _ => return Task::none(),
         };
-        self.page.blocks = None;
-        let (text, doc, sel) = (&self.page.text, &self.page.doc, self.page.sel);
+        self.page.deselect_blocks();
+        let (text, doc, sel) = (self.page.text(), self.page.doc(), self.page.sel());
         let e = if nested { edit::nested_blocks(text, doc, range, sel, f) } else { f(text, doc, range, sel) };
         if let Some(e) = e {
             self.page.apply(e);
@@ -1241,17 +1251,17 @@ impl Editor {
         &mut self,
         f: impl FnOnce(&str, &crate::markdown::Document, std::ops::Range<usize>, Sel) -> Option<edit::Edited>,
     ) -> Task<EditorMsg> {
-        let range = if !self.page.sel.is_empty() {
-            self.page.sel.range()
+        let range = if !self.page.sel().is_empty() {
+            self.page.sel().range()
         } else if let Some(r) = self.page.blocks_range() {
             r
-        } else if let Some(a) = &self.page.active {
+        } else if let Some(a) = self.page.active() {
             a.region.clone()
         } else {
             return Task::none();
         };
-        self.page.blocks = None;
-        if let Some(e) = f(&self.page.text, &self.page.doc, range, self.page.sel) {
+        self.page.deselect_blocks();
+        if let Some(e) = f(self.page.text(), self.page.doc(), range, self.page.sel()) {
             self.page.apply(e);
         }
         self.focus()
@@ -1260,19 +1270,19 @@ impl Editor {
     /// Inserts a new block after the active one (or at the end): `open`, the
     /// cursor, `close`.
     fn insert_block(&mut self, open: &str, close: &str) -> Task<EditorMsg> {
-        let text = &self.page.text;
-        let at = match (&self.page.active, &self.page.pending) {
+        let text = self.page.text();
+        let at = match (self.page.active(), self.page.pending()) {
             (Some(_), Some(p)) => p.at,
             (Some(a), None) => a.region.end,
             _ => self.page.blocks_range().map_or(text.len(), |r| r.end),
         };
-        let pending = match &self.page.pending {
-            Some(p) if self.page.active.is_some() => p.clone(),
-            _ => edit::gap_pending(text, &self.page.doc, at, None),
+        let pending = match self.page.pending() {
+            Some(p) if self.page.active().is_some() => p.clone(),
+            _ => edit::gap_pending(text, self.page.doc(), at, None),
         };
         let (new, start) = pending.materialize(text, &format!("{open}{close}"));
         let cursor = start + pending.prefixed(open).len();
-        self.page.blocks = None;
+        self.page.deselect_blocks();
         self.page.set_text(new, Sel::caret(cursor));
         self.focus()
     }
@@ -1282,19 +1292,19 @@ impl Editor {
             source.perform(Action::SelectAll);
             return Task::none();
         }
-        let whole_region = self.page.active.as_ref().is_some_and(|a| {
-            let s = self.page.sel.range();
+        let whole_region = self.page.active().is_some_and(|a| {
+            let s = self.page.sel().range();
             s.start <= a.region.start && s.end >= a.region.end && !a.region.is_empty()
         });
-        if self.select_all_again || whole_region || self.page.active.is_none() {
-            let last = self.page.doc.blocks.len().saturating_sub(1);
+        if self.select_all_again || whole_region || self.page.active().is_none() {
+            let last = self.page.doc().blocks.len().saturating_sub(1);
             self.page.select_blocks(0, last);
             self.select_all_again = false;
             return Task::none();
         }
-        if let Some(a) = &self.page.active {
+        if let Some(a) = self.page.active() {
             let r = a.region.clone();
-            if a.table.is_some() {
+            if a.table().is_some() {
                 self.page.select_blocks(self.page.active_block().unwrap_or(0), self.page.active_block().unwrap_or(0));
                 return Task::none();
             }
@@ -1310,8 +1320,8 @@ impl Editor {
     /// Returns whether there was something to copy.
     fn copy(&mut self, markdown_only: bool, effects: &mut Vec<Effect>) -> bool {
         // A range of table cells: tab-separated text and an HTML table, or a Markdown table.
-        if let Some(a) = &self.page.active
-            && let Some(state) = &a.table
+        if let Some(a) = self.page.active()
+            && let Some(state) = a.table()
             && let Some(range) = state.range
         {
             let t = &state.table;
@@ -1339,14 +1349,14 @@ impl Editor {
 
     /// Removes what is selected (after a cut).
     fn delete_selection(&mut self) {
-        if self.page.blocks.is_some() {
+        if self.page.selected_blocks().is_some() {
             self.delete_blocks(None);
         } else if let Some(source) = &mut self.source {
             source.perform(Action::Edit(Edit::Delete));
             let text = source.text();
-            let sel = source_sel(source, &text);
+            let sel = content_sel(source, &text);
             self.page.set_source_text(text, sel);
-        } else if self.page.active.as_ref().and_then(|a| a.table.as_ref()).is_some_and(|t| t.range.is_some()) {
+        } else if self.page.active().and_then(|a| a.table()).is_some_and(|t| t.range.is_some()) {
             self.clear_cells();
         } else {
             self.page.perform(Action::Edit(Edit::Delete));
@@ -1354,20 +1364,11 @@ impl Editor {
     }
 
     /// Pastes what the clipboard held: files and images inserted, HTML
-    /// converted to Markdown (a table as a table), text as it is. In code
-    /// (a code block, math, ...) the text is inserted as it is, never the
-    /// HTML converted.
+    /// converted to Markdown (a table as a table), text as it is (see
+    /// `markdown::paste`).
     fn pasted(&mut self, content: ClipboardContent, plain: bool, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        let mut text = content.text.clone().unwrap_or_default().replace("\r\n", "\n");
-        let in_code = self.page.active.as_ref().is_some_and(|a| a.kind.is_code());
-        if in_code
-            && text.is_empty()
-            && let Some(html) = &content.html
-        {
-            // Code is code: with no text flavor, what the HTML says.
-            text = html::to_plain_text(html).replace("\r\n", "\n");
-        }
-        let in_table = self.page.active.as_ref().is_some_and(|a| a.table.is_some());
+        let in_code = self.page.active().is_some_and(|a| a.kind.is_code());
+        let text = paste::clipboard_text(content.text.as_deref(), content.html.as_deref(), in_code);
         if !plain {
             if !content.files.is_empty() {
                 return self.insert_files(content.files, prefs);
@@ -1375,81 +1376,39 @@ impl Editor {
             if let Some(image) = content.image.filter(|_| text.trim().is_empty()) {
                 return self.insert_image_data(image, prefs);
             }
-            if !in_code && (self.copied.as_deref() != Some(text.as_str()) || text.is_empty()) {
-                // A table (from a spreadsheet or a web page), alone or with
-                // other content around it.
-                let parts = content
-                    .html
-                    .as_deref()
-                    .map(|h| table::split_html_tables(h, |cell| htmd::convert(cell).unwrap_or_default()))
-                    .unwrap_or_default();
-                let has_table = parts.iter().any(|p| matches!(p, table::HtmlPart::Table(_)));
-                let content_parts: Vec<_> = parts
-                    .iter()
-                    .filter(|p| !matches!(p, table::HtmlPart::Html(h) if html::to_plain_text(h).trim().is_empty()))
-                    .collect();
-                let grid = match content_parts.as_slice() {
-                    [table::HtmlPart::Table(grid)] => Some(grid.clone()),
-                    _ if has_table => None,
-                    _ => table::parse_tsv(&text),
-                }
-                .filter(|g| g.len() > 1 || g.first().is_some_and(|r| r.len() > 1));
-                if let Some(grid) = grid {
-                    if in_table {
-                        self.page.change_table(|t, cell| {
-                            t.paste(cell, &grid);
-                            cell
-                        });
-                    } else {
-                        return self.insert_block(&grid_markdown(&grid), "");
-                    }
-                    return self.focus();
-                }
-                let markdown = if has_table {
-                    let pieces: Vec<String> = content_parts
-                        .iter()
-                        .map(|p| match p {
-                            table::HtmlPart::Html(h) => htmd::convert(h).unwrap_or_default().trim().to_string(),
-                            table::HtmlPart::Table(grid) => grid_markdown(grid),
-                        })
-                        .filter(|m| !m.is_empty())
-                        .collect();
-                    Some(pieces.join("\n\n"))
-                } else {
-                    content.html.as_deref().and_then(|h| htmd::convert(h).ok())
-                };
-                if let Some(markdown) = markdown
-                    && !markdown.trim().is_empty()
-                {
-                    self.insert_text(markdown.trim());
-                    return self.focus();
-                }
-            }
         }
-        if !text.is_empty() {
-            self.insert_text(&text);
+        match paste::convert(&text, content.html.as_deref(), in_code, plain, self.copied.as_deref()) {
+            Paste::Cells(grid) if self.page.active().is_some_and(|a| a.table().is_some()) => {
+                self.page.change_table(|t, cell| {
+                    t.paste(cell, &grid);
+                    cell
+                });
+            }
+            Paste::Cells(grid) => return self.insert_block(&paste::cells_markdown(&grid), ""),
+            Paste::Text(text) => self.insert_text(&text),
+            Paste::Nothing => {}
         }
         self.focus()
     }
 
     /// Inserts text at the cursor (in place of the selected blocks).
     fn insert_text(&mut self, text: &str) {
-        if self.page.blocks.is_some() {
+        if self.page.selected_blocks().is_some() {
             let Some(range) = self.page.blocks_range() else { return };
-            let new = edit::splice(&self.page.text, range.clone(), text);
-            self.page.blocks = None;
+            let new = edit::splice(self.page.text(), range.clone(), text);
+            self.page.deselect_blocks();
             self.page.set_text(new, Sel::caret(range.start + text.len()));
             return;
         }
         if let Some(source) = &mut self.source {
             source.perform(Action::Edit(Edit::Paste(Arc::new(text.to_string()))));
             let t = source.text();
-            let sel = source_sel(source, &t);
+            let sel = content_sel(source, &t);
             self.page.set_source_text(t, sel);
             return;
         }
-        if self.page.active.is_none() {
-            self.page.place(self.page.sel);
+        if self.page.active().is_none() {
+            self.page.place(self.page.sel());
         }
         self.page.perform(Action::Edit(Edit::Paste(Arc::new(text.to_string()))));
     }
@@ -1459,13 +1418,13 @@ impl Editor {
         if files.is_empty() {
             return Task::none();
         }
-        let (page, text, opts) = (self.page.path.clone(), self.page.text.clone(), prefs.images.clone());
-        Task::perform(blocking(move || files_markdown(&page, &text, &files, &opts)), EditorMsg::Inserted)
+        let (page, text, opts) = (self.page.path().to_path_buf(), self.page.text().to_string(), prefs.images.clone());
+        Task::perform(blocking(move || images::files_markdown(&page, &text, &files, &opts)), EditorMsg::Inserted)
     }
 
     /// Saves pasted image data as a PNG in the image folder and inserts it.
     fn insert_image_data(&mut self, image: clipboard::PastedImage, prefs: &EditorPrefs) -> Task<EditorMsg> {
-        let (page, text, opts) = (self.page.path.clone(), self.page.text.clone(), prefs.images.clone());
+        let (page, text, opts) = (self.page.path().to_path_buf(), self.page.text().to_string(), prefs.images.clone());
         let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
         Task::perform(
             blocking(move || {
@@ -1482,18 +1441,16 @@ impl Editor {
         match self.source.take() {
             Some(content) => {
                 let text = content.text();
-                let sel = source_sel(&content, &text);
-                self.page.active = None;
-                self.page.pending = None;
+                let sel = content_sel(&content, &text);
+                self.page.forget_active();
                 self.page.place(sel);
             }
             None => {
-                let sel = self.page.sel;
-                self.page.deactivate();
-                self.page.blocks = None;
-                let mut content = Content::with_text(&self.page.text);
-                move_source(&mut content, &self.page.text, sel);
-                self.page.sel = sel;
+                let sel = self.page.sel();
+                self.page.leave_at(sel);
+                self.page.deselect_blocks();
+                let mut content = Content::with_text(self.page.text());
+                move_content(&mut content, self.page.text(), sel);
                 self.source = Some(content);
             }
         }
@@ -1503,18 +1460,17 @@ impl Editor {
     /// The source mode's text editor shows the page's text again (after undo or a reload).
     fn refresh_source(&mut self) {
         if let Some(source) = &mut self.source {
-            *source = Content::with_text(&self.page.text);
-            move_source(source, &self.page.text, self.page.sel);
-            self.page.active = None;
-            self.page.pending = None;
+            *source = Content::with_text(self.page.text());
+            move_content(source, self.page.text(), self.page.sel());
+            self.page.forget_active();
         }
     }
 
     fn leave_source_for_history(&mut self) {
         if let Some(source) = &self.source {
             let text = source.text();
-            if text != self.page.text {
-                let sel = source_sel(source, &text);
+            if text != self.page.text() {
+                let sel = content_sel(source, &text);
                 self.page.set_source_text(text, sel);
             }
         }
@@ -1536,7 +1492,7 @@ impl Editor {
             Bind::ShiftRight => Action::Select(Motion::Right),
             Bind::Type(c) => {
                 let text = source.text();
-                let sel = source_sel(source, &text);
+                let sel = content_sel(source, &text);
                 if let Some(e) = prefs.auto_pair.then(|| format::auto_pair(&text, sel, c, false)).flatten() {
                     self.page.set_source_text(e.text, e.sel);
                     self.refresh_source();
@@ -1548,7 +1504,7 @@ impl Editor {
         self.on_action(action)
     }
 
-    // --- Table keys (filled in by the table editing) ---
+    // --- Rendered editing ---
 
     /// A message of the widget editing the active block in its rendered form.
     fn live_message(&mut self, msg: LiveMsg) -> Task<EditorMsg> {
@@ -1581,25 +1537,15 @@ impl Editor {
         scroll::to_top(self.id(&format!("block-{block}")), self.id("doc"))
     }
 
+    // --- Status bar ---
+
     /// Words and characters for the status bar.
     pub fn counts(&self) -> (count::Counts, Option<count::Counts>) {
-        let all = count::count(&count::shown_text(&self.page.doc));
+        let all = count::count(&count::shown_text(self.page.doc()));
         let selected = self.page.selected_source();
         let sel = (!selected.is_empty()).then(|| count::count_source(&selected));
         (all, sel)
     }
-}
-
-/// The Markdown inserting files into the page at `page`: images copied into
-/// its image folder, other files linked where they are.
-pub fn files_markdown(page: &Path, text: &str, files: &[PathBuf], opts: &ImageOptions) -> Result<Vec<String>, String> {
-    files
-        .iter()
-        .map(|f| {
-            let target = if images::is_image(f) { images::copy_image(page, text, f, opts)? } else { f.clone() };
-            Ok(images::markdown_for(page, &target, opts))
-        })
-        .collect()
 }
 
 /// A table cell's Markdown as HTML, for copying cells.
@@ -1617,37 +1563,6 @@ struct CursorState {
     region: Option<std::ops::Range<usize>>,
     cell: Option<((usize, usize), Sel)>,
     source: Option<iced::widget::text_editor::Cursor>,
-}
-
-/// Pasted cells as a Markdown table, the first row its header.
-fn grid_markdown(grid: &[Vec<String>]) -> String {
-    let mut t = table::Table::new(grid.len().saturating_sub(1), grid.iter().map(Vec::len).max().unwrap_or(1));
-    t.paste((0, 0), grid);
-    t.to_markdown()
-}
-
-/// The selection of the source mode's text editor, as page offsets.
-fn source_sel(content: &Content, text: &str) -> Sel {
-    let c = content.cursor();
-    let head = page::offset_of(text, c.position);
-    let anchor = c.selection.map_or(head, |p| page::offset_of(text, p));
-    Sel { anchor, head }
-}
-
-fn move_source(content: &mut Content, text: &str, sel: Sel) {
-    page::move_content(content, text, sel);
-}
-
-impl Page {
-    /// Takes the source mode's text as the page's.
-    pub fn set_source_text(&mut self, text: String, sel: Sel) {
-        if text != self.text {
-            self.set_text(text, sel);
-            self.active = None;
-            self.pending = None;
-        }
-        self.sel = sel;
-    }
 }
 
 /// Where a link in a page leads.
@@ -1679,10 +1594,10 @@ pub fn opens_in_editor(path: &Path, builtin: bool) -> bool {
     builtin && !path.is_dir() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
 }
 
-/// The subscription of the editor windows: nothing of their own yet.
+/// The subscription of the editor windows: while cells, blocks or an item of
+/// the assets pane are dragged, the release of the button, wherever it is.
 pub fn subscription(editors: &BTreeMap<window::Id, Editor>) -> Subscription<Message> {
-    // Dragging over cells or blocks ends where the button is released, wherever that is.
-    if editors.values().any(|e| e.cell_drag || e.block_drag.is_some() || e.asset_pressed()) {
+    if editors.values().any(|e| e.table_ui.drag || e.block_drag.is_some() || e.asset_pressed()) {
         iced::event::listen_with(|event, _status, window| match event {
             iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
                 Some(Message::Editor(window, EditorMsg::Released))
@@ -1691,277 +1606,5 @@ pub fn subscription(editors: &BTreeMap<window::Id, Editor>) -> Subscription<Mess
         })
     } else {
         Subscription::none()
-    }
-}
-
-impl App {
-    /// Handles a message of the editor window `id`.
-    pub(super) fn editor_message(&mut self, id: window::Id, msg: EditorMsg) -> Task<Message> {
-        let focused = matches!(msg, EditorMsg::Focused);
-        let Some(editor) = self.editors.get_mut(&id) else { return Task::none() };
-        if focused {
-            editor.check_disk();
-            editor.assets_stale();
-            return Task::none();
-        }
-        let mut effects = Vec::new();
-        let task = editor.update(msg, &self.editor_prefs, &mut effects).map(move |m| Message::Editor(id, m));
-        let mut tasks = vec![task, self.request_renders()];
-        for effect in effects {
-            tasks.push(self.editor_effect(id, effect));
-        }
-        Task::batch(tasks)
-    }
-
-    fn editor_effect(&mut self, id: window::Id, effect: Effect) -> Task<Message> {
-        match effect {
-            Effect::OpenPage(path) => self.open_page(&path),
-            Effect::OpenExternal(target) => {
-                if let Err(e) = opener::open(&target)
-                    && let Some(editor) = self.editors.get_mut(&id)
-                {
-                    editor.dialogs.push_back(EditorDialog::Message(format!("failed to open {target}: {e}")));
-                }
-                Task::none()
-            }
-            Effect::Close => self.close_editor(id),
-            Effect::SetPrefs(prefs) => {
-                self.set_editor_prefs(prefs);
-                Task::none()
-            }
-            Effect::Copy { text, html } => {
-                if let Ok(mut c) = self.system_clipboard.lock() {
-                    c.write(&text, html.as_deref());
-                }
-                Task::none()
-            }
-            Effect::ReadClipboard(plain) => {
-                let clipboard = self.system_clipboard.clone();
-                Task::perform(
-                    blocking(move || clipboard.lock().map(|mut c| c.read()).unwrap_or_default()),
-                    move |content| Message::Editor(id, EditorMsg::Pasted(content, plain)),
-                )
-            }
-            Effect::AssetMenu(path) => {
-                let can_change = self.asset_doc_dir(&path).is_ok();
-                if let Some(editor) = self.editors.get_mut(&id) {
-                    editor.show_asset_menu(path, can_change);
-                }
-                Task::none()
-            }
-            Effect::RenameAsset(path, name) => {
-                let result = self.asset_doc_dir(&path).and_then(|d| pkm::assets::rename(&path, &name, &d));
-                if let Some(editor) = self.editors.get_mut(&id) {
-                    match result {
-                        Ok(Some(new)) => editor.asset_renamed(&path, &new),
-                        Ok(None) => {}
-                        Err(e) => editor.dialogs.push_back(EditorDialog::Message(e)),
-                    }
-                }
-                Task::none()
-            }
-            Effect::DeleteAsset(path) => {
-                let remove = self.asset_remover;
-                let result = self.asset_doc_dir(&path).and_then(|d| pkm::assets::delete(&path, &d, &mut |f| remove(f)));
-                if let Some(editor) = self.editors.get_mut(&id) {
-                    match result {
-                        Ok(()) => editor.asset_deleted(&path),
-                        Err(e) => editor.dialogs.push_back(EditorDialog::Message(e)),
-                    }
-                }
-                Task::none()
-            }
-        }
-    }
-
-    /// The document directory, when the assets pane may rename or delete
-    /// `path`: inside it, and holding no file open in an editor window.
-    fn asset_doc_dir(&self, path: &Path) -> Result<PathBuf, String> {
-        let name = file_name(path);
-        let doc = self.doc.as_ref().ok_or_else(|| format!("{name} is not in the document directory."))?;
-        let doc_dir = pkm::load_doc_dir(&doc.map)?;
-        if !pkm::assets::can_change(path, &doc_dir) {
-            return Err(format!("{name} is not in the document directory."));
-        }
-        if !self.editors_of(path).is_empty() {
-            return Err(format!("{name} is open in an editor."));
-        }
-        Ok(doc_dir)
-    }
-
-    /// Reads the folders the assets panes ask for, in the background.
-    pub(super) fn read_assets(&mut self) -> Task<Message> {
-        let mut tasks = Vec::new();
-        for (&id, editor) in self.editors.iter_mut() {
-            if let Some(dir) = editor.start_assets_read() {
-                tasks.push(Task::perform(
-                    blocking(move || {
-                        let tree = pkm::assets::read_tree(&dir);
-                        (dir, tree)
-                    }),
-                    move |(dir, tree)| Message::Editor(id, EditorMsg::Assets(AssetsMsg::Read(dir, tree))),
-                ));
-            }
-        }
-        Task::batch(tasks)
-    }
-
-    pub(super) fn set_editor_prefs(&mut self, prefs: EditorPrefs) {
-        let old = std::mem::replace(&mut self.editor_prefs, prefs.clone());
-        if old.builtin != prefs.builtin {
-            settings::set_editor_builtin(prefs.builtin);
-        }
-        if old.dark != prefs.dark {
-            settings::set_editor_dark(prefs.dark);
-        }
-        if old.zoom != prefs.zoom {
-            settings::set_editor_zoom(prefs.zoom);
-        }
-        if old.auto_pair != prefs.auto_pair {
-            settings::set_editor_auto_pair(prefs.auto_pair);
-        }
-        if old.window != prefs.window {
-            settings::set_editor_window(prefs.window);
-        }
-    }
-
-    pub(super) fn close_editor(&mut self, id: window::Id) -> Task<Message> {
-        self.editors.remove(&id);
-        window::close(id)
-    }
-
-    /// Opens a file: a Markdown file in the built-in editor (bringing its
-    /// window to the front when it is open already), anything else - and
-    /// everything when the built-in editor is off - with its default application.
-    pub(super) fn open_page(&mut self, path: &Path) -> Task<Message> {
-        if !opens_in_editor(path, self.editor_prefs.builtin) {
-            self.open_in_desktop(path);
-            return Task::none();
-        }
-        self.open_in_editor(path)
-    }
-
-    /// Opens a Markdown file in an editor window.
-    pub(super) fn open_in_editor(&mut self, path: &Path) -> Task<Message> {
-        let key = crate::paths::key(path);
-        if let Some((&id, _)) = self.editors.iter().find(|(_, e)| crate::paths::key(&e.page.path) == key) {
-            return window::gain_focus(id);
-        }
-        match Editor::open(path) {
-            Ok(mut editor) => {
-                editor.window_size = self.editor_prefs.window;
-                let (id, opened) = window::open(super::window_settings(self.editor_prefs.window, None, false));
-                editor.window = Some(id);
-                self.editors.insert(id, editor);
-                Task::batch([opened.discard(), self.request_renders()])
-            }
-            Err(e) => {
-                self.message(e);
-                Task::none()
-            }
-        }
-    }
-
-    /// The editors of files at or under `path` (a page, or a renamed directory).
-    /// The page file or directory of a page or directory node.
-    pub(super) fn doc_path_of(&self, id: crate::mindmap::NodeId) -> Option<PathBuf> {
-        let map = &self.doc.as_ref()?.map;
-        let doc_dir = pkm::load_doc_dir(map).ok()?;
-        let name = map.text(id);
-        Some(match pkm::doc_type(map, id, &doc_dir)? {
-            pkm::DocType::Page => pkm::page_file(&doc_dir, &name),
-            pkm::DocType::Directory => pkm::directory_dir(&doc_dir, &name),
-        })
-    }
-
-    /// Before a PKM command moves, changes or deletes `paths` (files, or
-    /// directories with everything in them): their editors' unsaved changes
-    /// are saved. The error of the first that can't be.
-    pub(super) fn save_editors_of(&mut self, paths: &[PathBuf]) -> Result<(), String> {
-        let ids: Vec<window::Id> = paths.iter().flat_map(|p| self.editors_of(p)).collect();
-        for id in ids {
-            if let Some(editor) = self.editors.get_mut(&id)
-                && editor.page.is_dirty()
-            {
-                editor.page.save()?;
-            }
-        }
-        Ok(())
-    }
-
-    /// After `old` (a page file or a directory) was renamed to `new`: its
-    /// editors show the files at their new place, with their new text.
-    pub(super) fn editors_renamed(&mut self, old: &Path, new: &Path) {
-        let depth = old.components().count();
-        for id in self.editors_of(old) {
-            let Some(editor) = self.editors.get_mut(&id) else { continue };
-            let rest: PathBuf = editor.page.path.components().skip(depth).collect();
-            let path = if rest.as_os_str().is_empty() { new.to_path_buf() } else { new.join(rest) };
-            if let Err(e) = editor.page.moved_to(path) {
-                editor.dialogs.push_back(EditorDialog::Message(e));
-            }
-            editor.refresh_source();
-        }
-    }
-
-    /// After a PKM command changed `path`: its editors read it again.
-    pub(super) fn editors_reload(&mut self, path: &Path) {
-        for id in self.editors_of(path) {
-            let Some(editor) = self.editors.get_mut(&id) else { continue };
-            if let Err(e) = editor.page.reload() {
-                editor.dialogs.push_back(EditorDialog::Message(e));
-            }
-            editor.refresh_source();
-        }
-    }
-
-    /// After a deletion: the editors of `paths` whose files are gone close.
-    pub(super) fn close_deleted_editors(&mut self, paths: &[PathBuf]) -> Task<Message> {
-        let ids: Vec<window::Id> = paths.iter().flat_map(|p| self.editors_of(p)).collect();
-        let gone: Vec<window::Id> =
-            ids.into_iter().filter(|id| self.editors.get(id).is_some_and(|e| !e.page.path.exists())).collect();
-        Task::batch(gone.into_iter().map(|id| self.close_editor(id)))
-    }
-
-    pub(super) fn editors_of(&self, path: &Path) -> Vec<window::Id> {
-        let key = crate::paths::key(path);
-        self.editors
-            .iter()
-            .filter(|(_, e)| {
-                let k = crate::paths::key(&e.page.path);
-                k == key || k.starts_with(&key) && k[key.len()..].starts_with(std::path::MAIN_SEPARATOR)
-            })
-            .map(|(&id, _)| id)
-            .collect()
-    }
-
-    /// Every tick: editors notice files changed on disk.
-    pub(super) fn editors_tick(&mut self) -> Task<Message> {
-        for editor in self.editors.values_mut() {
-            editor.check_disk();
-        }
-        Task::none()
-    }
-
-    /// The names of the pages with unsaved changes.
-    pub(super) fn unsaved_pages(&self) -> Vec<String> {
-        self.editors
-            .values()
-            .filter(|e| e.page.is_dirty())
-            .map(|e| e.page.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
-            .collect()
-    }
-
-    /// Saves every page with unsaved changes; the errors of those that fail.
-    pub(super) fn save_all_pages(&mut self) -> Vec<String> {
-        let mut errors = Vec::new();
-        for editor in self.editors.values_mut() {
-            if editor.page.is_dirty()
-                && let Err(e) = editor.page.save()
-            {
-                errors.push(e);
-            }
-        }
-        errors
     }
 }

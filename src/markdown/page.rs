@@ -1,9 +1,29 @@
-//! A page file as the editor holds it: UTF-8 text with LF line endings,
-//! remembering the byte-order mark and line endings to write it back with.
+//! Page files: UTF-8 with a byte-order mark, as the former add-on wrote them
+//! (what Markdown editors on Windows expect). `read_page` / `write_page` take
+//! the text as it is; `PageText` is a page as the editor holds it, with LF line
+//! endings, remembering the file's line endings to write it back with.
 
 use std::path::Path;
 
+/// The byte-order mark pages start with.
 const BOM: &str = "\u{feff}";
+
+/// `text` without the byte-order mark it may start with.
+pub fn strip_bom(text: &str) -> &str {
+    text.strip_prefix(BOM).unwrap_or(text)
+}
+
+/// Reads a page as UTF-8, without the byte-order mark `write_page` puts in front.
+pub fn read_page(path: &Path) -> std::io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    let text = String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(text.strip_prefix(BOM).map(str::to_string).unwrap_or(text))
+}
+
+/// Writes a page as UTF-8 with a byte-order mark.
+pub fn write_page(path: &Path, text: &str) -> std::io::Result<()> {
+    std::fs::write(path, format!("{BOM}{text}"))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageText {
@@ -17,7 +37,7 @@ impl PageText {
     /// The text of a file's bytes; an error when it is not UTF-8.
     pub fn decode(bytes: &[u8]) -> Result<PageText, String> {
         let text = std::str::from_utf8(bytes).map_err(|_| "not a UTF-8 text file".to_string())?;
-        let text = text.strip_prefix(BOM).unwrap_or(text);
+        let text = strip_bom(text);
         let crlf = text.find('\n').is_some_and(|i| i > 0 && text.as_bytes()[i - 1] == b'\r');
         let text = if crlf { text.replace("\r\n", "\n") } else { text.to_string() };
         Ok(PageText { text, crlf })
@@ -37,8 +57,7 @@ impl PageText {
 
     /// Writes the file as UTF-8 with a byte-order mark, as pages are written.
     pub fn write(&self, path: &Path) -> Result<(), String> {
-        crate::pkm::write_page(path, &self.encoded_text())
-            .map_err(|e| format!("failed to save {}: {e}", path.display()))
+        write_page(path, &self.encoded_text()).map_err(|e| format!("failed to save {}: {e}", path.display()))
     }
 }
 

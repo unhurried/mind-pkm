@@ -1,6 +1,7 @@
 //! The page editor's commands, its menus and their keyboard shortcuts.
 
 use super::EditorMsg;
+use crate::app::ui::Menu;
 use iced::keyboard::key::{Code, Named, Physical};
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::text_editor::{Binding, KeyPress, Status};
@@ -78,11 +79,9 @@ pub enum EditorCommand {
     DarkTheme,
 }
 
-pub type Menu = (&'static str, &'static [(&'static str, &'static str, EditorCommand)]);
-
 use EditorCommand as C;
 
-pub const MENUS: &[Menu] = &[
+pub const MENUS: &[Menu<EditorCommand>] = &[
     (
         "File",
         &[

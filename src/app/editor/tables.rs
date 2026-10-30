@@ -5,8 +5,8 @@ use super::keys::{Bind, EditorCommand, TableMenuItem};
 use super::{Editor, EditorMsg, Effect};
 use crate::markdown::edit::Sel;
 use crate::markdown::table::{Align, CellRange, Table};
-use iced::Task;
 use iced::widget::text_editor::{Action, Edit, Motion};
+use iced::{Point, Task};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableMsg {
@@ -23,19 +23,33 @@ pub enum TableMsg {
     Resize,
 }
 
+/// What the window keeps about the table being edited, besides the table
+/// and its cursor (the page's `TableState`); reset when no table is edited.
+#[derive(Debug, Default)]
+pub(super) struct TableUi {
+    /// A press on a cell started dragging over cells.
+    pub(super) drag: bool,
+    /// Where the cells' range ends (the cursor's cell is where it starts).
+    pub(super) range_head: Option<(usize, usize)>,
+    /// Where the cells' right-click menu is open.
+    pub(super) menu: Option<Point>,
+    /// The toolbar's body rows and columns as typed.
+    pub(super) resize: (Option<String>, Option<String>),
+}
+
 impl Editor {
     fn table_cell(&self) -> Option<((usize, usize), usize, usize)> {
-        let state = self.page.active.as_ref()?.table.as_ref()?;
+        let state = self.page.active()?.table()?;
         Some((state.cell, state.table.rows.len(), state.table.columns()))
     }
 
     fn range_mut(&mut self) -> Option<&mut Option<CellRange>> {
-        Some(&mut self.page.active.as_mut()?.table.as_mut()?.range)
+        self.page.cell_range_mut()
     }
 
     /// The selected range of cells, or the cursor's cell.
     fn cells(&self) -> Option<CellRange> {
-        let state = self.page.active.as_ref()?.table.as_ref()?;
+        let state = self.page.active()?.table()?;
         Some(state.range.unwrap_or(CellRange::new(state.cell, state.cell)))
     }
 
@@ -114,7 +128,7 @@ impl Editor {
 
     /// Delete or Backspace on a range of cells: they become empty.
     pub(super) fn clear_cells(&mut self) {
-        let Some(range) = self.page.active.as_ref().and_then(|a| a.table.as_ref()).and_then(|s| s.range) else {
+        let Some(range) = self.page.active().and_then(|a| a.table()).and_then(|s| s.range) else {
             return;
         };
         self.page.change_table(|t, _| {
@@ -125,15 +139,14 @@ impl Editor {
 
     fn delete_table(&mut self) {
         let Some(block) = self.page.active_block() else { return };
-        self.page.deactivate();
-        self.page.blocks = Some((block, block));
+        self.page.select_blocks(block, block);
         self.delete_blocks(None);
     }
 
     /// Keys bound in a table's cell.
     pub(super) fn table_bind(&mut self, bind: Bind) -> Task<EditorMsg> {
         let Some(((r, c), rows, cols)) = self.table_cell() else { return Task::none() };
-        let range = self.page.active.as_ref().and_then(|a| a.table.as_ref()).and_then(|s| s.range);
+        let range = self.page.active().and_then(|a| a.table()).and_then(|s| s.range);
         if range.is_some() {
             match bind {
                 Bind::Delete | Bind::Backspace => {
@@ -215,14 +228,14 @@ impl Editor {
                 };
                 // Within the cell's text first, then over cells.
                 if range.is_some() || !self.cell_selects(motion) {
-                    let head = self.range_head.filter(|_| range.is_some()).unwrap_or((r, c));
+                    let head = self.table_ui.range_head.filter(|_| range.is_some()).unwrap_or((r, c));
                     let head = match motion {
                         Motion::Up => (head.0.saturating_sub(1), head.1),
                         Motion::Down => ((head.0 + 1).min(rows - 1), head.1),
                         Motion::Left => (head.0, head.1.saturating_sub(1)),
                         _ => (head.0, (head.1 + 1).min(cols - 1)),
                     };
-                    self.range_head = Some(head);
+                    self.table_ui.range_head = Some(head);
                     if let Some(range) = self.range_mut() {
                         *range = Some(CellRange::new((r, c), head));
                     }
@@ -250,18 +263,18 @@ impl Editor {
     /// A press on a cell that is not being edited (Shift: a range from the cursor's cell).
     pub(super) fn cell_pressed(&mut self, cell: (usize, usize)) -> Task<EditorMsg> {
         self.menu = None;
-        self.cell_menu = None;
+        self.table_ui.menu = None;
         if self.modifiers.shift()
             && let Some((at, _, _)) = self.table_cell()
         {
-            self.range_head = Some(cell);
+            self.table_ui.range_head = Some(cell);
             if let Some(range) = self.range_mut() {
                 *range = (cell != at).then(|| CellRange::new(at, cell));
             }
             return self.focus();
         }
         self.page.go_to_cell(cell);
-        self.cell_drag = true;
+        self.table_ui.drag = true;
         self.focus()
     }
 
@@ -269,12 +282,12 @@ impl Editor {
     /// to the end of that cell's text.
     pub(super) fn table_cell_pressed(&mut self, block: usize, cell: (usize, usize)) -> Task<EditorMsg> {
         self.menu = None;
-        self.cell_menu = None;
+        self.table_ui.menu = None;
         if self.shift_selects(block) {
             return Task::none();
         }
         // A table inside another block (a footnote...): as a press on that block.
-        let Some(b) = self.page.doc.blocks.get(block).filter(|b| b.kind == crate::markdown::BlockKind::Table) else {
+        let Some(b) = self.page.doc().blocks.get(block).filter(|b| b.kind == crate::markdown::BlockKind::Table) else {
             return self.block_pressed(block);
         };
         self.page.place(Sel::caret(b.range.start));
@@ -285,10 +298,10 @@ impl Editor {
     pub(super) fn table_message(&mut self, msg: TableMsg, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         match msg {
             TableMsg::Entered(r, c) => {
-                if self.cell_drag
+                if self.table_ui.drag
                     && let Some((at, _, _)) = self.table_cell()
                 {
-                    self.range_head = Some((r, c));
+                    self.table_ui.range_head = Some((r, c));
                     if let Some(range) = self.range_mut() {
                         *range = ((r, c) != at).then(|| CellRange::new(at, (r, c)));
                     }
@@ -296,7 +309,7 @@ impl Editor {
                 Task::none()
             }
             TableMsg::Released => {
-                self.cell_drag = false;
+                self.table_ui.drag = false;
                 Task::none()
             }
             TableMsg::Menu(r, c) => {
@@ -305,11 +318,11 @@ impl Editor {
                     self.page.go_to_cell((r, c));
                 }
                 self.menu = None;
-                self.cell_menu = Some(self.pointer_at);
+                self.table_ui.menu = Some(self.pointer_at);
                 Task::none()
             }
             TableMsg::MenuItem(item) => {
-                self.cell_menu = None;
+                self.table_ui.menu = None;
                 match item {
                     TableMenuItem::Command(cmd) => {
                         self.table_command(cmd);
@@ -332,11 +345,11 @@ impl Editor {
                 self.focus()
             }
             TableMsg::Rows(s) => {
-                self.resize_fields.0 = Some(s);
+                self.table_ui.resize.0 = Some(s);
                 Task::none()
             }
             TableMsg::Columns(s) => {
-                self.resize_fields.1 = Some(s);
+                self.table_ui.resize.1 = Some(s);
                 Task::none()
             }
             TableMsg::Resize => {
@@ -344,8 +357,8 @@ impl Editor {
                 let field = |s: &Option<String>, current: usize| {
                     s.as_deref().map_or(Some(current), |s| s.trim().parse::<usize>().ok().filter(|&n| n >= 1))
                 };
-                let (body, columns) = (field(&self.resize_fields.0, rows - 1), field(&self.resize_fields.1, cols));
-                self.resize_fields = (None, None);
+                let (body, columns) = (field(&self.table_ui.resize.0, rows - 1), field(&self.table_ui.resize.1, cols));
+                self.table_ui.resize = (None, None);
                 if let (Some(body), Some(columns)) = (body, columns)
                     && (body, columns) != (rows - 1, cols)
                 {
@@ -363,8 +376,8 @@ impl Editor {
     pub(super) fn resize_values(&self) -> (String, String) {
         let (_, rows, cols) = self.table_cell().unwrap_or(((0, 0), 2, 1));
         (
-            self.resize_fields.0.clone().unwrap_or_else(|| (rows - 1).to_string()),
-            self.resize_fields.1.clone().unwrap_or_else(|| cols.to_string()),
+            self.table_ui.resize.0.clone().unwrap_or_else(|| (rows - 1).to_string()),
+            self.table_ui.resize.1.clone().unwrap_or_else(|| cols.to_string()),
         )
     }
 }

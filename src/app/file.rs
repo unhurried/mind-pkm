@@ -4,7 +4,7 @@ use super::dialog::Dialog;
 use super::doc::Doc;
 use super::search_panel::SearchPanel;
 use super::settings::{self, MapView};
-use super::{App, Message};
+use super::{App, MapMsg, Message};
 use crate::mindmap::MindMap;
 use crate::pkm;
 use iced::{Task, Vector};
@@ -52,9 +52,9 @@ impl App {
         self.next_generation += 1;
         let mut doc = Doc::new(map, self.next_generation);
         if let Some(view) = &view {
-            self.set_zoom(super::viewport::zoom_step(view.zoom, 0));
+            self.viewport.set_zoom(super::ui::zoom_step(super::viewport::ZOOM_STEPS, view.zoom, 0));
             // Nodes gone since are left out; hidden ones are handed to a shown ancestor by the relayout.
-            doc.select(view.selection.iter().filter_map(|id| doc.map.find_by_freeplane_id(id)).collect());
+            doc.select(view.selection.iter().filter_map(|id| doc.map().find_by_freeplane_id(id)).collect());
         }
         self.doc = Some(doc);
         self.search = SearchPanel::default();
@@ -68,12 +68,12 @@ impl App {
     /// How the open map is shown, if it has a file to be remembered by.
     pub(super) fn current_view(&self) -> Option<(PathBuf, MapView)> {
         let doc = self.doc.as_ref()?;
-        let path = doc.map.path()?.to_path_buf();
+        let path = doc.map().path()?.to_path_buf();
         // The focused node last.
-        let nodes = doc.selection.iter().copied().filter(|&n| n != doc.focus).chain([doc.focus]);
-        let selection = nodes.map(|n| doc.map.freeplane_id(n).to_string()).collect();
-        let scroll = (self.scroll_offset.x, self.scroll_offset.y);
-        Some((path, MapView { zoom: self.zoom, scroll, selection }))
+        let nodes = doc.selection().iter().copied().filter(|&n| n != doc.focus()).chain([doc.focus()]);
+        let selection = nodes.map(|n| doc.map().freeplane_id(n).to_string()).collect();
+        let scroll = (self.viewport.scroll.x, self.viewport.scroll.y);
+        Some((path, MapView { zoom: self.viewport.zoom(), scroll, selection }))
     }
 
     /// Remembers how the open map is shown, for when it is opened again.
@@ -103,7 +103,7 @@ impl App {
     /// Saves to the map's file (or asks for one first), then goes on with `then`.
     pub(super) fn save(&mut self, then: Option<AfterUnsaved>) -> Task<Message> {
         let Some(doc) = &self.doc else { return Task::none() };
-        match doc.map.path().map(Path::to_path_buf) {
+        match doc.map().path().map(Path::to_path_buf) {
             Some(path) => self.save_to(&path, then),
             None => self.choose_file(FileAction::SaveAs(then)),
         }
@@ -113,11 +113,10 @@ impl App {
     /// to the user instead.
     fn save_to(&mut self, path: &Path, then: Option<AfterUnsaved>) -> Task<Message> {
         let Some(doc) = &mut self.doc else { return Task::none() };
-        if let Err(e) = doc.map.save(path) {
+        if let Err(e) = doc.save(path) {
             self.message(format!("failed to save the map: {e}"));
             return Task::none();
         }
-        doc.dirty = false;
         settings::set_last_file(path);
         self.remember_view();
         self.status.set(format!("saved {}", file_name(path)));
@@ -128,7 +127,7 @@ impl App {
     }
 
     pub(super) fn choose_file(&self, action: FileAction) -> Task<Message> {
-        let dir = self.doc.as_ref().and_then(|d| d.map.path()).and_then(|p| p.parent()).map(|p| p.to_path_buf());
+        let dir = self.doc.as_ref().and_then(|d| d.map().path()).and_then(|p| p.parent()).map(|p| p.to_path_buf());
         Task::perform(
             async move {
                 let mut dialog = rfd::AsyncFileDialog::new().add_filter("Mind map", &["mm"]);
@@ -141,7 +140,7 @@ impl App {
                 };
                 handle.map(|h| h.path().to_path_buf())
             },
-            move |path| Message::FileChosen(action, path),
+            move |path| MapMsg::FileChosen(action, path).into(),
         )
     }
 
@@ -159,7 +158,7 @@ impl App {
 
     /// Runs `after` now, or once the user dealt with unsaved changes.
     pub(super) fn guard_unsaved(&mut self, after: AfterUnsaved) -> Task<Message> {
-        if self.doc.as_ref().is_some_and(|d| d.dirty) {
+        if self.doc.as_ref().is_some_and(|d| d.dirty()) {
             self.dialogs.push_back(Dialog::Unsaved(after));
             return Task::none();
         }

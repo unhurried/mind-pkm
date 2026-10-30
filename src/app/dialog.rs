@@ -3,7 +3,7 @@
 
 use super::file::AfterUnsaved;
 use super::{App, DIALOG_INPUT_ID, Message};
-use crate::mindmap::NodeId;
+use crate::mindmap::{MindMap, NodeId};
 use crate::pkm::commands;
 use crate::pkm::{DocType, filter::Filter};
 use chrono::Local;
@@ -147,14 +147,14 @@ impl App {
             return Task::none();
         }
         let Some(doc) = &mut self.doc else { return Task::none() };
-        let before = doc.map.clone();
-        let result = commands::delete_execute(&mut doc.map, targets, &mut |files| {
-            trash::delete_all(files).map_err(|e| e.to_string())
-        });
+        let delete = |map: &mut MindMap| {
+            commands::delete_execute(map, targets, &mut |files| trash::delete_all(files).map_err(|e| e.to_string()))
+        };
         // An undo step only when a node went; the selection moves next to it.
-        if targets.iter().any(|&(n, _)| before.exists(n) && !doc.map.exists(n)) {
-            doc.record(before);
-        }
+        let went = |before: &MindMap, after: &MindMap, _: &_| {
+            targets.iter().any(|&(n, _)| before.exists(n) && !after.exists(n))
+        };
+        let result = doc.change_recorded_if(delete, went);
         self.report(result);
         self.close_deleted_editors(&paths)
     }
@@ -172,20 +172,19 @@ impl App {
         match action {
             InputAction::EditText(id) => {
                 if let Some(v) = non_empty
-                    && doc.map.exists(id)
-                    && doc.map.text(id) != v
+                    && doc.map().exists(id)
+                    && doc.map().text(id) != v
                 {
-                    doc.checkpoint();
-                    doc.map.set_text(id, &v);
+                    doc.change(|map| map.set_text(id, &v));
                 }
             }
             InputAction::NewNode(id, serial) => match non_empty {
-                Some(v) if doc.map.exists(id) => doc.map.set_text(id, &v),
+                Some(v) if doc.map().exists(id) => doc.set_new_node_text(id, &v),
                 _ => {
                     // The node goes; changes made meanwhile (a refresh) stay.
-                    let parent = doc.map.exists(id).then(|| doc.map.parent(id)).flatten();
+                    let parent = doc.map().exists(id).then(|| doc.map().parent(id)).flatten();
                     doc.cancel_new_node(id, serial);
-                    if let Some(p) = parent.filter(|&p| doc.map.exists(p)) {
+                    if let Some(p) = parent.filter(|&p| doc.map().exists(p)) {
                         doc.select(vec![p]);
                     }
                 }
@@ -194,16 +193,15 @@ impl App {
             InputAction::Filter => {
                 // Cancelled: the current filter stays.
                 if let Some(v) = value {
-                    doc.filter = Filter::parse(&v, Local::now().date_naive());
+                    doc.set_filter(Filter::parse(&v, Local::now().date_naive()));
                 }
             }
             InputAction::SetLink(id) => {
                 if let Some(v) = value
-                    && doc.map.exists(id)
+                    && doc.map().exists(id)
                 {
-                    doc.checkpoint();
                     let v = v.trim();
-                    doc.map.set_link(id, if v.is_empty() { None } else { Some(v) });
+                    doc.change(|map| map.set_link(id, if v.is_empty() { None } else { Some(v) }));
                 }
             }
         }
@@ -216,7 +214,7 @@ impl App {
     /// pages are saved first and follow. The files stay renamed, so the map's
     /// undo history ends here.
     fn rename_doc(&mut self, id: NodeId, kind: DocType, name: &str) {
-        if !self.doc.as_ref().is_some_and(|d| d.map.exists(id)) {
+        if !self.doc.as_ref().is_some_and(|d| d.map().exists(id)) {
             return;
         }
         let old = self.doc_path_of(id);

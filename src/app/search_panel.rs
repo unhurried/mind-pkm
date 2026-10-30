@@ -1,7 +1,7 @@
 //! The full-text search panel (F6), docked under the map. Closing it only
 //! hides it, so the next F6 shows the same query and results again.
 
-use super::{App, Message, blocking};
+use super::{App, MapMsg, Message, blocking};
 use crate::mindmap::NodeId;
 use crate::pkm::{self, filter::Filter};
 use crate::search::{self, SearchHit, SearchScope, SearchSort};
@@ -110,7 +110,7 @@ impl App {
         self.search.open = true;
         self.search.focus = PanelFocus::Input;
         self.search.doc_dir = Some(doc_dir.clone());
-        self.viewport_size = None;
+        self.viewport.size = None;
         let focus = Task::batch([operation::focus(SEARCH_INPUT_ID), operation::select_all(SEARCH_INPUT_ID)]);
         // Brings the index up to date in the background; searching meanwhile
         // works against what is on disk. Also loads the dictionary early.
@@ -126,7 +126,7 @@ impl App {
                     search::analyzer::warm_up();
                     search::update_index(&doc_dir)
                 }),
-                Message::IndexUpdated,
+                |r| MapMsg::IndexUpdated(r).into(),
             ),
         ])
     }
@@ -151,7 +151,7 @@ impl App {
         let (query, sort, scope) = (self.search.query.clone(), self.search.sort, self.search.scope);
         Task::perform(
             blocking(move || search::search(&doc_dir, &query, sort, scope, search::DEFAULT_MAX_RESULTS)),
-            move |r| Message::Search(SearchMsg::Done(id, r)),
+            move |r| MapMsg::Search(SearchMsg::Done(id, r)).into(),
         )
     }
 
@@ -190,7 +190,7 @@ impl App {
                 // Resolved per search, so results reflect links changed since the panel opened.
                 self.search.nodes = match (&self.doc, &self.search.doc_dir) {
                     (Some(doc), Some(dir)) => {
-                        let by_file = pkm::collect_nodes_by_linked_file(&doc.map, doc.map.root());
+                        let by_file = pkm::collect_nodes_by_linked_file(doc.map(), doc.map().root());
                         hits.iter().map(|h| pkm::find_node_for_file(&by_file, &h.file, dir)).collect()
                     }
                     _ => vec![None; hits.len()],
@@ -228,7 +228,7 @@ impl App {
             SearchMsg::Close => {
                 self.search.open = false;
                 self.search.focus = PanelFocus::Map;
-                self.viewport_size = None;
+                self.viewport.size = None;
                 Task::none()
             }
         }
@@ -256,16 +256,16 @@ impl App {
         let Some(i) = self.search.selected else { return Task::none() };
         let target = self.search.nodes.get(i).copied().flatten();
         let Some(doc) = &mut self.doc else { return Task::none() };
-        let Some(node) = target.filter(|&n| doc.map.exists(n)) else {
+        let Some(node) = target.filter(|&n| doc.map().exists(n)) else {
             self.search.status = format!("no node links to this file: {}", self.search.hits[i].relative_path);
             return Task::none();
         };
         // A filter hiding the node would leave nothing to select.
-        if !doc.filter.visible(&doc.map).contains(&node) {
-            doc.filter = Filter::All;
+        if !doc.filter().visible(doc.map()).contains(&node) {
+            doc.set_filter(Filter::All);
         }
         doc.reveal(node);
-        self.search.status = format!("selected: {}", pkm::node_path_text(&doc.map, node));
+        self.search.status = format!("selected: {}", pkm::node_path_text(doc.map(), node));
         self.relayout();
         self.center_on_focus()
     }

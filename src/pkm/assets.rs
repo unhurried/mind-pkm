@@ -2,7 +2,7 @@
 //! its files and folders, renaming and deleting them - never anything that is
 //! not strictly inside the document directory.
 
-use super::{ASSETS_SUFFIX, file_name, is_valid_directory_name};
+use super::{ASSETS_SUFFIX, is_valid_directory_name};
 use crate::paths;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +23,7 @@ impl Entry {
 
 /// The assets folder of the file `<name>.md`: `<name>.assets` next to it.
 pub fn assets_dir_of(file: &Path) -> PathBuf {
-    let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = paths::file_stem(file);
     file.with_file_name(format!("{stem}{ASSETS_SUFFIX}"))
 }
 
@@ -57,7 +57,7 @@ pub fn can_change(path: &Path, doc_dir: &Path) -> bool {
 /// Renames `item` to `new_name` in its folder; the new path, or None when the
 /// name is empty or unchanged.
 pub fn rename(item: &Path, new_name: &str, doc_dir: &Path) -> Result<Option<PathBuf>, String> {
-    let old_name = file_name(item);
+    let old_name = paths::file_name(item);
     if new_name.is_empty() || new_name == old_name {
         return Ok(None);
     }
@@ -83,7 +83,7 @@ pub fn delete(
     doc_dir: &Path,
     remove: &mut dyn FnMut(&[PathBuf]) -> Result<(), String>,
 ) -> Result<(), String> {
-    let name = file_name(item);
+    let name = paths::file_name(item);
     if !can_change(item, doc_dir) {
         return Err(format!("failed to delete {name}: not in the document directory"));
     }

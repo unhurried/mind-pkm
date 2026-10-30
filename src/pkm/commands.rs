@@ -7,7 +7,7 @@ use crate::mindmap::ICON_CHECKMARK;
 use chrono::NaiveDate;
 
 /// The page template shipped with the application; a `template.md` in the
-/// configuration directory takes its place (see `crate::settings`).
+/// configuration directory takes its place (see `crate::app::settings`).
 pub const DEFAULT_TEMPLATE: &str = include_str!("../../assets/template.md");
 
 const UNLINKED_NODE_NAME: &str = "unlinked";
@@ -86,8 +86,8 @@ fn rename_page(map: &mut MindMap, doc_dir: &Path, id: NodeId, new_name: &str) ->
 
     // Literal replace, not regex: page names may contain metacharacters ("C++ Memo").
     let text = read_page(&new_page).map_err(|e| e.to_string())?;
-    let text = text.replace(&file_name(&page), &file_name(&new_page));
-    let text = text.replace(&file_name(&assets), &file_name(&new_assets));
+    let text = text.replace(&paths::file_name(&page), &paths::file_name(&new_page));
+    let text = text.replace(&paths::file_name(&assets), &paths::file_name(&new_assets));
     write_page(&new_page, &text).map_err(|e| e.to_string())?;
 
     map.set_text(id, new_name);
@@ -130,9 +130,9 @@ pub fn new_page(map: &mut MindMap, id: NodeId, template: &str, today: NaiveDate)
     }
     std::fs::create_dir(&assets).map_err(|e| e.to_string())?;
 
-    let template = template.strip_prefix(BOM).unwrap_or(template);
+    let template = strip_bom(template);
     let text = template
-        .replace("${page_assets_name}", &file_name(&assets))
+        .replace("${page_assets_name}", &paths::file_name(&assets))
         .replace("${today}", &today.format(DATE_FORMAT).to_string());
     write_page(&page, &text).map_err(|e| e.to_string())?;
     map.set_link_file(id, &page);
@@ -248,7 +248,7 @@ pub fn add_assets(map: &MindMap, selection: &[NodeId], id: NodeId) -> Result<(),
     }
     std::fs::create_dir(&assets).map_err(|e| e.to_string())?;
     let text = read_page(&page).map_err(|e| e.to_string())?;
-    write_page(&page, &format!("[assets]({})\n\n{text}", file_name(&assets))).map_err(|e| e.to_string())
+    write_page(&page, &format!("[assets]({})\n\n{text}", paths::file_name(&assets))).map_err(|e| e.to_string())
 }
 
 // --- Add to ToDo (F8) ---
@@ -376,10 +376,10 @@ pub fn find_unlinked(map: &mut MindMap) -> Result<NodeId, String> {
             }
         } else if let Some(page) = page_file_of_assets_dir(&entry) {
             if !page.exists() {
-                assets.push((file_name(&entry), entry));
+                assets.push((paths::file_name(&entry), entry));
             }
         } else if !is_linked(&entry) {
-            dirs.push((file_name(&entry), entry));
+            dirs.push((paths::file_name(&entry), entry));
         }
     }
     for (label, items) in [("page", pages), ("directory", dirs), ("asset", assets)] {
