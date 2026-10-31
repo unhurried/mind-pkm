@@ -3,6 +3,9 @@
 //! instead never saw the press and a drag with the button held does nothing.
 //! `PressRelay` tells where a press landed (`tracking`) and hands it, with the
 //! moves that follow, to the editor as a click and drags (`relaying`).
+//! `tracking` also takes a press in the margin beside the content for one at
+//! the content's left edge at that height, so that it puts the cursor at the
+//! start of the line there.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
@@ -51,6 +54,16 @@ impl<'a> PressRelay<'a> {
     pub fn relaying(content: impl Into<Element<'a, EditorMsg>>, held: Option<Held>) -> Self {
         PressRelay { content: content.into(), on_press: None, held }
     }
+}
+
+/// Where a press at the cursor stands for when it is beside `bounds` (to the
+/// left or right of them) at a height inside them and inside the visible
+/// `viewport`: the left edge of the bounds at that height.
+fn margin_press(cursor: mouse::Cursor, bounds: Rectangle, viewport: &Rectangle) -> Option<Point> {
+    let p = cursor.position()?;
+    let beside = p.x < bounds.x || p.x >= bounds.x + bounds.width;
+    let at_height = p.y >= bounds.y && p.y < bounds.y + bounds.height;
+    (beside && at_height && viewport.contains(p)).then(|| Point::new(bounds.x + 1.0, p.y))
 }
 
 /// `p` in the editor's text, kept inside its bounds.
@@ -134,6 +147,26 @@ impl Widget<EditorMsg, Theme, Renderer> for PressRelay<'_> {
         {
             shell.publish(on_press(p));
         }
+        // A press in the margin, replayed at the content's left edge.
+        if let (Some(on_press), Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))) = (self.on_press, event)
+            && let Some(at) = margin_press(cursor, bounds, viewport)
+        {
+            let over = mouse::Cursor::Available(at);
+            let moved = Event::Mouse(mouse::Event::CursorMoved { position: at });
+            for replay in [&moved, event] {
+                self.content.as_widget_mut().update(
+                    &mut tree.children[0],
+                    replay,
+                    layout,
+                    over,
+                    renderer,
+                    clipboard,
+                    shell,
+                    viewport,
+                );
+            }
+            shell.publish(on_press(at));
+        }
         let state = tree.state.downcast_mut::<State>();
         let Some(held) = self.held else {
             *state = State::default();
@@ -197,6 +230,21 @@ impl<'a> From<PressRelay<'a>> for Element<'a, EditorMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_press_beside_the_content_stands_for_one_at_its_left_edge() {
+        let bounds = Rectangle { x: 100.0, y: 20.0, width: 300.0, height: 500.0 };
+        let viewport = Rectangle { x: 0.0, y: 0.0, width: 600.0, height: 400.0 };
+        let at = |x: f32, y: f32| margin_press(mouse::Cursor::Available(Point::new(x, y)), bounds, &viewport);
+        assert_eq!(at(10.0, 50.0), Some(Point::new(101.0, 50.0)));
+        assert_eq!(at(450.0, 50.0), Some(Point::new(101.0, 50.0)));
+        // On the content, above or below it, or out of the visible page.
+        assert_eq!(at(200.0, 50.0), None);
+        assert_eq!(at(10.0, 10.0), None);
+        assert_eq!(at(10.0, 530.0), None);
+        assert_eq!(at(10.0, 450.0), None);
+        assert_eq!(margin_press(mouse::Cursor::Unavailable, bounds, &viewport), None);
+    }
 
     #[test]
     fn a_point_is_taken_in_the_text_inside_the_bounds() {
