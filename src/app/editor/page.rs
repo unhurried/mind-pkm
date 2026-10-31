@@ -429,6 +429,7 @@ impl Page {
                 Mode::Live(_) => {
                     self.sel = sel;
                     self.refresh_live();
+                    self.snap_to_shown();
                     return;
                 }
                 Mode::Code(code, content) => {
@@ -483,6 +484,7 @@ impl Page {
                     let within = |o: usize| o.clamp(region.start, region.end);
                     self.sel = Sel { anchor: within(sel.anchor), head: within(sel.head) };
                     self.refresh_live();
+                    self.snap_to_shown();
                     return;
                 } else if let Some((b, code)) = block.and_then(|b| Some((b, CodeBody::of(&self.text, &self.doc, b)?))) {
                     // A code block: its code, without the fences.
@@ -783,7 +785,9 @@ impl Page {
     pub fn snap_to_shown(&mut self) {
         let Some(l) = self.live() else { return };
         if l.sel.is_empty() {
-            self.live_move_to(l.sel.head, false);
+            // Not a break of the typing: this also runs after each typed character.
+            let s = l.display.to_source(l.sel.head.min(l.display.text.len()));
+            self.set_live_sel(Sel::caret(s));
         }
     }
 
