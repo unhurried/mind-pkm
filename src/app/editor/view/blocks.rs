@@ -411,7 +411,12 @@ impl Editor {
         // A checked task's text is muted.
         let done = Ctx { p: Palette { text: p.muted, link: p.muted, heading: p.muted, ..p }, ..*ctx };
         let body_ctx = if item.task == Some(true) { &done } else { ctx };
-        let body = nodes_view(&nodes, body_ctx, width - indent - marker_w, i);
+        // An empty item keeps the height of a line of text.
+        let body: Element<EditorMsg> = if nodes.is_empty() {
+            space().height(ctx.size(1.0) * LINE_HEIGHT).into()
+        } else {
+            nodes_view(&nodes, body_ctx, width - indent - marker_w, i)
+        };
         let marker: Element<EditorMsg> = if let Some(checked) = item.task {
             container(
                 iced::widget::checkbox(checked).size(ctx.size(0.95)).on_toggle(move |_| EditorMsg::TaskToggled(i)),
