@@ -456,3 +456,62 @@ fn a_press_is_held_for_the_editor_that_takes_the_block_s_place() {
     editor(&mut app, id, EditorMsg::Released);
     assert!(app.editors[&id].held(pad).is_none());
 }
+
+/// The page after typing "bbb " into the heading the cursor was moved to with `go`.
+fn typed_into_heading(go: impl FnOnce(&mut App, window::Id)) -> String {
+    let (mut app, _f, _, _) = app_with_page("before\n\n### aaa\n\nafter\n");
+    let id = open_with_f1(&mut app);
+    go(&mut app, id);
+    typing(&mut app, id, "bbb ");
+    page_text(&app, id)
+}
+
+fn bind(app: &mut App, id: window::Id, bind: Bind) {
+    editor(app, id, EditorMsg::Bind(bind));
+}
+
+fn home(app: &mut App, id: window::Id) {
+    editor(app, id, EditorMsg::Action(Action::Move(iced::widget::text_editor::Motion::Home)));
+}
+
+#[test]
+fn typing_at_the_start_of_a_heading_goes_after_its_marker() {
+    let expected = "before\n\n### bbb aaa\n\nafter\n";
+    // Right arrow at the end of the block before.
+    assert_eq!(
+        typed_into_heading(|app, id| {
+            click_after(app, id, "before");
+            bind(app, id, Bind::Right);
+        }),
+        expected
+    );
+    // Down from the block before, at its start.
+    assert_eq!(
+        typed_into_heading(|app, id| {
+            click_after(app, id, "before");
+            home(app, id);
+            bind(app, id, Bind::Down);
+        }),
+        expected
+    );
+    // Up from the block below, at its start.
+    assert_eq!(
+        typed_into_heading(|app, id| {
+            click_after(app, id, "after");
+            home(app, id);
+            bind(app, id, Bind::Up);
+        }),
+        expected
+    );
+    // A press beside the heading's text.
+    assert_eq!(typed_into_heading(|app, id| editor(app, id, EditorMsg::BlockPressed(1))), expected);
+    // Selected blocks left with Up.
+    assert_eq!(
+        typed_into_heading(|app, id| {
+            editor(app, id, EditorMsg::BlockPressed(1));
+            app.editors.get_mut(&id).unwrap().page.select_blocks(1, 1);
+            send(app, Message::Window(id, WindowEvent::Key(key_event(Key::Named(Named::ArrowUp), Modifiers::empty()))));
+        }),
+        expected
+    );
+}
