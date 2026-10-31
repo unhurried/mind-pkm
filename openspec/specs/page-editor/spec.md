@@ -87,7 +87,7 @@ Clicking a rendered block SHALL put the cursor into it at the clicked position o
 - **THEN** the cursor is between `wor` and `ld` and the paragraph stays rendered
 
 ### Requirement: Clicking beside content
-A click on the page SHALL never leave it without a cursor. Beside a block's content it SHALL put the cursor into that block: anywhere in the row of an empty list item (at the start of its text), and to the right of a line (at the end of that line), also when the line holds math or an image. In the gap between two blocks it SHALL put the cursor into the nearer one: at the end of the block above, or at the start of the block below. A click in the margin left or right of the page's column SHALL put the cursor at the start of the line at the height of the click, as a click at the left edge of that line would.
+A click on the page SHALL never leave it without a cursor. Beside a block's content it SHALL put the cursor into that block: anywhere in the row of an empty list item (at the start of its text), and to the right of a line (at the end of that line), also when the line holds math or an image. In the gap between two blocks it SHALL put the cursor into the nearer one: at the end of the block above, or at the start of the block below.
 
 #### Scenario: Click in the gap between blocks
 - **WHEN** the gap between the list item `two` and the paragraph `After` is clicked in its upper half and `!` is typed
@@ -102,6 +102,9 @@ A click on the page SHALL never leave it without a cursor. Beside a block's cont
 #### Scenario: Click right of a line with math
 - **WHEN** the paragraph `Inline $x^2$ math` is clicked to the right of its text and `!` is typed
 - **THEN** the paragraph becomes `Inline $x^2$ math!`
+
+### Requirement: Clicking in the margins
+A click in the margin left or right of the page's column SHALL put the cursor at the start of the line at the height of the click, as a click at the left edge of that line would.
 
 #### Scenario: Click in the margin beside a line
 - **WHEN** the margin right of the paragraph `hello world` is clicked at the height of its line and `!` is typed

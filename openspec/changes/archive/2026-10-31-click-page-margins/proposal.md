@@ -16,7 +16,7 @@ None.
 
 ### Modified Capabilities
 
-- `page-editor`: clicking beside a block's content.
+- `page-editor`: clicking in the margins beside the page.
 
 ## Impact
 
