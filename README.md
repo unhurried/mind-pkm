@@ -22,6 +22,8 @@ The UI uses the Meiryo UI font; where it is missing, the system's fallback fonts
 
 There is nothing to install and no runtime to set up: the exe embeds everything, including the Japanese dictionary for the search index.
 
+If the application crashes, fails to start, or fails to update the search index, the details are appended to `mind-pkm-error.log` next to the exe (in the temporary folder if that folder cannot be written to; a log past 1 MiB is kept as `mind-pkm-error.log.old`). The file only exists once an error has happened.
+
 ### Code Signing Certificate
 
 `mind-pkm.exe` is signed with a self-signed certificate, `Mind PKM Code Signing` (SHA-1 thumbprint `8A2D49B3A38A3F6933F3367FA23663A694A5C597`, valid until 2036-10-11). Windows doesn't know that certificate, so until you install it the signature shows as untrusted. The certificate, `codesign.cer`, is attached to each release (it is also [`assets/codesign.cer`](assets/codesign.cer) in this repository).
@@ -216,6 +218,7 @@ Then switch back to the allowlist: building, testing and `openspec validate` nee
 ### Source Layout
 
 - `src/xml.rs`, `src/mindmap.rs` - reading/writing `.mm` files without losing anything
+- `src/error_log.rs` - the error log next to the exe (panics, failure to start, failed index updates)
 - `src/paths.rs` - link URI <-> file path conversion, path comparison
 - `src/pkm/` - the PKM conventions and commands (`commands.rs`), the Next Steps refresh (`next_steps.rs`), the filter (`filter.rs`)
 - `src/search/` - the full-text index (tantivy + lindera), text extraction from PDF/Office files
