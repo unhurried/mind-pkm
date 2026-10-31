@@ -1,11 +1,11 @@
 //! Property tests of the page editor's Markdown handling for any page made of
 //! common Markdown lines.
 
-use mind_pkm::markdown::Document;
 use mind_pkm::markdown::edit::{self, Sel};
 use mind_pkm::markdown::live;
 use mind_pkm::markdown::parse::ContainerKind;
 use mind_pkm::markdown::table::{self, Align, Table};
+use mind_pkm::markdown::{BlockKind, Document};
 use proptest::prelude::*;
 
 /// Lines that make up pages: every kind of block, nesting, and stray syntax.
@@ -60,6 +60,46 @@ fn page() -> impl Strategy<Value = String> {
     prop::collection::vec(prop::sample::select(LINES), 0..25).prop_map(|lines| lines.join("\n"))
 }
 
+/// Enter (or Shift+Enter) at `c` in the block `region` of `text` leaves the
+/// page before and after the block as it was. The one exception is specified:
+/// Enter in a list item puts the new item among the blocks the item has below
+/// its text (above its nested items, after its other blocks), and the blank
+/// lines between them go where an empty item allows. There, what is below the
+/// text stays line by line, in order, with at most the new item added.
+fn enter_changes_only_the_block(
+    text: &str,
+    doc: &Document,
+    region: std::ops::Range<usize>,
+    c: usize,
+    shift: bool,
+) -> Result<(), TestCaseError> {
+    let result = if shift {
+        edit::shift_enter(text, doc, region.clone(), Sel::caret(c))
+    } else {
+        edit::enter(text, doc, region.clone(), Sel::caret(c))
+    };
+    if let Some(e) = result {
+        prop_assert_eq!(&e.text[..region.start], &text[..region.start], "before the block of {:?}", text);
+        let list_item = doc.blocks.iter().any(|b| b.range == region && matches!(b.kind, BlockKind::ListItem(_)));
+        if list_item && !shift {
+            let lines =
+                |t: &str| t.lines().map(|l| l.trim_end().to_string()).filter(|l| !l.is_empty()).collect::<Vec<_>>();
+            let below = lines(&text[region.end..]);
+            let got = lines(&e.text[region.start..]);
+            let mut rest = got.iter();
+            for line in &below {
+                prop_assert!(rest.any(|l| l == line), "below the item {:?} lost {:?}: {:?}", text, line, e.text);
+            }
+            prop_assert!(got.len() <= lines(&text[region.start..]).len() + 1, "{:?} -> {:?}", text, e.text);
+        } else {
+            let tail = text.len() - region.end;
+            prop_assert_eq!(&e.text[e.text.len() - tail..], &text[region.end..], "after the block of {:?}", text);
+        }
+        prop_assert!(e.sel.head <= e.text.len());
+    }
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(400))]
 
@@ -99,17 +139,7 @@ proptest! {
         // A cursor position inside the block, on a character boundary.
         let positions: Vec<usize> = (region.start..=region.end).filter(|&i| text.is_char_boundary(i)).collect();
         let c = positions[at.index(positions.len())];
-        let result = if shift {
-            edit::shift_enter(&text, &doc, region.clone(), Sel::caret(c))
-        } else {
-            edit::enter(&text, &doc, region.clone(), Sel::caret(c))
-        };
-        if let Some(e) = result {
-            prop_assert_eq!(&e.text[..region.start], &text[..region.start], "before the block of {:?}", text);
-            let tail = text.len() - region.end;
-            prop_assert_eq!(&e.text[e.text.len() - tail..], &text[region.end..], "after the block of {:?}", text);
-            prop_assert!(e.sel.head <= e.text.len());
-        }
+        enter_changes_only_the_block(&text, &doc, region, c, shift)?;
     }
 
     #[test]
@@ -252,4 +282,13 @@ proptest! {
             }
         }
     }
+}
+
+#[test]
+fn enter_at_the_end_of_an_item_with_a_nested_item_below_a_blank_line() {
+    // Issue #59: found by `enter_inside_a_block_changes_only_that_block`.
+    let text = "- item\n\n  - nested";
+    let doc = Document::parse(text);
+    let region = doc.blocks[0].range.clone();
+    enter_changes_only_the_block(text, &doc, region.clone(), region.end, false).unwrap();
 }
