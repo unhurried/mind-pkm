@@ -203,6 +203,16 @@ Outside source mode, a selection reaching beyond a block SHALL select whole bloc
 - **WHEN** the mouse button is pressed in the text of the second of four paragraphs and the pointer is dragged onto the fourth
 - **THEN** the second to fourth paragraphs are selected, and moving the pointer back onto the third leaves the second and third selected until the button is released
 
+#### Scenario: Dragging within a block that is not the active one
+- **WHEN** the mouse button is pressed in the rendered text of a paragraph other than the active one and the pointer is dragged along the text with the button held
+- **THEN** the paragraph becomes the active block and the text between the pressed point and the pointer is selected, as when dragging in the active block
+
+#### Scenario: Dragging within a code block or a table that is not the active one
+- **WHEN** the mouse button is pressed in a rendered code block or math block other than the active one and the pointer is dragged along its source with the button held
+- **THEN** the block becomes the active block and the text between the pressed point and the pointer is selected
+- **WHEN** the button is pressed in a cell of a rendered table and the pointer is dragged onto other cells
+- **THEN** the table becomes the active block and the cells between are selected
+
 ### Requirement: Paragraph shortcuts
 Ctrl+1 to Ctrl+6 SHALL make the active block a heading of that level and Ctrl+0 a paragraph; Ctrl+= and Ctrl+- SHALL raise and lower the heading level (a paragraph becomes a level-6 heading with Ctrl+=, a level-6 heading a paragraph with Ctrl+-). Ctrl+Shift+K SHALL insert a code block, Ctrl+Shift+M a math block, Ctrl+T a table; Ctrl+Shift+Q SHALL toggle a quote, Ctrl+Shift+[ an ordered list and Ctrl+Shift+] a bullet list on the selected blocks or the active one.
 

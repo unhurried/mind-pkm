@@ -198,3 +198,15 @@ fn typing_in_cells() {
     let text = page_text(&app, id);
     assert_eq!(text.lines().next(), Some("| ax\\|y<br>z | b   |"));
 }
+
+#[test]
+fn dragging_from_a_rendered_table_selects_cells() {
+    let (mut app, _f, _, _) = app_with_page("| a | b |\n|---|---|\n| c | d |\n");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::TableCellPressed(0, 0, 0));
+    assert!(app.editors[&id].table_ui.drag);
+    editor(&mut app, id, EditorMsg::Table(TableMsg::Entered(1, 1)));
+    assert_eq!(cell_range(&app, id), Some(crate::markdown::table::CellRange::new((0, 0), (1, 1))));
+    editor(&mut app, id, EditorMsg::Released);
+    assert!(!app.editors[&id].table_ui.drag);
+}
