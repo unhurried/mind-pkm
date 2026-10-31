@@ -46,6 +46,13 @@ The editor SHALL show the document as a sequence of rendered blocks (see markdow
 - **WHEN** the cursor is in a fenced code block
 - **THEN** the block shows its code in its box, without the fences, and its language in a field
 
+### Requirement: Stable line height
+A line of text SHALL be as tall while its block holds the cursor as when it does not, whatever fonts and sizes its inline elements mix, so that moving the cursor never shifts the blocks below.
+
+#### Scenario: Inline code in a list item
+- **WHEN** the cursor moves into or out of a list item containing `` `code` `` between plain text
+- **THEN** the item, and so the items below it, keep their height
+
 ### Requirement: Styled source of the active block
 Markdown shown while editing - the source of an inline element at the cursor, and the source of a code-like block - SHALL be styled like the rendering where text can show it: bold and italic text in bold and italic, code in the code font, links in the link color, and Markdown markers dimmed. Block markers (`#`, list markers and task boxes, `>`) SHALL NOT be shown while a block is edited: a heading keeps its size, a list item its bullet, number or checkbox, a quote its bar.
 

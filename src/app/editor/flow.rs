@@ -30,8 +30,10 @@ pub struct Cluster {
 /// A measured piece of the shown text.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Measured {
-    /// Text: its clusters, and the height above and below its baseline.
-    Text { clusters: Vec<Cluster>, ascent: f32, descent: f32 },
+    /// Text: its clusters, the height above and below its baseline, and the
+    /// part of that taken by the glyphs themselves (the rest is the line
+    /// height's padding, split evenly above and below them).
+    Text { clusters: Vec<Cluster>, ascent: f32, descent: f32, glyph: (f32, f32) },
     /// One object over `shown` (an image, a formula, a label); a `centered`
     /// one alone on its line (display math) in the middle of it.
     Object { shown: Range<usize>, width: f32, ascent: f32, descent: f32, centered: bool },
@@ -86,6 +88,8 @@ struct Atom {
     w: f32,
     ascent: f32,
     descent: f32,
+    /// The glyphs' ascent and descent, for text.
+    glyph: Option<(f32, f32)>,
     space: bool,
     newline: bool,
     decoration: bool,
@@ -104,7 +108,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
     let mut atoms: Vec<Atom> = Vec::new();
     for (i, item) in items.iter().enumerate() {
         match item {
-            Measured::Text { clusters, ascent, descent } => {
+            Measured::Text { clusters, ascent, descent, glyph } => {
                 for (c, cl) in clusters.iter().enumerate() {
                     atoms.push(Atom {
                         item: i,
@@ -113,6 +117,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                         w: cl.w,
                         ascent: *ascent,
                         descent: *descent,
+                        glyph: Some(*glyph),
                         space: cl.space,
                         newline: false,
                         decoration: false,
@@ -131,6 +136,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                 w: *width,
                 ascent: *ascent,
                 descent: *descent,
+                glyph: None,
                 space: false,
                 newline: false,
                 decoration: false,
@@ -147,6 +153,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                 w: *width,
                 ascent: *ascent,
                 descent: *descent,
+                glyph: None,
                 space: false,
                 newline: false,
                 decoration: true,
@@ -163,6 +170,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
                 w: 0.0,
                 ascent: empty.0,
                 descent: empty.1,
+                glyph: None,
                 space: false,
                 newline: true,
                 decoration: false,
@@ -233,13 +241,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
     let mut flow = Flow { lines: Vec::new(), height: 0.0, len };
     let mut top = 0.0;
     for line in lines {
-        let ascent = line.iter().map(|&a| atoms[a].ascent).fold(0.0, f32::max);
-        let descent = line.iter().map(|&a| atoms[a].descent).fold(0.0, f32::max);
-        let (ascent, descent) = if line.is_empty() || line.iter().all(|&a| atoms[a].newline) {
-            (ascent.max(empty.0), descent.max(empty.1))
-        } else {
-            (ascent, descent)
-        };
+        let (ascent, descent) = line_metrics(&atoms, &line, empty);
         let mut frags: Vec<Frag> = Vec::new();
         let mut x = 0.0;
         for &a in &line {
@@ -292,6 +294,36 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
     }
     flow.height = top;
     flow
+}
+
+/// The height above and below the baseline of a line of atoms. The text on
+/// it is laid out like one paragraph of mixed fonts: the line is as tall as
+/// its tallest run, and the glyphs - the tallest ascent and the deepest
+/// descent among all fonts - are centered in it. Objects reach as far as they
+/// do; an empty line has the height of `empty`.
+fn line_metrics(atoms: &[Atom], line: &[usize], empty: (f32, f32)) -> (f32, f32) {
+    let (mut ascent, mut descent) = (0.0f32, 0.0f32);
+    let (mut height, mut glyph_ascent, mut glyph_descent) = (0.0f32, 0.0f32, 0.0f32);
+    let mut text = false;
+    let mut content = false;
+    for a in line.iter().map(|&a| &atoms[a]).filter(|a| !a.newline) {
+        content = true;
+        if let Some((glyph_a, glyph_d)) = a.glyph {
+            text = true;
+            height = height.max(a.ascent + a.descent);
+            glyph_ascent = glyph_ascent.max(glyph_a);
+            glyph_descent = glyph_descent.max(glyph_d);
+        } else {
+            ascent = ascent.max(a.ascent);
+            descent = descent.max(a.descent);
+        }
+    }
+    if text {
+        let above = (height - (glyph_ascent + glyph_descent)) / 2.0 + glyph_ascent;
+        ascent = ascent.max(above);
+        descent = descent.max(height - above);
+    }
+    if content { (ascent, descent) } else { empty }
 }
 
 /// Where a caret is: its x, and the line it is on.
@@ -518,7 +550,7 @@ mod tests {
             });
             x += 10.0;
         }
-        Measured::Text { clusters, ascent: 12.0, descent: 4.0 }
+        Measured::Text { clusters, ascent: 12.0, descent: 4.0, glyph: (10.0, 2.0) }
     }
 
     fn lines(flow: &Flow, text: &str) -> Vec<String> {
@@ -566,6 +598,7 @@ mod tests {
                 },
                 ascent: 20.0,
                 descent: 6.0,
+                glyph: (18.0, 4.0),
             },
             Measured::Object { shown: 4..7, width: 30.0, ascent: 40.0, descent: 0.0, centered: false },
             run(" ef", 7),

@@ -173,6 +173,8 @@ struct Shaped {
     clusters: Vec<Cluster>,
     ascent: f32,
     descent: f32,
+    /// The glyphs' own ascent and descent, without the line height's padding.
+    glyph: (f32, f32),
     width: f32,
 }
 
@@ -258,6 +260,10 @@ fn shape(text: &str, font: Font, size: f32, line_height: f32, shown_start: usize
     let mut ascent = size * line_height * 0.6;
     let mut descent = size * line_height * 0.4;
     let mut width: f32 = 0.0;
+    let mut glyph = (ascent, descent);
+    if let Some(line) = paragraph.buffer().lines.first().and_then(|l| l.layout_opt()).and_then(|l| l.first()) {
+        glyph = (line.max_ascent, line.max_descent);
+    }
     if let Some(run) = paragraph.buffer().layout_runs().next() {
         ascent = run.line_y - run.line_top;
         descent = run.line_height - ascent;
@@ -287,7 +293,7 @@ fn shape(text: &str, font: Font, size: f32, line_height: f32, shown_start: usize
     for i in 0..clusters.len() {
         clusters[i].end = clusters.get(i + 1).map_or(end, |n| n.start);
     }
-    Shaped { paragraph, clusters, ascent, descent, width }
+    Shaped { paragraph, clusters, ascent, descent, glyph, width }
 }
 
 impl LiveText<'_> {
@@ -330,7 +336,7 @@ impl LiveText<'_> {
                         .iter()
                         .map(|c| Cluster { start: c.start + run.shown.start, end: c.end + run.shown.start, ..*c })
                         .collect();
-                    Measured::Text { clusters, ascent: shaped.ascent, descent: shaped.descent }
+                    Measured::Text { clusters, ascent: shaped.ascent, descent: shaped.descent, glyph: shaped.glyph }
                 }
                 RunKind::Label { text, look } => {
                     let k = key.clone().unwrap_or_else(|| unreachable!());
@@ -828,5 +834,71 @@ impl LiveText<'_> {
 impl<'a> From<LiveText<'a>> for Element<'a, EditorMsg> {
     fn from(w: LiveText<'a>) -> Self {
         Element::new(w)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::editor::view::CODE_FONT;
+    use crate::app::view::APP_FONT;
+
+    const SIZE: f32 = 15.0;
+    const LINE_HEIGHT: f32 = 1.6;
+
+    type TestRun<'a> = (&'a str, f32, Font);
+
+    /// The height of the runs as the rendered text widget lays them out.
+    fn rendered_height(runs: &[TestRun]) -> f32 {
+        let spans: Vec<iced::widget::text::Span<'_, (), Font>> =
+            runs.iter().map(|(t, s, f)| iced::widget::text::Span::new(*t).size(*s).font(*f)).collect();
+        let p = Paragraph::with_spans(core_text::Text {
+            content: spans.as_slice(),
+            bounds: Size::new(1000.0, f32::INFINITY),
+            size: Pixels(SIZE),
+            line_height: LineHeight::Relative(LINE_HEIGHT),
+            font: APP_FONT,
+            align_x: core_text::Alignment::Default,
+            align_y: iced::alignment::Vertical::Top,
+            shaping: Shaping::Advanced,
+            wrapping: Wrapping::WordOrGlyph,
+        });
+        p.min_bounds().height
+    }
+
+    /// The height of the same runs as the editing widget lays them out.
+    fn editing_height(runs: &[TestRun]) -> f32 {
+        let mut at = 0;
+        let items: Vec<Measured> = runs
+            .iter()
+            .map(|(t, size, font)| {
+                let shaped = shape(t, *font, *size, LINE_HEIGHT, at);
+                at += t.len();
+                Measured::Text {
+                    clusters: shaped.clusters,
+                    ascent: shaped.ascent,
+                    descent: shaped.descent,
+                    glyph: shaped.glyph,
+                }
+            })
+            .collect();
+        let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0);
+        flow::layout(&items, 1000.0, (empty.ascent, empty.descent), at).height
+    }
+
+    #[test]
+    fn a_line_is_as_tall_as_when_rendered_whatever_fonts_it_mixes() {
+        let bold = Font { weight: iced::font::Weight::Bold, ..APP_FONT };
+        let cases: [(&str, Vec<TestRun>); 5] = [
+            ("plain", vec![("hello world", SIZE, APP_FONT)]),
+            ("code", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, CODE_FONT), (" w", SIZE, APP_FONT)]),
+            ("code only", vec![("x", SIZE, CODE_FONT)]),
+            ("superscript", vec![("hello ", SIZE, APP_FONT), ("x", SIZE * 0.75, APP_FONT), (" w", SIZE, APP_FONT)]),
+            ("bold", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, bold)]),
+        ];
+        for (name, runs) in cases {
+            let (rendered, editing) = (rendered_height(&runs), editing_height(&runs));
+            assert!((rendered - editing).abs() < 0.01, "{name}: rendered {rendered}, editing {editing}");
+        }
     }
 }
