@@ -6,7 +6,7 @@ What the built-in editor understands of Markdown and HTML and how it shows each 
 ## Requirements
 
 ### Requirement: Block elements
-The editor SHALL render paragraphs, headings of levels 1-6 (ATX and setext), block quotes (nested ones included), bullet lists (`*`, `+`, `-`), ordered lists (numbered from their start number), task lists (`- [ ]`, `- [x]`, with a box), code blocks (fenced and indented), thematic breaks (`***`, `---`, `___`), footnote definitions and HTML blocks.
+The editor SHALL render paragraphs, headings of levels 1-6 (ATX and setext), block quotes (nested ones included), bullet lists (`*`, `+`, `-`), ordered lists (numbered from their start number), task lists (`- [ ]`, `- [x]`, with a box), code blocks (fenced and indented), thematic breaks (`***`, `---`, `___`), footnote definitions and HTML blocks. An empty list item (also a task item) SHALL be as tall as an item with a line of text.
 
 #### Scenario: Ordered list numbering
 - **WHEN** a list is written `3.`, `1.`, `1.`
@@ -15,6 +15,10 @@ The editor SHALL render paragraphs, headings of levels 1-6 (ATX and setext), blo
 #### Scenario: Nested quote
 - **WHEN** a block reads `> a` and `> > b`
 - **THEN** `b` is shown in a quote inside the quote holding `a`
+
+#### Scenario: Empty task item
+- **WHEN** a task list has an empty item (`- [ ]`) between items with text
+- **THEN** the empty item is shown with its box, in a row as tall as the others, so the items stay evenly spaced
 
 ### Requirement: Code highlighting
 A fenced code block with a language SHALL be shown in the code font with syntax highlighting for that language; an unknown or missing language SHALL be shown without highlighting.
