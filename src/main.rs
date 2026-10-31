@@ -4,8 +4,13 @@
 use std::path::PathBuf;
 
 fn main() -> iced::Result {
+    mind_pkm::error_log::install();
     // The map to open: the first argument (e.g. a .mm file opened with this
     // application from Explorer), else the last opened map.
     let initial = std::env::args_os().nth(1).map(PathBuf::from);
-    mind_pkm::app::run(initial)
+    let result = mind_pkm::app::run(initial);
+    if let Err(e) = &result {
+        mind_pkm::error_log::write(&format!("the application failed to run: {e}"));
+    }
+    result
 }

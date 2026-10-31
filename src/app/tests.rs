@@ -490,3 +490,24 @@ fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
         assert_eq!(root_texts(&app), vec!["c"]);
     }
 }
+
+#[test]
+fn a_failed_index_update_is_logged_and_the_status_bar_leaves_out_its_details() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::error_log::redirect(dir.path());
+    let mut app = app_with(MindMap::new("root"));
+    send(&mut app, MapMsg::IndexUpdated(Err("disk full at D:\\docs\\.search-index".into())));
+    assert_eq!(app.status.text(), "search index update failed (see error log)");
+    let log = std::fs::read_to_string(dir.path().join(crate::error_log::FILE_NAME)).unwrap();
+    assert!(log.contains("search index update failed: disk full at D:\\docs\\.search-index"), "{log}");
+}
+
+#[test]
+fn a_successful_index_update_logs_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    crate::error_log::redirect(dir.path());
+    let mut app = app_with(MindMap::new("root"));
+    send(&mut app, MapMsg::IndexUpdated(Ok(())));
+    assert_eq!(app.status.text(), "");
+    assert!(!dir.path().join(crate::error_log::FILE_NAME).exists());
+}

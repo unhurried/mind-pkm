@@ -10,6 +10,8 @@ use iced::widget::operation;
 use std::fmt;
 use std::path::PathBuf;
 
+/// The status bar's message of a failed index update (the details go to the error log).
+const INDEX_UPDATE_FAILED: &str = "search index update failed (see error log)";
 pub const UPDATING_INDEX_STATUS: &str = "Updating search index...";
 pub const SEARCH_INPUT_ID: &str = "search-input";
 pub const RESULTS_SCROLL_ID: &str = "search-results";
@@ -136,7 +138,8 @@ impl App {
     pub(super) fn index_updated(&mut self, result: Result<(), String>) {
         self.search.updating = false;
         if let Err(e) = result {
-            self.status.set(format!("search index update failed: {e}"));
+            crate::error_log::write(&format!("search index update failed: {e}"));
+            self.status.set(INDEX_UPDATE_FAILED);
         } else if self.search.status == UPDATING_INDEX_STATUS {
             self.search.status = "Ready".into();
         }
