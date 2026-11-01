@@ -6,10 +6,26 @@ body { margin: 0; background: #fff; color: #1f2328; }
   font-family: "Meiryo", "Yu Gothic", "Segoe UI", "Noto Sans CJK JP", sans-serif;
   font-size: 15px; line-height: 1.7;
 }
-h1, h2, h3, h4, h5, h6 { margin: 1.4em 0 0.6em; line-height: 1.3; }
-h1 { font-size: 1.9em; border-bottom: 1px solid #d8dee4; padding-bottom: 0.2em; }
-h2 { font-size: 1.55em; border-bottom: 1px solid #d8dee4; padding-bottom: 0.2em; }
-h3 { font-size: 1.3em; } h4 { font-size: 1.15em; } h5 { font-size: 1em; } h6 { font-size: 0.95em; color: #59636e; }
+/* Headings as the page view draws them. */
+h1, h2, h3, h4, h5, h6 {
+  margin: 1.4em 0 0.6em; line-height: 1.4; color: #1a1c21;
+  break-after: avoid; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+h1 { font-size: 2em; padding-bottom: 0.3em; border-bottom: 3px solid #1a1c21; }
+h2 {
+  font-size: 1.5em; padding: 0.35em 0.6em; background: #f0f2f5;
+  border-left: 8px solid #1a1c21; border-radius: 2px;
+}
+h3 { font-size: 1.25em; padding: 0 0 0.3em calc(8px + 0.55em); border-bottom: 1px solid #d9dbe0; }
+h4 { font-size: 1.125em; padding-left: calc(4px + 0.55em); }
+h3, h4 { position: relative; }
+h3::before, h4::before {
+  content: ""; position: absolute; left: 0;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+h3::before { top: 0.15em; bottom: 0.45em; width: 8px; background: #1a1c21; border-radius: 1px; }
+h4::before { top: 0.22em; bottom: 0.22em; width: 4px; background: #8c9199; border-radius: 1px; }
+h5 { font-size: 1em; } h6 { font-size: 1em; color: #8c9199; }
 p, ul, ol, blockquote, pre, table { margin: 0 0 1em; }
 a { color: #0969da; }
 code, kbd, pre { font-family: Consolas, "Courier New", monospace; font-size: 0.9em; }
