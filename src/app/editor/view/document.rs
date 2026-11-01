@@ -18,7 +18,7 @@ use crate::app::right_press::right_press_in;
 use crate::app::view::APP_FONT;
 use crate::markdown::parse::ContainerKind;
 use iced::advanced::text::Wrapping;
-use iced::widget::{Column, column, container, mouse_area, row, scrollable, space, text_editor};
+use iced::widget::{Column, column, container, mouse_area, row, scrollable, space, stack, text_editor};
 use iced::{Color, Element, Fill, Padding};
 
 /// The height of the gap above an entry of the column.
@@ -108,11 +108,16 @@ impl Editor {
                         (Shown::Block(i), _) => {
                             let rendered = self.block_view(i, ctx, inner);
                             let is_selected = selected.as_ref().is_some_and(|s| s.contains(&i));
+                            // The highlight goes over the block: one with a background
+                            // of its own (a level-2 heading's band, a code box, a table's
+                            // header) would hide it from behind. It is translucent and
+                            // takes no clicks.
                             let rendered: Element<EditorMsg> = if is_selected {
-                                container(rendered)
+                                let highlight = container(space())
                                     .width(Fill)
-                                    .style(move |_| container::background(p.selection))
-                                    .into()
+                                    .height(Fill)
+                                    .style(move |_| container::background(p.selection));
+                                stack![container(rendered).width(Fill), highlight].into()
                             } else {
                                 rendered
                             };
