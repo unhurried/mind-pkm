@@ -18,7 +18,7 @@ pub(super) const PAGE_WIDTH: f32 = 820.0;
 
 pub(super) const PAGE_PADDING: [f32; 2] = [24.0, 36.0];
 
-pub(super) const HEADING_SCALE: [f32; 6] = [2.0, 1.5, 1.25, 1.125, 1.0, 0.85];
+pub(super) const HEADING_SCALE: [f32; 6] = [2.0, 1.5, 1.25, 1.125, 1.0, 1.0];
 
 pub(super) const LIST_INDENT: f32 = 26.0;
 

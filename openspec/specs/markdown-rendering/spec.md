@@ -21,7 +21,7 @@ The editor SHALL render paragraphs, headings of levels 1-6 (ATX and setext), blo
 - **THEN** the empty item is shown with its box, in a row as tall as the others, so the items stay evenly spaced
 
 ### Requirement: Heading design
-Headings SHALL be set in bold at 2, 1.5, 1.25, 1.125, 1 and 0.85 times the body text size (levels 1 to 6) in the colors of the theme, level 6 in the muted text color, and decorated by level as the scenarios say. A heading being edited SHALL look as it does rendered, so that its text stays where it is when the cursor enters or leaves it.
+Headings SHALL be set in bold at 2, 1.5, 1.25, 1.125, 1 and 1 times the body text size (levels 1 to 6) in the colors of the theme, level 6 in the muted text color, and decorated by level as the scenarios say. A heading being edited SHALL look as it does rendered, so that its text stays where it is when the cursor enters or leaves it.
 
 #### Scenario: Level-1 heading
 - **WHEN** a page contains `# Plan`
