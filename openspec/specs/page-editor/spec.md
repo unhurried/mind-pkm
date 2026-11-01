@@ -199,6 +199,10 @@ Outside source mode, a selection reaching beyond a block SHALL select whole bloc
 - **WHEN** a level-2 heading (a light band), a code block or a table is among the selected blocks
 - **THEN** the highlight is drawn over the block's own background as well, so the block is as visibly selected as a paragraph
 
+#### Scenario: Selected blocks are one highlighted band
+- **WHEN** a paragraph, a list item and a paragraph inside a quote are selected together
+- **THEN** the highlight spans the page's width, a list item's indentation and a quote's bar included, and fills the space between the selected blocks, so the selection reads as one uninterrupted band
+
 #### Scenario: Dragging over blocks
 - **WHEN** the mouse button is pressed in the text of the second of four paragraphs and the pointer is dragged onto the fourth
 - **THEN** the second to fourth paragraphs are selected, and moving the pointer back onto the third leaves the second and third selected until the button is released
