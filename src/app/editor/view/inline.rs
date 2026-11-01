@@ -5,7 +5,7 @@ use super::blocks::{embed_view, image_view, math_view};
 use super::hit::{HitInfo, HitRun};
 use super::theme::{CODE_FONT, LINE_HEIGHT, bold, italic};
 use super::{Ctx, SpanLink, TextBase};
-use crate::app::editor::EditorMsg;
+use crate::app::editor::{EditorMsg, RightClick};
 use crate::markdown::content::{Inline, Link, SourceMap, Style};
 use iced::advanced::text::Wrapping;
 use iced::widget::text::Span;
@@ -72,7 +72,10 @@ pub(super) fn paragraph_view<'a>(
         // A click to the right of the line puts the cursor at its end.
         let line = container(flow.wrap()).width(Fill);
         col = col.push(match line_end {
-            Some(end) => mouse_area(line).on_press(EditorMsg::PressedAt(end)).into(),
+            Some(end) => mouse_area(line)
+                .on_press(EditorMsg::PressedAt(end))
+                .on_right_press(EditorMsg::RightClicked(RightClick::At(end)))
+                .into(),
             None => Element::from(line),
         });
     }
@@ -211,8 +214,10 @@ fn text_line<'a>(
     let info = Arc::new(HitInfo { block, runs: hits, width: width.unwrap_or(f32::INFINITY) });
     // Where an item dragged from the assets pane would go, in this text.
     let mark = ctx.editor.drop_mark_in(&info);
-    let area =
-        mouse_area(rich).on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt)).on_press(EditorMsg::TextPressed);
+    let area = mouse_area(rich)
+        .on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt))
+        .on_press(EditorMsg::TextPressed)
+        .on_right_press(EditorMsg::RightClicked(RightClick::Text));
     match mark {
         Some(r) => stack![
             area,

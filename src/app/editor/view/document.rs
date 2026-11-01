@@ -12,13 +12,14 @@ use crate::app::editor::column::{self, Gap, Shown};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext};
 use crate::app::editor::press_relay::PressRelay;
-use crate::app::editor::{AssetsMsg, Editor, EditorMsg, EditorPrefs};
+use crate::app::editor::{AssetsMsg, Editor, EditorMsg, EditorPrefs, RightClick};
 use crate::app::ime::ime_aligned;
+use crate::app::right_press::right_press_in;
 use crate::app::view::APP_FONT;
 use crate::markdown::parse::ContainerKind;
 use iced::advanced::text::Wrapping;
 use iced::widget::{Column, column, container, mouse_area, row, scrollable, space, text_editor};
-use iced::{Color, Element, Fill};
+use iced::{Color, Element, Fill, Padding};
 
 /// The height of the gap above an entry of the column.
 fn gap_height(gap: Gap, zoom: f32) -> f32 {
@@ -84,7 +85,8 @@ impl Editor {
                         let after = previous_end.map_or(0, |end| content_end(page.text(), 0..end));
                         let half = |at: usize| -> Element<EditorMsg> {
                             let mut area = mouse_area(space().width(Fill).height(space_above / 2.0))
-                                .on_press(EditorMsg::PressedAt(at));
+                                .on_press(EditorMsg::PressedAt(at))
+                                .on_right_press(EditorMsg::RightClicked(RightClick::At(at)));
                             if dragging {
                                 area = area.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(after)));
                             }
@@ -121,6 +123,7 @@ impl Editor {
                                 .id(self.id(&format!("block-{i}")));
                             let mut area = mouse_area(boxed)
                                 .on_press(EditorMsg::BlockPressed(i))
+                                .on_right_press(EditorMsg::RightClicked(RightClick::Block(i)))
                                 .on_enter(EditorMsg::BlockEntered(i));
                             if dragging {
                                 area = area.on_move(move |_| EditorMsg::Assets(AssetsMsg::BlockHovered(i)));
@@ -143,7 +146,8 @@ impl Editor {
                 // Room to click below the last block.
                 let last = previous_end.map_or(0, |end| content_end(page.text(), 0..end));
                 let mut room = mouse_area(container(space()).width(Fill).height(120.0 * ctx.zoom))
-                    .on_press(EditorMsg::PressedAt(page.text().len()));
+                    .on_press(EditorMsg::PressedAt(page.text().len()))
+                    .on_right_press(EditorMsg::RightClicked(RightClick::At(page.text().len())));
                 if dragging {
                     room = room.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(last)));
                 }
@@ -154,8 +158,9 @@ impl Editor {
         };
         let padded = container(content).padding(PAGE_PADDING).center_x(Fill);
         let page = scrollable(padded).id(self.id("doc")).on_scroll(EditorMsg::Scrolled).width(Fill).height(Fill);
-        // While an item of the assets pane is dragged, the page tells where it is.
-        let mut area = mouse_area(page);
+        // While an item of the assets pane is dragged, the page tells where it
+        // is. A right click no block took opens the page's menu.
+        let mut area = mouse_area(page).on_right_press(EditorMsg::RightClicked(RightClick::Page));
         if dragging {
             area = area
                 .on_move(|_| EditorMsg::Assets(AssetsMsg::PageHovered))
@@ -184,6 +189,8 @@ impl Editor {
             .padding(0)
             .wrapping(Wrapping::WordOrGlyph)
             .style(move |_, _| editor_style(p, Color::TRANSPARENT));
-        container(ime_aligned(editor)).id(self.id("active-box")).into()
+        let editor =
+            right_press_in(ime_aligned(editor), Padding::ZERO, |p| EditorMsg::RightClicked(RightClick::Editor(p)));
+        container(editor).id(self.id("active-box")).into()
     }
 }

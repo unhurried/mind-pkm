@@ -20,6 +20,7 @@ mod file;
 mod ime;
 mod keys;
 mod layout;
+mod right_press;
 mod search_panel;
 pub mod settings;
 mod ui;
@@ -167,6 +168,14 @@ pub enum MapMsg {
     NodeDoubleClicked(NodeId),
     LinkClicked(NodeId),
     FoldClicked(NodeId),
+    /// The right button went down at this point of the window (before the
+    /// widget under the pointer says what was right-clicked).
+    RightPressedAt(iced::Point),
+    /// A right click on a node: its menu.
+    NodeRightClicked(NodeId),
+    /// A right click on empty map space: its menu.
+    MapRightClicked,
+    CloseContextMenu,
     MapScrolled(scrollable::Viewport),
     /// The wheel was turned with Ctrl held over the map, at this point of the viewport.
     ZoomWheel(iced::mouse::ScrollDelta, iced::Point),
@@ -214,6 +223,9 @@ impl MapMsg {
                 | MapMsg::ZoomWheel(..)
                 | MapMsg::Tick
                 | MapMsg::Menu(_)
+                | MapMsg::RightPressedAt(_)
+                | MapMsg::MapRightClicked
+                | MapMsg::CloseContextMenu
                 | MapMsg::PanStart
                 | MapMsg::PanMove(_)
                 | MapMsg::PanEnd
@@ -256,6 +268,10 @@ pub struct App {
     search: SearchPanel,
     /// The open menu: an index into `view::MENUS`.
     menu: Option<usize>,
+    /// The open right-click menu.
+    context_menu: Option<MapContextMenu>,
+    /// Where the right mouse button last went down, in the window.
+    right_pressed_at: Point,
     modifiers: Modifiers,
     window_size: Size,
     /// The window's position as last reported.
@@ -316,6 +332,8 @@ impl App {
             dialogs: VecDeque::new(),
             search: SearchPanel::default(),
             menu: None,
+            context_menu: None,
+            right_pressed_at: Point::ORIGIN,
             modifiers: Modifiers::default(),
             window_size: INITIAL_WINDOW.size,
             window_position: None,
@@ -444,11 +462,30 @@ impl App {
             MapMsg::Key(event) => self.on_key(event),
             MapMsg::Escape => self.on_escape(),
             MapMsg::Command(cmd) => {
-                self.menu = None;
+                (self.menu, self.context_menu) = (None, None);
                 self.run_command(cmd)
             }
             MapMsg::Menu(m) => {
-                self.menu = m;
+                (self.menu, self.context_menu) = (m, None);
+                Task::none()
+            }
+            MapMsg::RightPressedAt(at) => {
+                self.right_pressed_at = at;
+                Task::none()
+            }
+            MapMsg::NodeRightClicked(id) => {
+                self.node_right_clicked(id);
+                Task::none()
+            }
+            MapMsg::MapRightClicked => {
+                self.menu = None;
+                if self.doc.is_some() {
+                    self.context_menu = Some(MapContextMenu { at: self.right_pressed_at, on_node: false });
+                }
+                Task::none()
+            }
+            MapMsg::CloseContextMenu => {
+                self.context_menu = None;
                 Task::none()
             }
             MapMsg::NodeClicked(id) => {
@@ -548,6 +585,29 @@ impl App {
         }
         self.drag_arm(id, click);
     }
+
+    /// A right click on a node opens its menu. A node outside the selection
+    /// becomes the only selected one; on a selected node the selection stays
+    /// (the node becomes the focused one), so that the menu acts on all of it.
+    fn node_right_clicked(&mut self, id: NodeId) {
+        self.menu = None;
+        self.search.focus = PanelFocus::Map;
+        let Some(doc) = &mut self.doc else { return };
+        if doc.selection().contains(&id) {
+            doc.set_focus(id);
+        } else {
+            doc.select(vec![id]);
+        }
+        self.context_menu = Some(MapContextMenu { at: self.right_pressed_at, on_node: true });
+    }
+}
+
+/// A right-click menu of the map: where it opens, and whether it is a node's
+/// (else empty map space's).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MapContextMenu {
+    pub at: Point,
+    pub on_node: bool,
 }
 
 /// A status bar message, shown for a while ([`STATUS_TIME`]) or until it is

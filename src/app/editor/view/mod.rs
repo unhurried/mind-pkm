@@ -26,6 +26,7 @@ pub use theme::{BODY_SIZE, CODE_FONT, Palette, TEXT_LINE_HEIGHT, code_text_style
 use super::render::RenderCache;
 use super::{Editor, EditorMsg, EditorPrefs};
 use crate::app::arrow_cursor::arrow_cursor;
+use crate::app::right_press::right_press_at;
 use chrome::dialog_view;
 use iced::widget::{Stack, column, container, mouse_area, row, space, stack};
 use iced::{Color, Element, Fill, Font};
@@ -92,6 +93,9 @@ impl Editor {
         if let Some(at) = self.table_ui.menu {
             layers = layers.push(self.cell_menu_view(at, p));
         }
+        if let Some(at) = self.context_menu {
+            layers = layers.push(self.context_menu_view(at, p));
+        }
         if let Some(pane) = &self.assets {
             if let Some(menu) = &pane.menu {
                 layers = layers.push(self.asset_menu_view(menu, p));
@@ -109,6 +113,7 @@ impl Editor {
         if self.page.active().is_some_and(|a| a.table().is_some()) || self.assets.is_some() {
             root = root.on_move(EditorMsg::PointerAt);
         }
-        arrow_cursor(root).into()
+        // Where a right click is, for the menu it opens.
+        arrow_cursor(right_press_at(root, EditorMsg::RightPressedAt)).into()
     }
 }

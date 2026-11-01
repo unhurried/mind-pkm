@@ -780,6 +780,17 @@ impl Page {
         self.history.break_typing();
     }
 
+    /// A right click at a shown offset of the region: the cursor goes there,
+    /// unless that is inside the selection, which stays.
+    pub fn live_right_click(&mut self, at: usize) {
+        let Some(l) = self.live() else { return };
+        let s = l.display.to_source(at.min(l.display.text.len()));
+        let sel = self.live_sel();
+        if sel.is_empty() || s < sel.range().start || s > sel.range().end {
+            self.live_move_to(at, false);
+        }
+    }
+
     /// Puts a cursor placed in a block's hidden source (before a heading's
     /// `#`, say) where it shows: typing goes into the block's content.
     pub fn snap_to_shown(&mut self) {

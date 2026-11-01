@@ -10,7 +10,7 @@ use super::theme::{
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::highlight::{self};
 use crate::app::editor::render::{RenderKey, Rendered};
-use crate::app::editor::{Editor, EditorMsg};
+use crate::app::editor::{Editor, EditorMsg, RightClick};
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Node, TableNode};
 use crate::markdown::{BlockKind, ListItem, images};
@@ -128,6 +128,7 @@ fn code_text_view<'a>(
                 mouse_area(rich.width(width - 2.0 * CODE_PADDING))
                     .on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt))
                     .on_press(EditorMsg::TextPressed)
+                    .on_right_press(EditorMsg::RightClicked(RightClick::Text))
                     .into()
             }
             None => rich.into(),
@@ -220,7 +221,10 @@ pub(super) fn image_view<'a>(inline: &Inline, ctx: &Ctx<'a>, width: f32, block: 
         .into(),
     };
     let _ = block;
-    mouse_area(shown).on_press(EditorMsg::PressedAt(at)).into()
+    mouse_area(shown)
+        .on_press(EditorMsg::PressedAt(at))
+        .on_right_press(EditorMsg::RightClicked(RightClick::At(at)))
+        .into()
 }
 
 pub(super) fn embed_view<'a>(tag: &str, src: Option<&str>, p: Palette, ctx: &Ctx<'a>) -> Element<'a, EditorMsg> {
@@ -269,7 +273,8 @@ fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize) -> Element<'a, Edi
                     if header { p.header_bg } else { Color::TRANSPARENT },
                     p,
                 ))
-                .on_press(EditorMsg::TableCellPressed(block, r, c)),
+                .on_press(EditorMsg::TableCellPressed(block, r, c))
+                .on_right_press(EditorMsg::RightClicked(RightClick::TableCell(block, r, c))),
             );
         }
         grid = grid.push(table_row(contents, frames));

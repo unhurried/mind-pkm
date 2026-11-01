@@ -139,6 +139,12 @@ pub enum EditorMsg {
     TaskToggled(usize),
     /// A heading of the outline or a table of contents.
     HeadingClicked(usize),
+    /// The right button went down at this point of the window (before the
+    /// widget under the pointer says what was right-clicked).
+    RightPressedAt(Point),
+    /// A right click on the page: where it landed.
+    RightClicked(RightClick),
+    CloseContextMenu,
     Scrolled(scrollable::Viewport),
     Dialog(DialogAnswer),
     /// The clipboard was read for pasting (as plain text when `true`).
@@ -194,6 +200,26 @@ impl EditorDialog {
             EditorDialog::ChangedOnDisk => DialogAnswer::Discard,
         }
     }
+}
+
+/// Where a right click on the page landed, which says where it puts the
+/// cursor (unless that is inside the selection).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RightClick {
+    /// The piece of rendered text the pointer is over.
+    Text,
+    /// A rendered block outside its text.
+    Block(usize),
+    /// A source offset: beside a line, in a gap, an image.
+    At(usize),
+    /// A cell (row, column) of a rendered table: the table block, the cell.
+    TableCell(usize, usize, usize),
+    /// A shown offset of the region edited as rendered text.
+    Live(usize),
+    /// A point of the text editor of the active region or of the source mode.
+    Editor(Point),
+    /// Elsewhere on the page: the cursor stays.
+    Page,
 }
 
 /// What an editor asks of the application.
@@ -256,8 +282,12 @@ pub struct Editor {
     /// Where the left button last went down on the page, in the page.
     press_at: Option<Point>,
     /// The pointer in the window, while a table is edited or the assets pane
-    /// is shown (where a menu opens, a dragged item is).
+    /// is shown (where a dragged item is).
     pointer_at: Point,
+    /// Where the right button last went down, in the window.
+    right_pressed_at: Point,
+    /// Where the page's right-click menu is open.
+    context_menu: Option<Point>,
 }
 
 impl Editor {
@@ -291,6 +321,8 @@ impl Editor {
             block_drag: None,
             press_at: None,
             pointer_at: Point::ORIGIN,
+            right_pressed_at: Point::ORIGIN,
+            context_menu: None,
         }
     }
 
@@ -330,6 +362,18 @@ impl Editor {
             );
         let rendered_press = self.source.is_none()
             && matches!(msg, EditorMsg::TextPressed | EditorMsg::BlockPressed(_) | EditorMsg::TableCellPressed(..));
+        // Typing, a command or the menu bar closes the right-click menu.
+        if matches!(
+            msg,
+            EditorMsg::Action(_)
+                | EditorMsg::Bind(_)
+                | EditorMsg::Live(_)
+                | EditorMsg::Command(_)
+                | EditorMsg::Menu(_)
+                | EditorMsg::Key(keyboard::Event::KeyPressed { .. })
+        ) {
+            self.context_menu = None;
+        }
         let before = self.cursor_state();
         let revision = self.page.revision();
         let shown = self.status.text().to_string();
@@ -503,6 +547,15 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::HeadingClicked(i) => self.go_to_heading(i),
+            EditorMsg::RightPressedAt(p) => {
+                self.right_pressed_at = p;
+                Task::none()
+            }
+            EditorMsg::RightClicked(target) => self.right_clicked(target),
+            EditorMsg::CloseContextMenu => {
+                self.context_menu = None;
+                Task::none()
+            }
             EditorMsg::Scrolled(viewport) => {
                 self.viewport = Some(viewport);
                 Task::none()
@@ -581,10 +634,12 @@ impl Editor {
         if !self.dialogs.is_empty() {
             self.dialogs.pop_front();
         } else if self.menu.is_some()
+            || self.context_menu.is_some()
             || self.table_ui.menu.is_some()
             || self.assets.as_ref().is_some_and(|a| a.menu.is_some())
         {
             self.menu = None;
+            self.context_menu = None;
             self.table_ui.menu = None;
             if let Some(pane) = &mut self.assets {
                 pane.menu = None;
@@ -849,16 +904,22 @@ impl Editor {
 
     /// A press on rendered text: the cursor goes where the text came from.
     fn text_pressed(&mut self) -> Task<EditorMsg> {
-        let Some((info, p)) = self.pointer.clone() else { return Task::none() };
+        let Some((info, _)) = self.pointer.clone() else { return Task::none() };
         if self.shift_selects(info.block) {
             return Task::none();
         }
         self.menu = None;
-        let offset = view::hit_test(&info, p).or_else(|| self.page.doc().blocks.get(info.block).map(|b| b.range.start));
-        if let Some(offset) = offset {
+        if let Some(offset) = self.pointer_offset() {
             self.page.place(Sel::caret(offset));
         }
         self.focus()
+    }
+
+    /// The source offset of the rendered text under the pointer (the start of
+    /// its block when the text does not say).
+    fn pointer_offset(&self) -> Option<usize> {
+        let (info, p) = self.pointer.as_ref()?;
+        view::hit_test(info, *p).or_else(|| self.page.doc().blocks.get(info.block).map(|b| b.range.start))
     }
 
     /// Whether the button is down from a press on the page.
@@ -877,16 +938,85 @@ impl Editor {
         if self.shift_selects(block) {
             return Task::none();
         }
-        if let Some(b) = self.page.doc().blocks.get(block) {
-            // Beside a list item's text (on its bullet): where its text starts.
-            let at = match b.kind {
-                crate::markdown::BlockKind::ListItem(_) => {
-                    let region = edit::region_at(self.page.doc(), b.range.start).unwrap_or(b.range.clone());
-                    edit::content_start(self.page.text(), b.range.start).min(region.end)
-                }
-                _ => b.range.start,
-            };
+        if let Some(at) = self.block_press_offset(block) {
             self.page.place(Sel::caret(at));
+        }
+        self.focus()
+    }
+
+    /// Where a press on a block outside its text puts the cursor: at its
+    /// start, or beside a list item's text (on its bullet) where its text starts.
+    fn block_press_offset(&self, block: usize) -> Option<usize> {
+        let b = self.page.doc().blocks.get(block)?;
+        Some(match b.kind {
+            crate::markdown::BlockKind::ListItem(_) => {
+                let region = edit::region_at(self.page.doc(), b.range.start).unwrap_or(b.range.clone());
+                edit::content_start(self.page.text(), b.range.start).min(region.end)
+            }
+            _ => b.range.start,
+        })
+    }
+
+    /// A right click on the page: the cursor goes where a click there would,
+    /// unless that is inside the selection (text or whole blocks), and the
+    /// page's menu opens there - the cell's menu in a table.
+    fn right_clicked(&mut self, target: RightClick) -> Task<EditorMsg> {
+        self.menu = None;
+        self.table_ui.menu = None;
+        if let Some(pane) = &mut self.assets {
+            pane.menu = None;
+        }
+        self.select_all_again = false;
+        let blocks = self.page.selected_blocks().map(|(a, b)| a.min(b)..=a.max(b));
+        let in_blocks = |block: usize| blocks.as_ref().is_some_and(|r| r.contains(&block));
+        let sel = self.page.sel();
+        let inside = |at: usize| !sel.is_empty() && sel.range().start <= at && at <= sel.range().end;
+        let place = |editor: &mut Editor, at: Option<usize>| {
+            if let Some(at) = at.filter(|&at| !inside(at)) {
+                editor.page.place(Sel::caret(at));
+            }
+        };
+        match target {
+            RightClick::Text => {
+                let block = self.pointer.as_ref().map(|(info, _)| info.block);
+                if !block.is_some_and(in_blocks) {
+                    place(self, self.pointer_offset());
+                }
+            }
+            RightClick::Block(block) => {
+                if !in_blocks(block) {
+                    place(self, self.block_press_offset(block));
+                }
+            }
+            RightClick::At(at) => place(self, Some(at)),
+            RightClick::TableCell(block, r, c) => {
+                let _ = self.table_cell_pressed(block, (r, c));
+            }
+            RightClick::Live(at) => self.page.live_right_click(at),
+            RightClick::Editor(p) => match &mut self.source {
+                Some(source) => {
+                    let text = source.text();
+                    let before = content_sel(source, &text);
+                    source.perform(Action::Click(p));
+                    let head = content_sel(source, &text).head;
+                    if !before.is_empty() && before.range().start <= head && head <= before.range().end {
+                        move_content(source, &text, before);
+                    }
+                }
+                None => {
+                    self.page.perform(Action::Click(p));
+                    if inside(self.page.sel().head) {
+                        self.page.place(sel);
+                    }
+                }
+            },
+            RightClick::Page => {}
+        }
+        let at = self.right_pressed_at;
+        if self.source.is_none() && self.page.active().is_some_and(|a| a.table().is_some()) {
+            self.table_ui.menu = Some(at);
+        } else {
+            self.context_menu = Some(at);
         }
         self.focus()
     }

@@ -109,6 +109,7 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 | Shortcut | Action |
 | --- | --- |
 | Click / Ctrl+Click / Shift+Click | Select a node / toggle it in the selection / add it to the selection |
+| Right-click | A node's menu (new child / sibling, edit text, cut / copy / paste, fold, link and the PKM commands); on empty map space: paste, center, zoom and update. A node outside the selection becomes the only selected one; a selected node keeps the selection |
 | Drag empty map space | Scroll (pan) the map |
 | Drag a node onto another | Move the selected nodes: onto the middle of the target as its last child, onto its top / bottom edge before / after it (Esc cancels) |
 | Double-click | Edit (as F2) |
@@ -122,7 +123,7 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste nodes (text from other applications is pasted one node per line) |
 | Ctrl+K | Set or remove a node's link |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
-| Esc | Center the selected node (or close the search panel / a dialog) |
+| Esc | Center the selected node (or close a menu / the search panel / a dialog) |
 | Ctrl+Plus / Ctrl+Minus / Ctrl+0, Ctrl+mouse wheel | Zoom in / zoom out / reset to 100% (View menu); the wheel zooms around the pointer |
 | Ctrl+S / Ctrl+Shift+S | Save / save as |
 
@@ -153,10 +154,11 @@ The file stays plain Markdown and only the edited parts change: the UTF-8 BOM an
 | Ctrl+/ | Source mode (the whole page as Markdown) |
 | Ctrl+Shift+1, Ctrl+Shift+2, F11, Ctrl+Shift+= / - / 0 | Outline, assets pane, full screen, zoom in / out / reset |
 | Ctrl+S, Ctrl+W | Save, close |
+| Right-click | Cut / copy / paste (also as Markdown / plain text), select all and the inline formats; outside the selection it first puts the cursor where it was clicked |
 
 The menus (File, Edit, Paragraph, Format, Table, View) hold every command with its shortcut, among them Export HTML / PDF, Highlight, Inline Math, Horizontal Rule, Auto-Pair Brackets and Dark Theme. On a Japanese keyboard the shortcuts with `=` and `` ` `` also work on the keys printed `;` and `@`. Brackets and quotes are closed as you type them (Edit → Auto-Pair Brackets turns that off); with text selected, `*`, `_`, `~` and `$` enclose it. The status bar counts words and characters of the page (or the selection), each CJK character counting as a word.
 
-- **Tables**: while the cursor is in a table, it is edited as a grid of rendered cells (the cell being edited shows the Markdown at its cursor, like any block): Tab / Shift+Tab / Enter move between cells (adding a row at the end), Shift+Enter breaks a line in a cell (stored as `<br>`), Ctrl+Enter adds a row, Ctrl+Shift+Backspace deletes it, Alt+arrows move the row or column. Drag over cells, Shift+click or Shift+arrows select a range of cells, which Delete empties and Ctrl+C copies as tab-separated text and an HTML table. The toolbar above the table aligns columns, resizes the table and deletes it; the Table menu and the cells' right-click menu insert, delete and move rows and columns. A changed table is written with aligned pipes.
+- **Tables**: while the cursor is in a table, it is edited as a grid of rendered cells (the cell being edited shows the Markdown at its cursor, like any block): Tab / Shift+Tab / Enter move between cells (adding a row at the end), Shift+Enter breaks a line in a cell (stored as `<br>`), Ctrl+Enter adds a row, Ctrl+Shift+Backspace deletes it, Alt+arrows move the row or column. Drag over cells, Shift+click or Shift+arrows select a range of cells, which Delete empties and Ctrl+C copies as tab-separated text and an HTML table. The toolbar above the table aligns columns, resizes the table and deletes it; the Table menu and the cells' right-click menu (which also cuts, copies, pastes and selects) insert, delete and move rows and columns. A changed table is written with aligned pipes.
 - **Images**: type `![alt](path)`, drop image files on the window, choose Format → Image..., or paste a screenshot or copied image files. Images are copied into the page's `<name>.assets/` folder (a taken name gets a number, pasted image data is saved as `image-<date and time>.png`) and referenced relatively, like `![](My Page.assets/photo 1.png)`, so that renaming the page (F2) keeps them working. Remote images are not downloaded: their alt text is shown with a link.
 - **Assets pane**: View → Assets (Ctrl+Shift+2) shows the page's `<name>.assets/` folder as a tree on the right of the window. Double-click opens a file (a `.md` file in the editor), right-click renames it (rewriting the page's links to it) or deletes it to the Recycle Bin, and dragging it onto the page inserts a link to it where it is dropped (an image as `![](...)`).
 - **Math and diagrams**: `$...$` and `$$` blocks (LaTeX) and ` ```mermaid ` blocks are drawn below their source while you edit them, with any error shown there.

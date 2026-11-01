@@ -136,6 +136,11 @@ impl Palette {
         }
     }
 
+    /// Right-click menus in these colors: narrower than the menu bar's.
+    pub(super) fn context_menu(self) -> MenuStyle {
+        MenuStyle { width: 300.0, ..self.menu() }
+    }
+
     /// Dialogs in these colors.
     pub(super) fn dialog(self) -> DialogStyle {
         DialogStyle { background: self.bg, border: self.muted, shadow: None, text: None, button_width: 110.0 }

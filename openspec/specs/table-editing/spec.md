@@ -101,3 +101,10 @@ A table changed by the editor SHALL be written with a leading and trailing pipe 
 #### Scenario: Written table
 - **WHEN** a cell of `|a|b|` / `|-|-|` / `|1|2|` is changed to `xyz`
 - **THEN** the rows are written `| xyz | b   |`, `| --- | --- |`, `| 1   | 2   |` style with aligned pipes
+
+### Requirement: Clipboard commands in the cell menu
+The cell's right-click menu SHALL offer Cut, Copy, Paste and Select All before its row, column and alignment commands, each acting as from the Edit menu.
+
+#### Scenario: Copying a cell range from its menu
+- **WHEN** a range of cells is selected, right-clicked and Copy is chosen
+- **THEN** the cells are on the clipboard as tab-separated text

@@ -22,6 +22,7 @@ use std::path::PathBuf;
 
 mod assets;
 mod clipboard;
+mod context_menu;
 mod editing;
 mod find;
 mod live;

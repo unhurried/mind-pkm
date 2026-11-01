@@ -28,7 +28,7 @@ impl App {
                 _ => Task::none(),
             };
         }
-        if self.menu.is_some() {
+        if self.menu.is_some() || self.context_menu.is_some() {
             return Task::none();
         }
         if self.search.focus == PanelFocus::Results {
@@ -62,8 +62,8 @@ impl App {
             Task::none()
         } else if !self.dialogs.is_empty() {
             self.dialog_cancel()
-        } else if self.menu.is_some() {
-            self.menu = None;
+        } else if self.menu.is_some() || self.context_menu.is_some() {
+            (self.menu, self.context_menu) = (None, None);
             Task::none()
         } else if self.search.open {
             self.on_search(SearchMsg::Close)

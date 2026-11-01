@@ -158,6 +158,44 @@ pub const MENUS: &[Menu<Command>] = &[
     ),
 ];
 
+/// A node's right-click menu: commands of the menu bar, None for a separator.
+pub const NODE_MENU: &[Option<Command>] = &[
+    Some(Command::NewChild),
+    Some(Command::NewSibling),
+    Some(Command::EditText),
+    None,
+    Some(Command::Cut),
+    Some(Command::Copy),
+    Some(Command::Paste),
+    None,
+    Some(Command::ToggleFold),
+    Some(Command::SetLink),
+    None,
+    Some(Command::PkmOpen),
+    Some(Command::PkmEdit),
+    Some(Command::ToggleCheckmark),
+    Some(Command::AddToToDo),
+    Some(Command::NewPage),
+    Some(Command::NewDirectory),
+    Some(Command::PkmDelete),
+    Some(Command::OpenExternally),
+];
+
+/// The right-click menu of empty map space.
+pub const MAP_MENU: &[Option<Command>] = &[
+    Some(Command::Paste),
+    None,
+    Some(Command::CenterSelected),
+    Some(Command::ZoomIn),
+    Some(Command::ZoomOut),
+    Some(Command::ZoomReset),
+    None,
+    Some(Command::Update),
+];
+
+/// Context menus are narrower than the menu bar's menus.
+const CONTEXT_MENU_STYLE: MenuStyle = MenuStyle { width: 300.0, ..MENU_STYLE };
+
 // --- Measuring ---
 
 /// The size of a node's text as the text widget will lay it out at the zoom
@@ -232,10 +270,23 @@ impl App {
         if let Some(i) = self.menu {
             layers = layers.push(self.menu_dropdown(i));
         }
+        if let Some(menu) = self.context_menu {
+            let entries = ui::context_entries(MENUS, if menu.on_node { NODE_MENU } else { MAP_MENU });
+            layers = layers.push(ui::context_menu(
+                &entries,
+                menu.at,
+                self.window_size,
+                CONTEXT_MENU_STYLE,
+                MapMsg::Command,
+                MapMsg::CloseContextMenu,
+            ));
+        }
         if let Some(dialog) = self.dialogs.front() {
             layers = layers.push(self.dialog_view(dialog));
         }
-        // The pointer stays the normal arrow everywhere.
+        // Where a right click is, for the menu it opens; the pointer stays
+        // the normal arrow everywhere.
+        let layers = super::right_press::right_press_at(layers, MapMsg::RightPressedAt);
         super::arrow_cursor::arrow_cursor(layers).into()
     }
 
@@ -336,8 +387,9 @@ impl App {
             .width(Fill)
             .height(Fill);
         // Nodes, markers and scrollbars capture their own presses, so only a
-        // press on empty map space reaches this area and starts a pan.
-        let map = mouse_area(map).on_press(MapMsg::PanStart);
+        // press on empty map space reaches this area and starts a pan (a right
+        // press: opens its menu; a node takes its own right press).
+        let map = mouse_area(map).on_press(MapMsg::PanStart).on_right_press(MapMsg::MapRightClicked);
         // Ctrl+wheel zooms instead of scrolling.
         container(super::ctrl_wheel::ctrl_wheel(map, MapMsg::ZoomWheel))
             .style(|_| container::background(MAP_BG))
@@ -403,7 +455,11 @@ impl App {
                     container::Style::default()
                 }
             });
-        mouse_area(boxed).on_press(MapMsg::NodeClicked(id)).on_double_click(MapMsg::NodeDoubleClicked(id)).into()
+        mouse_area(boxed)
+            .on_press(MapMsg::NodeClicked(id))
+            .on_double_click(MapMsg::NodeDoubleClicked(id))
+            .on_right_press(MapMsg::NodeRightClicked(id))
+            .into()
     }
 
     // --- Search panel ---
