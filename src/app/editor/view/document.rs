@@ -75,8 +75,24 @@ impl Editor {
                 let page = &self.page;
                 let active = page.active();
                 let selected = page.selected_blocks().map(|(a, b)| a.min(b)..=a.max(b));
+                let is_selected = |i: usize| selected.as_ref().is_some_and(|s| s.contains(&i));
+                // The highlight of selected blocks goes over them: one with a
+                // background of its own (a level-2 heading's band, a code box, a
+                // table's header) would hide it from behind. It is translucent,
+                // takes no clicks and spans the column, containers included, so
+                // that with the gaps between selected blocks it makes one band.
+                let highlighted = move |content: Element<'a, EditorMsg>| -> Element<'a, EditorMsg> {
+                    let layer =
+                        container(space()).width(Fill).height(Fill).style(move |_| container::background(p.selection));
+                    stack![container(content).width(Fill), layer].into()
+                };
                 let mut previous_end = None;
+                let mut previous_block = None;
                 for entry in column::entries(page) {
+                    let block = match entry.shown {
+                        Shown::Block(i) => Some(i),
+                        Shown::Active => None,
+                    };
                     let space_above = gap_height(entry.gap, ctx.zoom);
                     if space_above > 0.0 {
                         // A click in the gap goes to the nearer block: the upper
@@ -97,7 +113,11 @@ impl Editor {
                             None => half(entry.covers.start),
                         };
                         // Inside the containers both sides share: a quote's bar goes on.
-                        col = col.push(in_containers(gap_view, &entry.shared, p, ctx.zoom));
+                        let gap_view = in_containers(gap_view, &entry.shared, p, ctx.zoom);
+                        // Between two selected blocks the highlight goes on too.
+                        let between_selected =
+                            previous_block.zip(block).is_some_and(|(a, b)| is_selected(a) && is_selected(b));
+                        col = col.push(if between_selected { highlighted(gap_view) } else { gap_view });
                     }
                     let kinds = entry.kinds();
                     let inner = inner_width(width, &kinds, ctx.zoom);
@@ -106,26 +126,11 @@ impl Editor {
                             in_containers(self.active_view(a, ctx, prefs, inner), &kinds, p, ctx.zoom)
                         }
                         (Shown::Block(i), _) => {
-                            let rendered = self.block_view(i, ctx, inner);
-                            let is_selected = selected.as_ref().is_some_and(|s| s.contains(&i));
-                            // The highlight goes over the block: one with a background
-                            // of its own (a level-2 heading's band, a code box, a table's
-                            // header) would hide it from behind. It is translucent and
-                            // takes no clicks.
-                            let rendered: Element<EditorMsg> = if is_selected {
-                                let highlight = container(space())
-                                    .width(Fill)
-                                    .height(Fill)
-                                    .style(move |_| container::background(p.selection));
-                                stack![container(rendered).width(Fill), highlight].into()
-                            } else {
-                                rendered
-                            };
+                            let rendered = in_containers(self.block_view(i, ctx, inner), &kinds, p, ctx.zoom);
+                            let rendered = if is_selected(i) { highlighted(rendered) } else { rendered };
                             // As wide as the page, so that a click beside the block's
                             // content (an empty item, a line of math) reaches it too.
-                            let boxed = container(in_containers(rendered, &kinds, p, ctx.zoom))
-                                .width(Fill)
-                                .id(self.id(&format!("block-{i}")));
+                            let boxed = container(rendered).width(Fill).id(self.id(&format!("block-{i}")));
                             let mut area = mouse_area(boxed)
                                 .on_press(EditorMsg::BlockPressed(i))
                                 .on_right_press(EditorMsg::RightClicked(RightClick::Block(i)))
@@ -147,6 +152,7 @@ impl Editor {
                         );
                     }
                     previous_end = Some(entry.covers.end);
+                    previous_block = block;
                 }
                 // Room to click below the last block.
                 let last = previous_end.map_or(0, |end| content_end(page.text(), 0..end));
