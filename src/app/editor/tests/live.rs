@@ -349,3 +349,23 @@ fn blocks_typed_under_a_list_item() {
     typing(&mut app, id, "!");
     assert_eq!(page_text(&app, id), "* aaa!\n");
 }
+
+#[test]
+fn backspace_takes_a_task_items_box_with_its_bullet() {
+    // Enter, then one Backspace in the new empty task item: a paragraph of
+    // the item above, not an empty plain item first.
+    let (mut app, _f, _, _) = app_with_page("- [ ] aaa\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "aaa");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    assert_eq!(page_text(&app, id), "- [ ] aaa\n- [ ] \n");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "- [ ] aaa\n");
+    assert!(app.editors[&id].page.pending().is_some(), "a new paragraph");
+    // The first item of a list: a paragraph at once.
+    let (mut app, _f, _, _) = app_with_page("a\n\n- [x] done\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "[x] ");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "a\n\ndone\n");
+}

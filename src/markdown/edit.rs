@@ -968,16 +968,11 @@ pub fn backspace(text: &str, doc: &Document, region: Range<usize>, c: usize) -> 
         && let Some(m) = line_marker(&text[first.clone()])
         && c == first.start + m.end
     {
-        if m.task.is_none()
-            && let Some(e) = into_previous_item(text, doc, &region, first.clone(), &m)
-        {
+        if let Some(e) = into_previous_item(text, doc, &region, first.clone(), &m) {
             return Some(e);
         }
-        // A task item loses its box first, then its bullet.
-        let remove = match &m.task {
-            Some(task) => first.start + task.start..first.start + task.end,
-            None => first.start + m.indent..first.start + m.end,
-        };
+        // The whole marker goes, a task item's box with its bullet.
+        let remove = first.start + m.indent..first.start + m.end;
         return Some(Edited::new(splice(text, remove.clone(), ""), remove.start));
     }
     if c != region.start {
@@ -1449,7 +1444,9 @@ mod tests {
     fn backspace_removes_markers() {
         assert_eq!(backspace_at("## ‸Plan").as_deref(), Some("‸Plan"));
         assert_eq!(backspace_at("- ‸item").as_deref(), Some("‸item"));
-        assert_eq!(backspace_at("- [ ] ‸item").as_deref(), Some("- ‸item"));
+        assert_eq!(backspace_at("- [ ] ‸item").as_deref(), Some("‸item"));
+        assert_eq!(backspace_at("- [x] ‸item").as_deref(), Some("‸item"));
+        assert_eq!(backspace_at("  - [ ] ‸").as_deref(), Some("  ‸"));
         assert_eq!(backspace_at("> ‸q").as_deref(), Some("‸q"));
         assert_eq!(backspace_at("1. ‸x").as_deref(), Some("‸x"));
         assert_eq!(backspace_at("ab‸c"), None);
@@ -1463,6 +1460,10 @@ mod tests {
         assert_eq!(backspace_at("* a\n* ‸\n* c").as_deref(), Some("* a\n\n  ¶\n\n* c"));
         assert_eq!(backspace_at("1. a\n2. ‸").as_deref(), Some("1. a\n\n   ¶"));
         assert_eq!(backspace_at("- [ ] a\n- ‸").as_deref(), Some("- [ ] a\n\n  ¶"));
+        // A task item too, its box going with its bullet.
+        assert_eq!(backspace_at("- [ ] a\n- [ ] ‸").as_deref(), Some("- [ ] a\n\n  ¶"));
+        assert_eq!(backspace_at("- [ ] a\n- [ ] ‸b").as_deref(), Some("- [ ] a\n\n  ‸b"));
+        assert_eq!(backspace_at("* a\n  * [x] ‸b").as_deref(), Some("* a\n\n  ‸b"));
         // A nested first item: of the item its list is in.
         assert_eq!(backspace_at("* a\n  * ‸").as_deref(), Some("* a\n\n  ¶"));
         assert_eq!(backspace_at("* a\n  * b\n  * ‸").as_deref(), Some("* a\n  * b\n\n    ¶"));
