@@ -111,11 +111,17 @@ fn code_text_view<'a>(
     let p = ctx.p;
     let code = code.strip_suffix('\n').unwrap_or(code);
     let size = ctx.size(0.9);
-    let colored = highlight::highlight_code(code, lang, p.dark);
+    let colored = highlight::highlight_code_cached(code, lang, p.dark);
     let mut lines = Column::new();
     for (n, line) in code.split('\n').enumerate() {
-        let pieces: Vec<(String, Color)> =
-            colored.as_ref().and_then(|c| c.get(n).cloned()).unwrap_or_else(|| vec![(line.to_string(), p.text)]);
+        let plain;
+        let pieces: &[(String, Color)] = match colored.as_ref().as_ref().and_then(|c| c.get(n)) {
+            Some(pieces) => pieces,
+            None => {
+                plain = [(line.to_string(), p.text)];
+                &plain
+            }
+        };
         let spans: Vec<Span<'static, SpanLink, Font>> =
             pieces.iter().map(|(t, c)| Span::new(t.clone()).color(*c).font(CODE_FONT).size(size)).collect();
         let rich = rich_text(spans).size(size).font(CODE_FONT).line_height(LINE_HEIGHT).wrapping(Wrapping::WordOrGlyph);

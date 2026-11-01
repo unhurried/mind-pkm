@@ -7,7 +7,10 @@ use super::view::{CODE_FONT, Palette};
 use crate::app::view::APP_FONT;
 use iced::advanced::text::highlighter::{self, Format};
 use iced::{Color, Font, Theme, font};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::LazyLock;
 use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter as SyntectHighlighter, Theme as CodeTheme};
 use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
@@ -32,9 +35,52 @@ fn color(c: syntect::highlighting::Color) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, f32::from(c.a) / 255.0)
 }
 
+/// Code highlighted for a language: per line, colored pieces.
+pub type Highlighted = Vec<Vec<(String, Color)>>;
+
+/// How many pieces of highlighted code a generation of the cache holds.
+const HIGHLIGHT_CACHE_SIZE: usize = 1024;
+
+/// What a piece of code was highlighted for: the code, its language, dark.
+type HighlightKey = (String, Option<String>, bool);
+
+/// The code highlighted lately, in two generations: a hit in the older one
+/// moves to the newer one, and once the newer one is full it becomes the older
+/// one, so that what is shown again and again stays.
+#[derive(Default)]
+struct HighlightCache {
+    newer: HashMap<HighlightKey, Rc<Option<Highlighted>>>,
+    older: HashMap<HighlightKey, Rc<Option<Highlighted>>>,
+}
+
+thread_local! {
+    static HIGHLIGHTED: RefCell<HighlightCache> = RefCell::default();
+}
+
+/// `highlight_code`, kept for the code highlighted lately: every view of a
+/// page shows its code blocks again, and highlighting is slow.
+pub fn highlight_code_cached(code: &str, lang: Option<&str>, dark: bool) -> Rc<Option<Highlighted>> {
+    let key = (code.to_string(), lang.map(str::to_string), dark);
+    HIGHLIGHTED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(hit) = cache.newer.get(&key) {
+            return hit.clone();
+        }
+        let highlighted = match cache.older.remove(&key) {
+            Some(hit) => hit,
+            None => Rc::new(highlight_code(code, lang, dark)),
+        };
+        if cache.newer.len() >= HIGHLIGHT_CACHE_SIZE {
+            cache.older = std::mem::take(&mut cache.newer);
+        }
+        cache.newer.insert(key, highlighted.clone());
+        highlighted
+    })
+}
+
 /// Code highlighted for `lang`: per line, colored pieces (none when the
 /// language is unknown).
-pub fn highlight_code(code: &str, lang: Option<&str>, dark: bool) -> Option<Vec<Vec<(String, Color)>>> {
+pub fn highlight_code(code: &str, lang: Option<&str>, dark: bool) -> Option<Highlighted> {
     let syntax = syntax(lang?)?;
     let theme = code_theme(dark);
     let mut lines = syntect::easy::HighlightLines::new(syntax, theme);
@@ -605,5 +651,21 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].iter().map(|(t, _)| t.as_str()).collect::<String>(), "let x = 1;");
         assert!(highlight_code("x", Some("no-such-language"), false).is_none());
+    }
+
+    #[test]
+    fn code_is_highlighted_once_while_it_is_shown() {
+        let code = "fn cached() {}\n";
+        let first = highlight_code_cached(code, Some("rust"), false);
+        assert_eq!(*first, highlight_code(code, Some("rust"), false));
+        assert!(Rc::ptr_eq(&first, &highlight_code_cached(code, Some("rust"), false)));
+        // Another theme, another language: highlighted on their own.
+        assert!(!Rc::ptr_eq(&first, &highlight_code_cached(code, Some("rust"), true)));
+        assert!(highlight_code_cached(code, Some("no-such-language"), false).is_none());
+        // Code shown again after a generation's worth of other code is still there.
+        for i in 0..HIGHLIGHT_CACHE_SIZE {
+            let _ = highlight_code_cached(&format!("x{i}"), None, false);
+        }
+        assert!(Rc::ptr_eq(&first, &highlight_code_cached(code, Some("rust"), false)));
     }
 }
