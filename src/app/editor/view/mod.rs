@@ -14,6 +14,7 @@ mod active;
 mod blocks;
 mod chrome;
 mod document;
+mod heading;
 mod hit;
 mod inline;
 mod theme;

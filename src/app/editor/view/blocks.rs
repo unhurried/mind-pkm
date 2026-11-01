@@ -1,6 +1,7 @@
 //! Rendered blocks: paragraphs, headings, list items, quotes, code, math,
 //! diagrams, images and tables.
 
+use super::heading;
 use super::hit::{HitInfo, HitRun};
 use super::inline::{inline_text, paragraph_view};
 use super::theme::{
@@ -41,8 +42,9 @@ fn nodes_view<'a>(nodes: &[Node], ctx: &Ctx<'a>, width: f32, block: usize) -> El
             Node::Paragraph(inlines) | Node::Html(inlines) => paragraph_view(inlines, base, ctx, width, block),
             Node::Heading(level, inlines) => {
                 let scale = HEADING_SCALE[usize::from((*level).clamp(1, 6)) - 1];
-                let b = TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: p.heading };
-                inline_text(inlines, b, ctx, Some(width), block)
+                let level = (*level).clamp(1, 6);
+                let b = TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: heading::text_color(level, p) };
+                heading::framed(level, b.size, width, ctx.zoom, p, |w| inline_text(inlines, b, ctx, Some(w), block))
             }
             Node::Code { lang, text: code } => code_text_view(code, lang.as_deref(), None, ctx, width, block),
             Node::Math(tex) => math_view(tex, true, ctx),
@@ -306,25 +308,12 @@ impl Editor {
         let base = TextBase { size: ctx.size(1.0), font: APP_FONT, color: p.text };
         match &block.kind {
             BlockKind::Heading(level) => {
-                let scale = HEADING_SCALE[usize::from((*level).clamp(1, 6)) - 1];
+                let level = (*level).clamp(1, 6);
+                let scale = HEADING_SCALE[usize::from(level) - 1];
                 let inlines = content::inlines(doc, doc.block_events(i));
-                let base = TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: p.heading };
-                let heading = inline_text(&inlines, base, ctx, Some(width), i);
-                if *level <= 2 {
-                    column![
-                        heading,
-                        rule::horizontal(1).style(move |_| rule::Style {
-                            color: p.border,
-                            radius: 0.0.into(),
-                            fill_mode: rule::FillMode::Full,
-                            snap: true,
-                        })
-                    ]
-                    .spacing(4)
-                    .into()
-                } else {
-                    heading
-                }
+                let base =
+                    TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: heading::text_color(level, p) };
+                heading::framed(level, base.size, width, ctx.zoom, p, |w| inline_text(&inlines, base, ctx, Some(w), i))
             }
             BlockKind::ThematicBreak => container(rule::horizontal(2).style(move |_| rule::Style {
                 color: p.border,
