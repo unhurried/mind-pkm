@@ -13,14 +13,14 @@ The application SHALL be a single Windows executable that needs no installer, ru
 - **THEN** it runs without installing anything else
 
 ### Requirement: Opening maps
-On start the application SHALL open the map given as the first command-line argument (so `.mm` files can be opened with it from Explorer), else the last opened map if it still exists, else show a welcome screen with Open and New. File → Open SHALL pick a `.mm` file; File → New SHALL create a map with `config > docDirPath > <path>` and `ToDo` nodes. The map opens with the archive-hiding filter and the root centered, unless its last view is restored (see Restoring the view).
+On start the application SHALL open the map given as the first command-line argument (so `.mm` files can be opened with it from Explorer), else the last opened map if it still exists, else show a welcome screen with Open and New. File → Open SHALL pick a `.mm` file; File → New SHALL create a map with `config > docDirPath > <path>` and `ToDo` nodes. A map opens with the default filter (see map-filter) and the root centered, unless its last view is restored (see Restoring the view).
 
 #### Scenario: Restart
 - **WHEN** the application is closed with a map open and started again without arguments
 - **THEN** the same map is opened
 
 ### Requirement: Restoring the view
-A map opened again SHALL be shown with the zoom level, scroll position and selected nodes it was last shown with, remembered when the application exits, when another map takes its place, and when the map is saved. Selected nodes that no longer exist SHALL be left out (the root is selected if none is left); a selected node hidden by the filter or a fold SHALL hand its selection to its nearest shown ancestor.
+A map opened again SHALL be shown with the zoom level, scroll position and selected nodes it was last shown with, remembered when the application exits, when another map takes its place, and when the map is saved. Selected nodes that no longer exist SHALL be left out (the root is selected if none is left).
 
 #### Scenario: Restart keeps the view
 - **WHEN** the map is zoomed to 150%, scrolled, a node is selected, and the application is closed and started again
@@ -46,19 +46,11 @@ The map SHALL be written only when saved: Ctrl+S (Save As for a new map) or Ctrl
 - **THEN** the application stays open with the changes
 
 ### Requirement: Menus and shortcuts
-A menu bar SHALL offer File, Edit, View and PKM menus listing every command with its shortcut. The PKM commands SHALL keep the add-on's function-key assignments (F1 Open, F2 Edit, F3 Fold One Level, F4 Unfold One Level, F5 Filter, F6 Search, F7 Toggle Checkmark, F8 Add to ToDo, F9 New Page, F10 New Directory, F11 Delete, F12 Update Next Steps and Search Index). While the search keyword box has the keyboard, only the function keys and Ctrl+F SHALL reach the map.
+The map window's menu bar SHALL offer File, Edit, View and PKM menus listing every command with its shortcut; in every window, the menu names SHALL be evenly spaced. The PKM commands SHALL keep the add-on's function-key assignments (F1 Open, F2 Edit, F3 Fold One Level, F4 Unfold One Level, F5 Filter, F6 Search, F7 Toggle Checkmark, F8 Add to ToDo, F9 New Page, F10 New Directory, F11 Delete, F12 Update Next Steps and Search Index).
 
 #### Scenario: Even spacing
-- **WHEN** the menu bar is shown
+- **WHEN** the menu bar of the map window or of an editor window is shown
 - **THEN** the gap between each two neighbouring menu names is the same, whatever their lengths
-
-#### Scenario: Typing in the search box
-- **WHEN** Tab or Delete is pressed while typing a search keyword
-- **THEN** no node is created or deleted
-
-#### Scenario: Ctrl+N creates a page
-- **WHEN** Ctrl+N is pressed with a node selected
-- **THEN** the New Page command runs as with F9
 
 ### Requirement: Ctrl shortcuts for PKM commands
 Some PKM commands SHALL also be reachable by Ctrl shortcuts: Ctrl+O (Open), Ctrl+Shift+F (Filter), Ctrl+F (Search), Ctrl+N (New Page) and Ctrl+Shift+N (New Directory). File → New and File → Open SHALL have no shortcut.
@@ -67,19 +59,16 @@ Some PKM commands SHALL also be reachable by Ctrl shortcuts: Ctrl+O (Open), Ctrl
 - **WHEN** Ctrl+O is pressed with a page node selected
 - **THEN** the page is opened as with F1
 
+#### Scenario: Ctrl+N creates a page
+- **WHEN** Ctrl+N is pressed with a node selected
+- **THEN** the New Page command runs as with F9
+
 #### Scenario: Map commands have no Ctrl+N
 - **WHEN** the File menu is opened
 - **THEN** New and Open are listed without a shortcut
 
-### Requirement: View menu and zoom level
-The View menu SHALL offer Zoom In (Ctrl+Plus), Zoom Out (Ctrl+Minus) and Reset Zoom (Ctrl+0), and the status bar SHALL show the zoom level.
-
-#### Scenario: Zoom level
-- **WHEN** the map is zoomed to 150%
-- **THEN** the status bar shows 150%
-
 ### Requirement: Dialogs
-Errors, confirmations and text input SHALL be shown as modal dialogs inside the window; several messages SHALL be shown one after another. Enter SHALL confirm and Esc SHALL cancel, also while a dialog's text box has the keyboard.
+Errors, confirmations and text input SHALL be shown as modal dialogs inside the window (for editor windows, see page-editor); several messages SHALL be shown one after another. Enter SHALL confirm and Esc SHALL cancel, also while a dialog's text box has the keyboard.
 
 #### Scenario: Errors for several nodes
 - **WHEN** New Page fails for two selected nodes
@@ -156,11 +145,19 @@ Ending the application while editor windows have unsaved changes SHALL ask, afte
 - **THEN** the application stays open, the map is still shown as having unsaved changes and closing the window again asks about the map
 
 ### Requirement: Status bar messages
-Messages in the map window's status bar, such as `saved <file name>` after saving, SHALL name a file by its name only, SHALL be cut off rather than drawn over the rest of the status bar, and SHALL disappear after about ten seconds.
+Messages in the status bar of the map window and of an editor window, such as `saved <file name>` or `2 replaced`, SHALL name a file by its name only, SHALL be cut off rather than drawn over the rest of the status bar (in an editor, the word and character counts), and SHALL disappear after about ten seconds - in an editor window also with the next edit of the page.
 
 #### Scenario: Saving the map
 - **WHEN** the map `notes.mm` is saved with Ctrl+S
 - **THEN** the status bar shows `saved notes.mm`, and some ten seconds later no message
+
+#### Scenario: Saving a page with a long path
+- **WHEN** a page deep in the document directory is saved with Ctrl+S
+- **THEN** the editor's status bar shows `saved <page>.md` without overlapping the counts
+
+#### Scenario: Editing after saving
+- **WHEN** a page is saved and a character is typed
+- **THEN** the saved message is gone
 
 ### Requirement: Error log
 When the application crashes (a panic on any thread), fails to start or run, or fails to update the search index, it SHALL append an entry with the time, the application version and the details to the file `mind-pkm-error.log` in the folder of the executable, or in the system's temporary folder if the executable's folder cannot be written to. Writing the log SHALL never itself show an error or stop the application.

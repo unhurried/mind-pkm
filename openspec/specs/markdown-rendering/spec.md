@@ -42,7 +42,7 @@ YAML front matter (`---` ... `---` at the start of the file) SHALL be shown as a
 - **THEN** a list of `A` and `B` is shown where `[toc]` is
 
 ### Requirement: Span elements
-The editor SHALL render italic (`*a*`, `_a_`), bold (`**a**`, `__a__`), strikethrough (`~~a~~`), inline code, subscript (`~a~`) and superscript (`^a^`) as smaller text, highlight (`==a==`) with a highlight background, underline (`<u>a</u>`), emoji shortcodes (`:smile:`, GitHub's names) as the emoji, footnote references as superscript numbers linked to their definition, and line breaks inside a paragraph (a single newline included) as line breaks.
+The editor SHALL render italic (`*a*`, `_a_`), bold (`**a**`, `__a__`), strikethrough (`~~a~~`), inline code and underline (`<u>a</u>`) in their styles; subscript (`~a~`) and superscript (`^a^`) as smaller text; highlight (`==a==`) with a highlight background; emoji shortcodes (`:smile:`, GitHub's names) as the emoji; footnote references as superscript numbers linked to their definition; and line breaks inside a paragraph (a single newline included) as line breaks.
 
 #### Scenario: Emoji shortcode
 - **WHEN** a paragraph contains `:smile:`
