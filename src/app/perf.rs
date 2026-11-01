@@ -206,21 +206,33 @@ impl Bench {
         totals.add(profile::stop_collecting(), start.elapsed(), 1);
     }
 
-    /// An event in a window, as iced handles it: the window's interface
-    /// takes it, the messages it gives are handled, and if there are any,
-    /// the windows are rebuilt; timed.
-    fn event(&mut self, totals: &mut Totals, id: window::Id, event: Event, cursor: Point) {
-        // The interface as the last rebuild left it (iced keeps it between
-        // events), with its timing wrapper, but not timed itself.
-        profile::start_collecting();
+    /// The messages an event in a window gives: the window's interface as
+    /// the last rebuild left it (iced keeps it between events) takes it.
+    /// `timed`: the event is timed (not building the interface again), and
+    /// the timings are being collected when this returns; also returns when
+    /// the event was given.
+    fn messages(&mut self, id: window::Id, event: Event, cursor: Point, timed: bool) -> (Vec<Message>, Instant) {
+        if timed {
+            // The interface with its timing wrapper.
+            profile::start_collecting();
+        }
         let cache = self.caches.remove(&id).unwrap_or_default();
         let mut ui = UserInterface::build(self.app.view(id), WINDOW, cache, &mut self.renderer);
-        profile::stop_collecting();
-        profile::start_collecting();
+        if timed {
+            profile::stop_collecting();
+            profile::start_collecting();
+        }
         let start = Instant::now();
         let mut messages = Vec::new();
         ui.update(&[event], mouse::Cursor::Available(cursor), &mut self.renderer, &mut clipboard::Null, &mut messages);
         self.caches.insert(id, ui.into_cache());
+        (messages, start)
+    }
+
+    /// An event in a window, as iced handles it: the messages it gives are
+    /// handled, and if there are any, the windows are rebuilt; timed.
+    fn event(&mut self, totals: &mut Totals, id: window::Id, event: Event, cursor: Point) {
+        let (messages, start) = self.messages(id, event, cursor, true);
         let count = messages.len();
         for m in messages {
             let _ = self.app.update(m);
@@ -312,4 +324,36 @@ fn report(fanout: usize, sections: usize) {
 #[ignore = "a benchmark: run in release mode with --ignored --nocapture"]
 fn perf_large_map_and_long_page() {
     report(15, 40);
+}
+
+fn moved(at: Point) -> Event {
+    Event::Mouse(mouse::Event::CursorMoved { position: at })
+}
+
+/// Moving the pointer over a page or the map sends no message (each would
+/// build every window again); a press on a page's text still tells where in
+/// the text it was, before the press itself.
+#[test]
+fn pointer_moves_send_no_messages() {
+    let mut b = Bench::new(3, 6);
+    let (editor, map) = (b.editor, b.app.main_window);
+    for i in 0..60 {
+        let at = Point::new(120.0 + (i % 7) as f32 * 40.0, 40.0 + i as f32 * 12.0);
+        for window in [editor, map] {
+            let (messages, _) = b.messages(window, moved(at), at, false);
+            assert!(messages.is_empty(), "{window:?} at {at:?}: {messages:?}");
+        }
+    }
+    // A press on text somewhere down the page.
+    let pressed = (0..60).find_map(|i| {
+        let at = Point::new(160.0, 40.0 + i as f32 * 12.0);
+        let _ = b.messages(editor, moved(at), at, false);
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let (messages, _) = b.messages(editor, press, at, false);
+        messages.iter().any(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed))).then_some(messages)
+    });
+    let messages = pressed.expect("a press on text");
+    let pointer = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::PointerOver(..))));
+    let text = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed)));
+    assert!(pointer.is_some() && pointer < text, "{messages:?}");
 }

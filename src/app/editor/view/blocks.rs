@@ -12,6 +12,7 @@ use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::highlight::{self};
 use crate::app::editor::render::{RenderKey, Rendered};
 use crate::app::editor::{Editor, EditorMsg, RightClick};
+use crate::app::press_point::press_in;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Node, TableNode};
 use crate::markdown::{BlockKind, ListItem, images};
@@ -133,11 +134,16 @@ fn code_text_view<'a>(
                     runs: vec![HitRun { text: line.to_string(), size, font: CODE_FONT, map: Some(map) }],
                     width: width - 2.0 * CODE_PADDING,
                 });
-                mouse_area(rich.width(width - 2.0 * CODE_PADDING))
-                    .on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt))
+                let mut area = mouse_area(rich.width(width - 2.0 * CODE_PADDING))
                     .on_press(EditorMsg::TextPressed)
-                    .on_right_press(EditorMsg::RightClicked(RightClick::Text))
-                    .into()
+                    .on_right_press(EditorMsg::RightClicked(RightClick::Text));
+                // As in other text: where a press lands, and where the pointer is
+                // while an item of the assets pane is dragged.
+                if ctx.editor.asset_dragging() {
+                    let info = info.clone();
+                    area = area.on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt));
+                }
+                press_in(area, move |pt| EditorMsg::PointerOver(info.clone(), pt)).into()
             }
             None => rich.into(),
         };
