@@ -20,6 +20,7 @@ mod file;
 mod ime;
 mod keys;
 mod layout;
+pub mod profile;
 mod right_press;
 mod search_panel;
 pub mod settings;
@@ -27,6 +28,8 @@ mod ui;
 mod view;
 mod viewport;
 
+#[cfg(test)]
+mod perf;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -415,8 +418,27 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
-        let task = self.update_message(message);
-        Task::batch([task, self.read_assets()])
+        let label = profile::enabled().then(|| self.message_label(&message));
+        profile::time(
+            profile::Phase::Update,
+            || label.unwrap_or_default(),
+            || {
+                let task = self.update_message(message);
+                Task::batch([task, self.read_assets()])
+            },
+        )
+    }
+
+    /// The message as the timings name it.
+    fn message_label(&self, message: &Message) -> String {
+        match message {
+            Message::Window(id, event) => {
+                format!("{}/{}", if *id == self.main_window { "Map" } else { "Editor" }, profile::label(event))
+            }
+            Message::Editor(_, msg) => format!("Editor/{}", profile::label(msg)),
+            Message::Rendered(..) => "Rendered".into(),
+            Message::Map(msg) => format!("Map/{}", profile::label(msg)),
+        }
     }
 
     fn update_message(&mut self, message: Message) -> Task<Message> {

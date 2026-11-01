@@ -42,6 +42,8 @@ winresource = "0.1"
 
 [dev-dependencies]
 proptest = "1.12"
+# The benchmarks build the windows' interfaces as iced does (`app/perf.rs`).
+iced_runtime = "0.14"
 
 [profile.release]
 strip = true
