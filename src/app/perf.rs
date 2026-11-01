@@ -2,11 +2,15 @@
 //! and then, as iced does after messages, building, comparing, laying out and
 //! drawing every window - on a large map with a long page open, without
 //! windows (a headless renderer, so the GPU's part is left out). They are
-//! ignored by default; run them in release mode:
+//! ignored by default; run them in release mode (iced's test renderer, which
+//! other tests use, needs debug assertions in `iced_core`):
 //!
 //! ```text
-//! cargo test --release --lib perf -- --ignored --nocapture --test-threads=1
+//! cargo test --release --lib --config 'profile.release.package.iced_core.debug-assertions=true' \
+//!     perf -- --ignored --nocapture --test-threads=1
 //! ```
+//!
+//! Also here: tests of what makes the windows rebuild (pointer moves must not).
 
 use super::command::Command;
 use super::editor::EditorMsg;
