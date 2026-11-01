@@ -511,3 +511,74 @@ fn a_successful_index_update_logs_nothing() {
     assert_eq!(app.status.text(), "");
     assert!(!dir.path().join(crate::error_log::FILE_NAME).exists());
 }
+
+/// A map with the root's children `a`, `b` and `c`, `a` and `b` selected.
+fn app_with_two_selected() -> (App, [crate::mindmap::NodeId; 3]) {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let nodes = [m.add_child(root, "a"), m.add_child(root, "b"), m.add_child(root, "c")];
+    let mut app = app_with(m);
+    app.doc.as_mut().unwrap().select(vec![nodes[0], nodes[1]]);
+    (app, nodes)
+}
+
+fn selection(app: &App) -> Vec<crate::mindmap::NodeId> {
+    let mut s = app.doc.as_ref().unwrap().selection().to_vec();
+    s.sort();
+    s
+}
+
+#[test]
+fn a_right_click_on_an_unselected_node_selects_only_it() {
+    let (mut app, [_, _, c]) = app_with_two_selected();
+    send(&mut app, MapMsg::RightPressedAt(iced::Point::new(120.0, 80.0)));
+    send(&mut app, MapMsg::NodeRightClicked(c));
+    assert_eq!(selection(&app), vec![c]);
+    assert_eq!(app.context_menu, Some(super::MapContextMenu { at: iced::Point::new(120.0, 80.0), on_node: true }));
+    // Its command acts on the node.
+    send(&mut app, MapMsg::Command(Command::NewChild));
+    assert_eq!(app.context_menu, None);
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Input { .. })));
+    send(&mut app, MapMsg::DialogInput("child".into()));
+    send(&mut app, MapMsg::DialogOk);
+    assert_eq!(map(&app).child_texts(c), vec!["child"]);
+}
+
+#[test]
+fn a_right_click_on_a_selected_node_keeps_the_selection() {
+    let (mut app, [a, b, _]) = app_with_two_selected();
+    send(&mut app, MapMsg::NodeRightClicked(b));
+    assert_eq!(selection(&app), vec![a, b]);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), b, "the right-clicked node is the focused one");
+    send(&mut app, MapMsg::Command(Command::Cut));
+    assert_eq!(root_texts(&app), vec!["c"], "both selected nodes are cut");
+}
+
+#[test]
+fn a_right_click_on_empty_space_keeps_the_selection_and_esc_closes_the_menu() {
+    let (mut app, [a, b, _]) = app_with_two_selected();
+    send(&mut app, MapMsg::Menu(Some(0)));
+    send(&mut app, MapMsg::RightPressedAt(iced::Point::new(300.0, 200.0)));
+    send(&mut app, MapMsg::MapRightClicked);
+    assert_eq!(app.menu, None, "the menu bar's menu closes");
+    assert_eq!(app.context_menu, Some(super::MapContextMenu { at: iced::Point::new(300.0, 200.0), on_node: false }));
+    assert_eq!(selection(&app), vec![a, b]);
+    // Keys do nothing while it is open; Esc only closes it.
+    press(&mut app, Named::Delete);
+    assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
+    send(&mut app, MapMsg::Escape);
+    assert_eq!(app.context_menu, None);
+    assert_eq!(selection(&app), vec![a, b]);
+    // A press beside it closes it too.
+    send(&mut app, MapMsg::MapRightClicked);
+    send(&mut app, MapMsg::CloseContextMenu);
+    assert_eq!(app.context_menu, None);
+}
+
+#[test]
+fn context_menu_items_are_commands_of_the_menu_bar() {
+    use super::view::{MAP_MENU, MENUS, NODE_MENU};
+    for cmd in NODE_MENU.iter().chain(MAP_MENU).flatten() {
+        assert!(super::ui::entry_of(MENUS, *cmd).is_some(), "{cmd:?} is not in the menu bar");
+    }
+}

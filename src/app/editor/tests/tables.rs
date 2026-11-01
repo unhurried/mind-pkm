@@ -140,7 +140,7 @@ fn rows_and_columns_from_the_cell_menu() {
     let (mut app, _f, _, _) = app_with_page(TABLE);
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "1");
-    editor(&mut app, id, EditorMsg::PointerAt(iced::Point::new(100.0, 200.0)));
+    editor(&mut app, id, EditorMsg::RightPressedAt(iced::Point::new(100.0, 200.0)));
     editor(&mut app, id, EditorMsg::Table(TableMsg::Menu(2, 1)));
     assert_eq!(app.editors[&id].table_ui.menu, Some(iced::Point::new(100.0, 200.0)));
     assert_eq!(cell(&app, id), (2, 1), "the right-clicked cell");

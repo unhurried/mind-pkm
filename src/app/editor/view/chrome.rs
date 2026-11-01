@@ -3,14 +3,12 @@
 use super::Ctx;
 use super::theme::{OUTLINE_WIDTH, Palette};
 use crate::app::editor::find::FindBar;
-use crate::app::editor::keys::{EditorCommand, MENUS, TABLE_MENU};
+use crate::app::editor::keys::{EditorCommand, MENUS, PAGE_MENU, TABLE_MENU, TableMenuItem};
 use crate::app::editor::modal::modal;
 use crate::app::editor::{AssetsMsg, DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
 use crate::app::ui::{self};
 use iced::advanced::text::Wrapping;
-use iced::widget::{
-    Column, button, column, container, mouse_area, pin, row, scrollable, space, stack, text, text_input,
-};
+use iced::widget::{Column, button, column, container, row, scrollable, space, text, text_input};
 use iced::{Alignment, Background, Element, Fill, Point, Theme, border};
 
 pub(super) fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::widget::Id) -> Element<'_, EditorMsg> {
@@ -61,33 +59,26 @@ pub(super) fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::wid
 impl Editor {
     /// A cell's right-click menu at `at` in the window.
     pub(super) fn cell_menu_view(&self, at: Point, p: Palette) -> Element<'_, EditorMsg> {
-        const WIDTH: f32 = 220.0;
-        const ITEM: f32 = 26.0;
-        let mut list = Column::new().spacing(0).width(WIDTH);
-        for &(label, item) in TABLE_MENU {
-            list = list.push(
-                button(text(label).size(12).color(p.text))
-                    .width(Fill)
-                    .padding([5, 10])
-                    .style(move |_: &Theme, status| button::Style {
-                        background: matches!(status, button::Status::Hovered).then_some(Background::Color(p.hover)),
-                        text_color: p.text,
-                        ..Default::default()
-                    })
-                    .on_press(EditorMsg::Table(TableMsg::MenuItem(item))),
-            );
-        }
-        let height = TABLE_MENU.len() as f32 * ITEM + 8.0;
-        let x = at.x.min(self.window_size.width - WIDTH - 12.0).max(0.0);
-        let y = at.y.min(self.window_size.height - height - 4.0).max(0.0);
-        let menu = container(list)
-            .padding(4)
-            .style(move |_| container::background(p.bg).border(border::color(p.muted).width(1).rounded(4)));
-        stack![
-            mouse_area(container(space()).width(Fill).height(Fill)).on_press(EditorMsg::Menu(None)),
-            pin(menu).position(Point::new(x, y)),
-        ]
-        .into()
+        let entries: Vec<ui::ContextEntry<TableMenuItem>> =
+            TABLE_MENU.iter().map(|e| e.map(|item| (item.label().0, item.label().1, item))).collect();
+        let on_item = |item| match item {
+            TableMenuItem::Command(cmd) => EditorMsg::Command(cmd),
+            item => EditorMsg::Table(TableMsg::MenuItem(item)),
+        };
+        ui::context_menu(&entries, at, self.window_size, p.context_menu(), on_item, EditorMsg::Menu(None))
+    }
+
+    /// The page's right-click menu at `at` in the window.
+    pub(super) fn context_menu_view(&self, at: Point, p: Palette) -> Element<'_, EditorMsg> {
+        let entries = ui::context_entries(MENUS, PAGE_MENU);
+        ui::context_menu(
+            &entries,
+            at,
+            self.window_size,
+            p.context_menu(),
+            EditorMsg::Command,
+            EditorMsg::CloseContextMenu,
+        )
     }
 
     pub(super) fn menu_bar(&self, p: Palette) -> Element<'_, EditorMsg> {

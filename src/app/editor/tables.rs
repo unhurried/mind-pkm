@@ -318,7 +318,7 @@ impl Editor {
                     self.page.go_to_cell((r, c));
                 }
                 self.menu = None;
-                self.table_ui.menu = Some(self.pointer_at);
+                self.table_ui.menu = Some(self.right_pressed_at);
                 Task::none()
             }
             TableMsg::MenuItem(item) => {

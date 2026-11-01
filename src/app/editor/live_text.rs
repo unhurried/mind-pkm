@@ -7,7 +7,7 @@
 
 use super::flow::{self, Cluster, Flow, Measured};
 use super::keys::Bind;
-use super::{EditorCommand, EditorMsg};
+use super::{EditorCommand, EditorMsg, RightClick};
 use crate::app::ime;
 use iced::advanced::Renderer as _;
 use iced::advanced::graphics::text::Paragraph;
@@ -528,6 +528,14 @@ impl Widget<EditorMsg, Theme, Renderer> for LiveText<'_> {
                     shell.capture_event();
                 } else if state.focus.is_some() {
                     state.focus = None;
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) => {
+                if let Some(p) = cursor.position_over(bounds) {
+                    state.focus = Some(Focus::now());
+                    state.preferred_x = None;
+                    shell.publish(EditorMsg::RightClicked(RightClick::Live(hit(state, p))));
+                    shell.capture_event();
                 }
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) if state.dragging || (self.held && !state.released) => {

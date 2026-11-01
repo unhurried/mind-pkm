@@ -14,8 +14,9 @@ use crate::app::editor::live_text::{LiveText, Run, RunKind, TextLook};
 use crate::app::editor::page::{Active, Live, Mode, TableState};
 use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::render::{RenderKey, Rendered};
-use crate::app::editor::{Editor, EditorMsg, EditorPrefs, TableMsg};
+use crate::app::editor::{Editor, EditorMsg, EditorPrefs, RightClick, TableMsg};
 use crate::app::ime::ime_aligned;
+use crate::app::right_press::right_press_in;
 use crate::app::view::APP_FONT;
 use crate::markdown::content;
 use crate::markdown::edit::CodeBody;
@@ -216,6 +217,7 @@ impl Editor {
             .wrapping(Wrapping::WordOrGlyph)
             .style(move |_, _| editor_style(p, background));
         let editor = PressRelay::relaying(editor, self.held(Padding::from(padding)));
+        let editor = right_press_in(editor, Padding::from(padding), |p| EditorMsg::RightClicked(RightClick::Editor(p)));
         // Math and diagrams show what they become below their source.
         let preview: Option<Element<EditorMsg>> = match &a.kind {
             BlockKind::Math => {
@@ -278,6 +280,7 @@ impl Editor {
             .wrapping(Wrapping::WordOrGlyph)
             .style(move |_, _| editor_style(p, Color::TRANSPARENT));
         let editor = PressRelay::relaying(editor, self.held(Padding::ZERO));
+        let editor = right_press_in(editor, Padding::ZERO, |p| EditorMsg::RightClicked(RightClick::Editor(p)));
         let language = text_input("language", &code.info)
             .on_input(EditorMsg::CodeLanguage)
             .size(ctx.size(0.75))

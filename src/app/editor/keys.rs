@@ -182,24 +182,63 @@ pub const MENUS: &[Menu<EditorCommand>] = &[
     ),
 ];
 
-/// The table commands of a cell's right-click menu, with copying a row or column.
-pub const TABLE_MENU: &[(&str, TableMenuItem)] = &[
-    ("Insert Row Above", TableMenuItem::Command(C::RowAbove)),
-    ("Insert Row Below", TableMenuItem::Command(C::RowBelow)),
-    ("Delete Row", TableMenuItem::Command(C::DeleteRow)),
-    ("Insert Column Left", TableMenuItem::Command(C::ColumnLeft)),
-    ("Insert Column Right", TableMenuItem::Command(C::ColumnRight)),
-    ("Delete Column", TableMenuItem::Command(C::DeleteColumn)),
-    ("Move Row Up", TableMenuItem::Command(C::MoveRowUp)),
-    ("Move Row Down", TableMenuItem::Command(C::MoveRowDown)),
-    ("Move Column Left", TableMenuItem::Command(C::MoveColumnLeft)),
-    ("Move Column Right", TableMenuItem::Command(C::MoveColumnRight)),
-    ("Align Left", TableMenuItem::Command(C::AlignLeft)),
-    ("Align Center", TableMenuItem::Command(C::AlignCenter)),
-    ("Align Right", TableMenuItem::Command(C::AlignRight)),
-    ("Copy Row", TableMenuItem::CopyRow),
-    ("Copy Column", TableMenuItem::CopyColumn),
+/// The page's right-click menu: commands of the menu bar, None for a separator.
+pub const PAGE_MENU: &[Option<EditorCommand>] = &[
+    Some(C::Cut),
+    Some(C::Copy),
+    Some(C::CopyMarkdown),
+    Some(C::Paste),
+    Some(C::PastePlain),
+    Some(C::SelectAll),
+    None,
+    Some(C::Bold),
+    Some(C::Italic),
+    Some(C::Underline),
+    Some(C::Code),
+    Some(C::Strikethrough),
+    Some(C::Link),
+    None,
+    Some(C::ClearFormatting),
 ];
+
+/// A cell's right-click menu: the clipboard, then the table commands and
+/// copying a row or column; None for a separator.
+pub const TABLE_MENU: &[Option<TableMenuItem>] = &[
+    Some(TableMenuItem::Command(C::Cut)),
+    Some(TableMenuItem::Command(C::Copy)),
+    Some(TableMenuItem::Command(C::Paste)),
+    Some(TableMenuItem::Command(C::SelectAll)),
+    None,
+    Some(TableMenuItem::Command(C::RowAbove)),
+    Some(TableMenuItem::Command(C::RowBelow)),
+    Some(TableMenuItem::Command(C::DeleteRow)),
+    Some(TableMenuItem::Command(C::ColumnLeft)),
+    Some(TableMenuItem::Command(C::ColumnRight)),
+    Some(TableMenuItem::Command(C::DeleteColumn)),
+    None,
+    Some(TableMenuItem::Command(C::MoveRowUp)),
+    Some(TableMenuItem::Command(C::MoveRowDown)),
+    Some(TableMenuItem::Command(C::MoveColumnLeft)),
+    Some(TableMenuItem::Command(C::MoveColumnRight)),
+    None,
+    Some(TableMenuItem::Command(C::AlignLeft)),
+    Some(TableMenuItem::Command(C::AlignCenter)),
+    Some(TableMenuItem::Command(C::AlignRight)),
+    None,
+    Some(TableMenuItem::CopyRow),
+    Some(TableMenuItem::CopyColumn),
+];
+
+impl TableMenuItem {
+    /// Its label and shortcut: a command's as in the menu bar.
+    pub fn label(self) -> (&'static str, &'static str) {
+        match self {
+            TableMenuItem::Command(cmd) => crate::app::ui::entry_of(MENUS, cmd).unwrap_or(("?", "")),
+            TableMenuItem::CopyRow => ("Copy Row", ""),
+            TableMenuItem::CopyColumn => ("Copy Column", ""),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableMenuItem {
@@ -415,6 +454,17 @@ mod tests {
 
     fn unidentified() -> Physical {
         Physical::Unidentified(NativeCode::Unidentified)
+    }
+
+    /// The right-click menus list commands of the menu bar.
+    #[test]
+    fn context_menu_items_are_commands_of_the_menu_bar() {
+        for cmd in PAGE_MENU.iter().flatten() {
+            assert!(crate::app::ui::entry_of(MENUS, *cmd).is_some(), "{cmd:?} is not in the menu bar");
+        }
+        for item in TABLE_MENU.iter().flatten() {
+            assert_ne!(item.label().0, "?", "{item:?} is not in the menu bar");
+        }
     }
 
     /// Every shortcut the editor's menus show is the key binding of its command.
