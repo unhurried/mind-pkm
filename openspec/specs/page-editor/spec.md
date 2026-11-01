@@ -195,6 +195,10 @@ Outside source mode, a selection reaching beyond a block SHALL select whole bloc
 - **WHEN** three paragraphs are selected with Shift+Down and Delete is pressed
 - **THEN** the three paragraphs are removed and the cursor is in the block that followed them
 
+#### Scenario: Selected block with a background of its own
+- **WHEN** a level-2 heading (a light band), a code block or a table is among the selected blocks
+- **THEN** the highlight is drawn over the block's own background as well, so the block is as visibly selected as a paragraph
+
 #### Scenario: Dragging over blocks
 - **WHEN** the mouse button is pressed in the text of the second of four paragraphs and the pointer is dragged onto the fourth
 - **THEN** the second to fourth paragraphs are selected, and moving the pointer back onto the third leaves the second and third selected until the button is released
