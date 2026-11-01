@@ -5,14 +5,21 @@
 //! so the editor asks the widget tree where the region's box and the page's
 //! scrollable are, works out where the cursor's line is in the box, and
 //! scrolls when that line is outside the visible part.
+//!
+//! Finding and scrolling are one widget operation: finding chains the scroll
+//! (`Outcome::Chain`), which iced runs in the same pass, right after the
+//! update and before the window is redrawn. A scroll issued by a task that
+//! waits for what was found would come back later from another thread, and
+//! iced does not redraw for it - the page would only show it at the next
+//! redraw (when the pointer leaves the clicked outline entry, say).
 
 use super::EditorMsg;
 use crate::app::view::APP_FONT;
 use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
-use iced::advanced::widget::operation::{Operation, Outcome, Scrollable};
+use iced::advanced::widget::operation::{self, Operation, Outcome, Scrollable};
 use iced::advanced::widget::{self, Id};
+use iced::widget::scrollable::AbsoluteOffset;
 use iced::widget::text::LineHeight;
-use iced::widget::{operation, scrollable};
 use iced::{Font, Rectangle, Size, Task, Vector};
 
 /// Room kept between the cursor and the edges of the visible part.
@@ -66,8 +73,64 @@ impl Operation<Option<Found>> for Find {
     }
 }
 
-fn find(target: Id, scroll: Id) -> Task<Option<Found>> {
-    widget::operate(Find { target, scroll, target_bounds: None, scroll_state: None })
+fn find(target: Id, scroll: Id) -> Find {
+    Find { target, scroll, target_bounds: None, scroll_state: None }
+}
+
+/// Where to scroll the page to (its offset), given what was found; `None`
+/// leaves it where it is.
+type Decide = Box<dyn Fn(Found) -> Option<f32> + Send>;
+
+/// Finds with `find`, then scrolls the page `scroll` to where `decide` says,
+/// as an operation chained to the finding (see the module's documentation).
+struct FindAndScroll<F> {
+    find: F,
+    scroll: Id,
+    decide: Decide,
+}
+
+impl<F: Operation<Option<Found>>> Operation for FindAndScroll<F> {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self)
+    }
+
+    fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+        self.find.container(id, bounds);
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        content_bounds: Rectangle,
+        translation: Vector,
+        state: &mut dyn Scrollable,
+    ) {
+        self.find.scrollable(id, bounds, content_bounds, translation, state);
+    }
+
+    fn custom(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn std::any::Any) {
+        self.find.custom(id, bounds, state);
+    }
+
+    fn finish(&self) -> Outcome<()> {
+        let Outcome::Some(Some(found)) = self.find.finish() else { return Outcome::None };
+        match (self.decide)(found) {
+            Some(y) => Outcome::Chain(Box::new(operation::scrollable::scroll_to(
+                self.scroll.clone(),
+                AbsoluteOffset { x: Some(0.0), y: Some(y) },
+            ))),
+            None => Outcome::None,
+        }
+    }
+}
+
+fn find_and_scroll(
+    find: impl Operation<Option<Found>> + 'static,
+    scroll: Id,
+    decide: impl Fn(Found) -> Option<f32> + Send + 'static,
+) -> Task<EditorMsg> {
+    widget::operate(FindAndScroll { find, scroll, decide: Box::new(decide) }).discard()
 }
 
 /// How the active region's text is set, to find the cursor's line in it.
@@ -118,14 +181,9 @@ fn offset_to_show(top: f32, bottom: f32, viewport: Rectangle, offset: Vector) ->
 
 /// Scrolls the page so that the cursor in the active region's box is visible.
 pub fn reveal_caret(region_box: Id, page: Id, caret: CaretText) -> Task<EditorMsg> {
-    let page_id = page.clone();
-    find(region_box, page).then(move |found| {
-        let Some(f) = found else { return Task::none() };
+    find_and_scroll(find(region_box, page.clone()), page, move |f| {
         let (top, bottom) = caret_span(&caret, f.target.width);
-        match offset_to_show(f.target.y + top, f.target.y + bottom, f.viewport, f.offset) {
-            Some(y) => operation::scroll_to(page_id.clone(), scrollable::AbsoluteOffset { x: 0.0, y }),
-            None => Task::none(),
-        }
+        offset_to_show(f.target.y + top, f.target.y + bottom, f.viewport, f.offset)
     })
 }
 
@@ -173,41 +231,94 @@ impl Operation<Option<Found>> for FindCaret {
 
 /// Scrolls the page so that the caret of the live widget `live` is visible.
 pub fn reveal_live(live: Id, page: Id) -> Task<EditorMsg> {
-    let page_id = page.clone();
-    widget::operate(FindCaret { target: live, scroll: page, caret: None, scroll_state: None }).then(move |found| {
-        let Some(f) = found else { return Task::none() };
-        match offset_to_show(f.target.y, f.target.y + f.target.height, f.viewport, f.offset) {
-            Some(y) => operation::scroll_to(page_id.clone(), scrollable::AbsoluteOffset { x: 0.0, y }),
-            None => Task::none(),
-        }
-    })
+    let find = FindCaret { target: live, scroll: page.clone(), caret: None, scroll_state: None };
+    find_and_scroll(find, page, show_target)
 }
 
 /// Scrolls the page so that the box `target` (a table's cell) is visible.
 pub fn reveal_box(target: Id, page: Id) -> Task<EditorMsg> {
-    let page_id = page.clone();
-    find(target, page).then(move |found| {
-        let Some(f) = found else { return Task::none() };
-        match offset_to_show(f.target.y, f.target.y + f.target.height, f.viewport, f.offset) {
-            Some(y) => operation::scroll_to(page_id.clone(), scrollable::AbsoluteOffset { x: 0.0, y }),
-            None => Task::none(),
-        }
-    })
+    find_and_scroll(find(target, page.clone()), page, show_target)
 }
 
 /// Scrolls the page so that the box `target` is at the top.
 pub fn to_top(target: Id, page: Id) -> Task<EditorMsg> {
-    let page_id = page.clone();
-    find(target, page).then(move |found| {
-        let Some(f) = found else { return Task::none() };
-        let y = (f.target.y - f.viewport.y - MARGIN / 2.0).max(0.0);
-        operation::scroll_to(page_id.clone(), scrollable::AbsoluteOffset { x: 0.0, y })
-    })
+    find_and_scroll(find(target, page.clone()), page, at_top)
+}
+
+/// The offset that shows the whole of what was found, if it isn't shown.
+fn show_target(f: Found) -> Option<f32> {
+    offset_to_show(f.target.y, f.target.y + f.target.height, f.viewport, f.offset)
+}
+
+/// The offset that puts what was found at the top.
+fn at_top(f: Found) -> Option<f32> {
+    Some((f.target.y - f.viewport.y - MARGIN / 2.0).max(0.0))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iced::Point;
+    use iced::widget::scrollable::RelativeOffset;
+
+    /// A scrollable's state that records where it was scrolled to.
+    #[derive(Default)]
+    struct Recorded(Option<AbsoluteOffset<Option<f32>>>);
+
+    impl Scrollable for Recorded {
+        fn snap_to(&mut self, _offset: RelativeOffset<Option<f32>>) {}
+
+        fn scroll_to(&mut self, offset: AbsoluteOffset<Option<f32>>) {
+            self.0 = Some(offset);
+        }
+
+        fn scroll_by(&mut self, _offset: AbsoluteOffset, _bounds: Rectangle, _content_bounds: Rectangle) {}
+    }
+
+    /// Runs `op` over a page (the scrollable `page`) holding the box `target`,
+    /// and then the operations it chains, as iced does; where the page was
+    /// scrolled to.
+    fn run(mut op: Box<dyn Operation>, target: &Id, page: &Id, at: Rectangle, offset: Vector) -> Option<f32> {
+        let viewport = Rectangle::new(Point::new(0.0, 30.0), Size::new(800.0, 500.0));
+        let content = Rectangle::new(Point::new(0.0, 30.0), Size::new(800.0, 5000.0));
+        let mut state = Recorded::default();
+        loop {
+            op.scrollable(Some(page), viewport, content, offset, &mut state);
+            op.container(Some(target), at);
+            match op.finish() {
+                Outcome::Chain(next) => op = next,
+                _ => break,
+            }
+        }
+        state.0.map(|o| o.y.expect("a vertical offset"))
+    }
+
+    #[test]
+    fn finding_scrolls_in_the_same_operation() {
+        let (target, page) = (Id::new("block"), Id::new("doc"));
+        let at = Rectangle::new(Point::new(0.0, 2030.0), Size::new(600.0, 40.0));
+        let to_top = || {
+            Box::new(FindAndScroll {
+                find: find(target.clone(), page.clone()),
+                scroll: page.clone(),
+                decide: Box::new(at_top),
+            })
+        };
+        assert_eq!(run(to_top(), &target, &page, at, Vector::ZERO), Some(2000.0 - MARGIN / 2.0));
+        let show = || {
+            Box::new(FindAndScroll {
+                find: find(target.clone(), page.clone()),
+                scroll: page.clone(),
+                decide: Box::new(show_target),
+            })
+        };
+        // Below the visible part: scrolled so that it shows at the bottom.
+        assert_eq!(run(show(), &target, &page, at, Vector::ZERO), Some(2070.0 - 30.0 - 500.0 + MARGIN));
+        // Visible already: left where it is.
+        assert_eq!(run(show(), &target, &page, at, Vector::new(0.0, 1800.0)), None);
+        // The page without the box: nothing scrolls.
+        assert_eq!(run(show(), &Id::new("elsewhere"), &page, at, Vector::ZERO), None);
+    }
 
     #[test]
     fn scrolls_only_when_outside() {
