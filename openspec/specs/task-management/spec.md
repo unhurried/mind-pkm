@@ -6,7 +6,7 @@ Reflecting the tasks written in Markdown pages into the mind map: the Next Steps
 ## Requirements
 
 ### Requirement: Next Steps sync
-For every page node, the refresh SHALL make the node's children equal to the first three list items (lines starting with `* ` or `- ` and longer than three characters, without the marker) under the page's `### Next Steps` heading, up to the next heading. A page without the heading SHALL get no children; a page node whose children already match SHALL be left untouched.
+A page's Next Steps items SHALL be the lines below its line `### Next Steps`, up to the next line starting with `#`, that start with `* ` or `- ` followed by at least two characters, taken without that marker (`* x` is no item). For every page node, the refresh SHALL make the node's children equal to the page's first three items. A page without the heading SHALL get no children; a page node whose children already match SHALL be left untouched.
 
 #### Scenario: More than three items
 - **WHEN** a page's Next Steps lists `* One`, `- Two`, `* x`, `* Three`, `* Four`
@@ -34,7 +34,7 @@ The refresh SHALL delete the direct children of `root > ToDo` that link a page f
 - **THEN** the refresh deletes that ToDo item, even when it is checked
 
 ### Requirement: Due Today and Past Due
-The refresh SHALL fill `root > ToDo > Due Today` and `root > ToDo > Past Due` (created when missing) with the Next Steps items of the pages linked by page nodes whose leading date is today, respectively before today, as `<item> (<page>)` nodes linking the page, past-due items ordered by date. Items already among ToDo's direct children SHALL be left out, and a collection whose content already matches SHALL be left untouched.
+The refresh SHALL fill `root > ToDo > Due Today` and `root > ToDo > Past Due` (created when missing) with the Next Steps items whose leading date is today, respectively before today, taken from all items (not only the first three) of the pages linked by page nodes, as `<item> (<page>)` nodes linking the page, past-due items ordered by date. Items already among ToDo's direct children SHALL be left out, and a collection whose content already matches SHALL be left untouched.
 
 #### Scenario: Yesterday's task
 - **WHEN** page `Task` lists `24/05/09 pay the bill` and today is 2024-05-10
@@ -56,7 +56,7 @@ A due date SHALL be a leading `yy/MM/dd` (years 2000-2099). A day beyond the end
 - **THEN** it has no due date
 
 ### Requirement: Refresh triggers
-The refresh SHALL run, together with the search index update, on F12 (reporting a missing document directory) and automatically at most every five minutes while the map is being changed. Pages SHALL be read in the background without blocking the window; nodes deleted or renamed meanwhile SHALL be skipped.
+The refresh SHALL run, together with the search index update, on F12 (reporting a missing document directory) and automatically once the map has been changed since the last refresh and that refresh is at least five minutes ago. Pages SHALL be read in the background without blocking the window; nodes deleted or renamed meanwhile SHALL be skipped.
 
 #### Scenario: Editing for a while
 - **WHEN** the map has been edited and five minutes have passed since the last refresh

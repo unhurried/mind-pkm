@@ -28,7 +28,7 @@ Every node SHALL be underlined by a thin line, and each child SHALL be joined by
 - **THEN** the line leaving the parent is as thin as an edge to a single child
 
 ### Requirement: Fonts
-Every node, the root included, SHALL use the same font and font size. The application font SHALL be Meiryo UI, falling back to the system fonts where it is missing. Node text longer than the maximum node width SHALL wrap.
+Every node, the root included, SHALL use the same font and font size. The application font SHALL be Meiryo UI, falling back to the system fonts where it is missing. Node text wider than 360 px at 100% zoom SHALL wrap.
 
 #### Scenario: Root node
 - **WHEN** a map is shown
@@ -53,7 +53,7 @@ Nodes SHALL be packed closely: at 100% zoom, sibling subtrees 1 px apart, node b
 - **THEN** they take about 220 px of height
 
 ### Requirement: Folding
-A folded node SHALL hide its subtree and show the number of its children next to it; clicking that number, or pressing Space with the node selected, SHALL toggle the fold. Clicking the point where the edges from a node other than the root to its children branch SHALL fold the node; hovering that point SHALL show a marker there. The folded state SHALL be stored in the map (FOLDED attribute).
+A folded node SHALL hide its subtree and show the number of its children next to it; clicking that number, or pressing Space with the node selected, SHALL toggle the fold. Clicking the branch point of the edges to a node's children (any node but the root) SHALL fold that node; hovering the branch point SHALL show a marker there. The folded state SHALL be stored in the map (FOLDED attribute).
 
 #### Scenario: Unfolding by click
 - **WHEN** the child count next to a folded node is clicked
@@ -136,7 +136,7 @@ A command that changes nothing, such as New Page or New Directory that fail, SHA
 - **THEN** the error is shown, the map is not marked as changed, and Ctrl+Z does not take back anything older
 
 ### Requirement: Following links
-Clicking a node's link marker SHALL open a linked Markdown (`.md`) file in the built-in editor (with the default application when Use Built-in Editor is unchecked), open another linked file or directory with its default application, open a URL in the default browser, or, for a node link, select and center the linked node (unfolding its ancestors).
+Clicking a node's link marker SHALL open a linked Markdown (`.md`) file in the page editor (see document-management, Choosing the page editor), open another linked file or directory with its default application, open a URL in the default browser, or, for a node link, select and center the linked node (unfolding its ancestors).
 
 #### Scenario: Node link
 - **WHEN** the link marker of a node linking `#ID_123` is clicked
@@ -172,10 +172,6 @@ Pressing the left mouse button on a node and dragging it onto another node SHALL
 - **WHEN** node `a` is dragged onto the top edge of node `c`
 - **THEN** `a` is placed right before `c` under `c`'s parent
 
-#### Scenario: Drop onto a descendant
-- **WHEN** node `a` is dragged onto one of its own children
-- **THEN** the map does not change
-
 #### Scenario: Undo
 - **WHEN** a node was moved by drag and drop and Ctrl+Z is pressed
 - **THEN** the node is back at its previous place
@@ -194,6 +190,10 @@ A press without modifiers on a node of a multiple selection SHALL keep the selec
 ### Requirement: Drag and drop feedback and cancelling
 While nodes are dragged, the drop position SHALL be shown: an outline around the target for a child, a line along its top or bottom edge for a sibling. A drop onto a dragged node or one of its descendants, or not onto a node, SHALL change nothing; Esc or the pointer leaving the window SHALL cancel the drag. A press without moving the pointer SHALL only select the node.
 
+#### Scenario: Drop onto a descendant
+- **WHEN** node `a` is dragged onto one of its own children
+- **THEN** the map does not change
+
 #### Scenario: Cancelling with Esc
 - **WHEN** a node is being dragged and Esc is pressed before the button is released
 - **THEN** the map does not change
@@ -202,12 +202,16 @@ While nodes are dragged, the drop position SHALL be shown: an outline around the
 - **WHEN** a node is pressed and released without moving the pointer
 - **THEN** the node is selected and the map does not change
 
-### Requirement: Zoom shortcuts
-The map SHALL be zoomable in fixed steps from 50% to 300%, starting at 100% on every start and kept when another map is opened. Ctrl+Plus (also Ctrl+`=`, Ctrl+`;` and the keypad's plus) SHALL zoom in, Ctrl+Minus SHALL zoom out and Ctrl+0 SHALL reset the zoom to 100%. Zooming with the keyboard SHALL keep the selected node in place on screen and in view.
+### Requirement: Zoom steps and shortcuts
+The map SHALL be zoomable in fixed steps from 50% to 300%, starting at 100% on every start and kept when another map is opened; the status bar SHALL show the zoom level. View → Zoom In (Ctrl+Plus, also Ctrl+`=`, Ctrl+`;` and the keypad's plus) and Zoom Out (Ctrl+Minus) SHALL change it by one step and Reset Zoom (Ctrl+0) set it to 100%, keeping the selected node in place on screen and in view.
 
 #### Scenario: Zooming in with the keyboard
 - **WHEN** Ctrl+Plus is pressed at 100%
 - **THEN** the map is shown at the next larger step, its text larger, and the selected node stays where it was on screen
+
+#### Scenario: Zoom level
+- **WHEN** the map is zoomed to 150%
+- **THEN** the status bar shows 150%
 
 #### Scenario: Limits
 - **WHEN** Ctrl+Minus is pressed at 50%

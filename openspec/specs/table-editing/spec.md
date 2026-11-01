@@ -6,7 +6,7 @@ Editing GitHub-flavored Markdown tables in the built-in editor cell by cell, wit
 ## Requirements
 
 ### Requirement: Creating a table
-Enter after a line that is a table header row (`| a | b |`) SHALL turn it into a table with that header, one empty row and the cursor in its first cell. Ctrl+T and Table → Insert Table SHALL insert a table with a header row and two columns and two rows after the active block. A table SHALL always keep its header row, at least one body row and at least one column.
+Enter after a line that is a table header row (`| a | b |`) SHALL turn it into a table with that header, one empty row and the cursor in its first cell. Ctrl+T and Table → Insert Table SHALL insert a table of two columns, with a header row and two body rows, after the active block. A table SHALL always keep its header row, at least one body row and at least one column.
 
 #### Scenario: Header row and Enter
 - **WHEN** `| Name | Note |` is typed in an empty paragraph and Enter is pressed
@@ -100,7 +100,7 @@ A table changed by the editor SHALL be written with a leading and trailing pipe 
 
 #### Scenario: Written table
 - **WHEN** a cell of `|a|b|` / `|-|-|` / `|1|2|` is changed to `xyz`
-- **THEN** the rows are written `| xyz | b   |`, `| --- | --- |`, `| 1   | 2   |` style with aligned pipes
+- **THEN** the rows are written `| xyz | b   |`, `| --- | --- |` and `| 1   | 2   |`
 
 ### Requirement: Clipboard commands in the cell menu
 The cell's right-click menu SHALL offer Cut, Copy, Paste and Select All before its row, column and alignment commands, each acting as from the Edit menu.

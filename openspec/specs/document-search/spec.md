@@ -49,7 +49,7 @@ Each result SHALL show the file's path relative to the document directory, its l
 - **THEN** the snippet shows that text with `tokyo` highlighted
 
 ### Requirement: Opening a result
-Double-click, or Enter on the selected result, SHALL open a Markdown (`.md`) file in the built-in editor (with the default application when Use Built-in Editor is unchecked) and any other file with its default application, and SHALL report a file that no longer exists instead.
+Double-click, or Enter on the selected result, SHALL open a Markdown (`.md`) file in the page editor (see document-management, Choosing the page editor) and any other file with its default application, and SHALL report a file that no longer exists instead.
 
 #### Scenario: Deleted since indexing
 - **WHEN** a result's file was deleted and the result is opened
@@ -85,11 +85,15 @@ Index updates SHALL be incremental (re-indexing only new and modified files and 
 - **THEN** every file is indexed again
 
 ### Requirement: Search panel
-F6 or Ctrl+F SHALL show the search panel under the map with the keyword box focused (also while the box already has the keyboard), keeping the previous query and results when it is shown again; Esc or Close SHALL hide it. Searching while the index is being updated SHALL work against the index on disk.
+F6 or Ctrl+F SHALL show the search panel under the map with the keyword box focused (also while the box already has the keyboard), keeping the previous query and results when it is shown again; Esc or Close SHALL hide it. While the keyword box has the keyboard, only the function keys and Ctrl+F SHALL run map commands; other keys go to the box. Searching while the index is being updated SHALL work against the index on disk.
 
 #### Scenario: Reopening the panel
 - **WHEN** the panel is closed after a search and F6 is pressed again
 - **THEN** the panel shows the same query and results
+
+#### Scenario: Typing in the keyword box
+- **WHEN** Tab or Delete is pressed while typing a search keyword
+- **THEN** no node is created or deleted
 
 #### Scenario: Ctrl+F in the keyword box
 - **WHEN** Ctrl+F is pressed while the keyword box has the keyboard

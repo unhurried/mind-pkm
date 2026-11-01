@@ -6,7 +6,7 @@ Showing only part of the mind map by a condition (F5), so that archived material
 ## Requirements
 
 ### Requirement: Filter commands
-F5 or Ctrl+Shift+F SHALL ask for a filter command and apply it: `a` shows all nodes; `t` shows `root > ToDo` with its ancestors and descendants; `d` shows the nodes whose text starts with a `yy/MM/dd` date on or before today, with their ancestors and descendants; any other text shows the nodes containing it, case-insensitively, with their ancestors and descendants. The status bar SHALL show the active filter.
+F5 or Ctrl+Shift+F SHALL ask for a filter command and apply it: `a` shows all nodes; `t` shows `root > ToDo` with its ancestors and descendants; `d` shows the nodes whose text starts with a `yy/MM/dd` date on or before today, with their ancestors and descendants; any other text shows the nodes containing it, case-insensitively, with their ancestors and descendants. The status bar SHALL show the active filter; cancelling the dialog SHALL keep it.
 
 #### Scenario: Keyword filter
 - **WHEN** the filter command `stuff` is entered
@@ -16,22 +16,16 @@ F5 or Ctrl+Shift+F SHALL ask for a filter command and apply it: `a` shows all no
 - **WHEN** the command `d` is entered on 2024-05-10
 - **THEN** `24/05/01 old task` is shown and `24/06/01 later` is hidden
 
-### Requirement: Archive filter
-The empty filter command SHALL hide every node named `archive` (case-insensitive) and everything under it, and show all other nodes.
-
-#### Scenario: Empty command
-- **WHEN** the filter dialog is confirmed with an empty command
-- **THEN** `Project > Archive` and its subtree are hidden and everything else is shown
-
-### Requirement: Cancelling keeps the filter
-Cancelling the filter dialog SHALL keep the current filter.
-
 #### Scenario: Cancelled
 - **WHEN** the filter dialog is cancelled
 - **THEN** the previous filter stays in effect
 
-### Requirement: Default filter
-A map SHALL open with the archive-hiding filter (the empty command) active.
+### Requirement: Archive filter
+The empty filter command SHALL hide every node named `archive` (case-insensitive) and everything under it, and show all other nodes. A map SHALL open with this filter active.
+
+#### Scenario: Empty command
+- **WHEN** the filter dialog is confirmed with an empty command
+- **THEN** `Project > Archive` and its subtree are hidden and everything else is shown
 
 #### Scenario: Opening a map
 - **WHEN** a map with an `archive` node is opened
