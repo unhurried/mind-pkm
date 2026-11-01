@@ -10,6 +10,7 @@ use crate::xml::{self, Element, XNode};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub type NodeId = usize;
@@ -94,6 +95,16 @@ pub struct MindMap {
     epilog: Vec<XNode>,
     ids: Arc<HashMap<String, NodeId>>,
     path: Option<PathBuf>,
+    /// Taken anew by every change of the nodes (`version`).
+    version: u64,
+}
+
+/// The next version a map's nodes take when they change: no two changes, in
+/// any map, take the same one.
+static NEXT_VERSION: AtomicU64 = AtomicU64::new(1);
+
+fn new_version() -> u64 {
+    NEXT_VERSION.fetch_add(1, Ordering::Relaxed)
 }
 
 fn now_millis() -> String {
@@ -112,6 +123,7 @@ impl MindMap {
             epilog: Vec::new(),
             ids: Arc::default(),
             path: None,
+            version: new_version(),
         };
         let root = map.alloc(Node::empty(None));
         map.root = root;
@@ -143,6 +155,7 @@ impl MindMap {
             epilog: doc.epilog,
             ids: Arc::default(),
             path: None,
+            version: new_version(),
         };
         let mut root = None;
         for child in doc.root.children {
@@ -161,6 +174,7 @@ impl MindMap {
     }
 
     fn alloc(&mut self, node: Node) -> NodeId {
+        self.version = new_version();
         self.nodes.push(Some(Arc::new(node)));
         self.nodes.len() - 1
     }
@@ -284,7 +298,15 @@ impl MindMap {
     }
 
     fn node_mut(&mut self, id: NodeId) -> &mut Node {
+        self.version = new_version();
         Arc::make_mut(self.nodes[id].as_mut().expect("deleted node"))
+    }
+
+    /// The version of the nodes, which every change of them makes new: two
+    /// maps of the same version have the same nodes (one is a copy of the
+    /// other, and neither changed since).
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     pub fn children(&self, id: NodeId) -> Vec<NodeId> {
@@ -388,6 +410,7 @@ impl MindMap {
             {
                 Arc::make_mut(&mut self.ids).remove(&fid);
             }
+            self.version = new_version();
             self.nodes[n] = None;
         }
     }
