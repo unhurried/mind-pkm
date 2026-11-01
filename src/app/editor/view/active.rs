@@ -2,6 +2,7 @@
 //! another code-like block as source, the table being edited.
 
 use super::blocks::{cell_frame, math_view, mermaid_view, quote_view, table_row};
+use super::heading;
 use super::inline::{inline_text, run_font};
 use super::theme::{
     CODE_FONT, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING, bold, code_text_style,
@@ -25,7 +26,7 @@ use crate::markdown::{BlockKind, images, table};
 use iced::advanced::text::Wrapping;
 use iced::widget::text_editor::Content;
 use iced::widget::{
-    Column, Row, button, column, container, image, mouse_area, row, rule, space, svg, text, text_editor, text_input,
+    Column, Row, button, column, container, image, mouse_area, row, space, svg, text, text_editor, text_input,
 };
 use iced::{Alignment, Background, Color, Element, Fill, Font, Padding, Theme, border};
 
@@ -331,24 +332,11 @@ impl Editor {
         let base = TextBase { size: ctx.size(1.0), font: APP_FONT, color: p.text };
         match &a.kind {
             BlockKind::Heading(level) => {
-                let scale = HEADING_SCALE[usize::from((*level).clamp(1, 6)) - 1];
-                let heading =
-                    body(TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: p.heading }, width, marks);
-                if *level <= 2 {
-                    column![
-                        heading,
-                        rule::horizontal(1).style(move |_| rule::Style {
-                            color: p.border,
-                            radius: 0.0.into(),
-                            fill_mode: rule::FillMode::Full,
-                            snap: true,
-                        })
-                    ]
-                    .spacing(4)
-                    .into()
-                } else {
-                    heading
-                }
+                let level = (*level).clamp(1, 6);
+                let scale = HEADING_SCALE[usize::from(level) - 1];
+                let base =
+                    TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: heading::text_color(level, p) };
+                heading::framed(level, base.size, width, ctx.zoom, p, |w| body(base, w, marks))
             }
             BlockKind::ListItem(item) => {
                 let indent = LIST_INDENT * ctx.zoom * item.depth as f32;
