@@ -46,7 +46,8 @@ pub use keys::{Bind, EditorCommand};
 pub use live_text::LiveMsg;
 use page::{Page, content_sel, move_content};
 pub use render::{RenderCache, RenderKey};
-use std::collections::{BTreeMap, VecDeque};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -288,6 +289,9 @@ pub struct Editor {
     right_pressed_at: Point,
     /// Where the page's right-click menu is open.
     context_menu: Option<Point>,
+    /// Whether the image files the page shows exist, as looked up for a
+    /// revision of the page (`is_image_file`).
+    image_files: RefCell<(u64, HashMap<PathBuf, bool>)>,
 }
 
 impl Editor {
@@ -323,7 +327,26 @@ impl Editor {
             pointer_at: Point::ORIGIN,
             right_pressed_at: Point::ORIGIN,
             context_menu: None,
+            image_files: RefCell::default(),
         }
+    }
+
+    /// Whether `path`, an image the page shows, is an existing file: looked
+    /// up once for every revision of the page rather than in every view, and
+    /// again after the window got the focus or the assets pane was read
+    /// (files may have changed meanwhile).
+    fn is_image_file(&self, path: &Path) -> bool {
+        let mut files = self.image_files.borrow_mut();
+        let revision = self.page.revision();
+        if files.0 != revision {
+            *files = (revision, HashMap::new());
+        }
+        *files.1.entry(path.to_path_buf()).or_insert_with(|| path.is_file())
+    }
+
+    /// Looks the images up again when they are next shown.
+    pub(super) fn forget_image_files(&mut self) {
+        self.image_files.get_mut().1.clear();
     }
 
     pub fn title(&self) -> String {
@@ -373,6 +396,9 @@ impl Editor {
                 | EditorMsg::Key(keyboard::Event::KeyPressed { .. })
         ) {
             self.context_menu = None;
+        }
+        if matches!(msg, EditorMsg::Assets(AssetsMsg::Read(..))) {
+            self.forget_image_files();
         }
         let before = self.cursor_state();
         let revision = self.page.revision();

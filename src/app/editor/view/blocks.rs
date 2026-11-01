@@ -213,7 +213,7 @@ pub(super) fn image_view<'a>(inline: &Inline, ctx: &Ctx<'a>, width: f32, block: 
     let path = images::image_path(editor.page.path(), editor.page.text(), src);
     let max = w.map_or(width, |w| (w * ctx.zoom).min(width));
     let shown: Element<EditorMsg> = match path {
-        Some(path) if path.is_file() => {
+        Some(path) if editor.is_image_file(&path) => {
             let is_svg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"));
             if is_svg {
                 svg(svg::Handle::from_path(&path)).width(Length::Shrink).height(Length::Shrink).into()
