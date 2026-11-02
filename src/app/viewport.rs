@@ -2,6 +2,7 @@
 
 use super::search_panel::ROW_HEIGHT;
 use super::ui::zoom_step;
+use super::view;
 use super::{App, MAP_SCROLL_ID, MapMsg, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
@@ -33,8 +34,8 @@ pub struct MapViewport {
     zoom: f32,
     /// Ctrl+wheel movement not yet turned into a zoom step, in notches.
     wheel_zoom: f32,
-    /// Node text sizes at 100%, by text.
-    measure_cache: HashMap<String, Size>,
+    /// Node text sizes at 100%, by text and width.
+    measure_cache: HashMap<view::MeasureKey, Size>,
     /// The drawn edges, cleared on every relayout.
     pub(super) edges: canvas::Cache,
     /// The scroll position, as last scrolled to or reported.
@@ -76,9 +77,10 @@ impl MapViewport {
         true
     }
 
-    /// The size of a node's text at the current zoom, as measured.
-    pub(super) fn measured(&self, text: &str) -> Option<Size> {
-        self.measure_cache.get(text).map(|&size| super::view::text_at_zoom(size, self.zoom))
+    /// The size of a node's text at the current zoom, as measured; `wide`: for
+    /// a node below ToDo, which wraps at a larger width.
+    pub(super) fn measured(&self, text: &str, wide: bool) -> Option<Size> {
+        self.measure_cache.get(&(text.to_string(), wide)).map(|&size| view::text_at_zoom(size, self.zoom))
     }
 }
 

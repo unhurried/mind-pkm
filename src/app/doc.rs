@@ -430,7 +430,12 @@ impl Doc {
     /// once and kept in `measure_cache`, at 100% (`view::text_at_zoom`).
     /// Either way the selection is kept to existing, shown nodes. Returns
     /// whether the map was laid out anew.
-    pub(super) fn relayout(&mut self, margin: Size, zoom: f32, measure_cache: &mut HashMap<String, Size>) -> bool {
+    pub(super) fn relayout(
+        &mut self,
+        margin: Size,
+        zoom: f32,
+        measure_cache: &mut HashMap<view::MeasureKey, Size>,
+    ) -> bool {
         self.fix_selection();
         let inputs = LayoutInputs { map: self.map.version(), filter: self.filter.clone(), margin, zoom };
         let anew = self.laid_out.as_ref() != Some(&inputs);
