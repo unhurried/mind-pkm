@@ -315,6 +315,13 @@ fn report(fanout: usize, sections: usize) {
         let at = Point::new(260.0 + (i % 5) as f32 * 7.0, 120.0 + i as f32 * 23.0);
         b.event(t, editor, Event::Mouse(mouse::Event::CursorMoved { position: at }), at)
     });
+    run("map: wheel scroll", &mut b, &mut |b, t, i| {
+        let at = Point::new(640.0, 400.0);
+        let main = b.app.main_window;
+        // Down the map, a little sideways now and then.
+        let delta = mouse::ScrollDelta::Lines { x: if i % 4 == 3 { -1.0 } else { 0.0 }, y: -2.0 };
+        b.event(t, main, Event::Mouse(mouse::Event::WheelScrolled { delta }), at)
+    });
     run("map: pointer moves over the map", &mut b, &mut |b, t, i| {
         let at = Point::new(200.0 + i as f32 * 31.0, 150.0 + i as f32 * 19.0);
         let main = b.app.main_window;

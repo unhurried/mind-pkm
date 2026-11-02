@@ -198,8 +198,8 @@ const CONTEXT_MENU_STYLE: MenuStyle = MenuStyle { width: 300.0, ..MENU_STYLE };
 
 // --- Measuring ---
 
-/// The size of a node's text as the text widget will lay it out at the zoom
-/// (the same font size for every node, the root included).
+/// The size of a node's text as the text widget lays it out at the zoom (the
+/// same font size for every node, the root included), not rounded.
 fn measure_text(content: &str, zoom: f32) -> Size {
     let content = if content.is_empty() { " " } else { content };
     let p = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
@@ -213,13 +213,24 @@ fn measure_text(content: &str, zoom: f32) -> Size {
         shaping: Shaping::Advanced,
         wrapping: Wrapping::WordOrGlyph,
     });
-    let b = p.min_bounds();
-    Size::new(b.width.ceil() + 1.0, b.height.ceil())
+    p.min_bounds()
 }
 
-/// `cache` holds the sizes at this zoom.
+/// The size of a node's text at the zoom, from its size at 100%: the text
+/// layout is not hinted, so at any zoom the text breaks into the same lines
+/// and every size grows with the font size. Rounded up, a pixel wider.
+pub fn text_at_zoom(at_100: Size, zoom: f32) -> Size {
+    Size::new((at_100.width * zoom).ceil() + 1.0, (at_100.height * zoom).ceil())
+}
+
+/// The size of a text at the zoom; `cache` holds the sizes at 100%, so that
+/// a text is measured once, whatever the zoom.
 fn text_size(cache: &mut HashMap<String, Size>, text: &str, zoom: f32) -> Size {
-    *cache.entry(text.to_string()).or_insert_with(|| measure_text(text, zoom))
+    let at_100 = match cache.get(text) {
+        Some(&size) => size,
+        None => *cache.entry(text.to_string()).or_insert(measure_text(text, 1.0)),
+    };
+    text_at_zoom(at_100, zoom)
 }
 
 /// The size of a node's box at the zoom: its text, icons and link marker,
@@ -867,5 +878,37 @@ impl canvas::Program<MapMsg> for EdgeLayer<'_> {
             frame.stroke(&path, stroke);
         });
         vec![geometry]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::viewport::ZOOM_STEPS;
+    use super::*;
+
+    /// What zooming relies on: a text measured at 100% takes the same lines
+    /// at every zoom step, its sizes grown with the font size.
+    #[test]
+    fn a_text_measured_at_100_percent_gives_its_size_at_every_zoom() {
+        let texts = [
+            "",
+            "root",
+            "07 プロジェクト Alpha 7 の資料と進め方",
+            "日本語だけの長いノードのテキストで、折り返しが何度も起きるくらいの長さにして、さらに続けて三行目にも届くようにする。",
+            "A long English node text that wraps at the maximum width of a node, three hundred and sixty pixels at 100%, and then goes on.",
+            "24/05/01 a task with emoji 😀 and marks ✔ ✘",
+            &"x".repeat(200),
+        ];
+        for text in texts {
+            let at_100 = measure_text(text, 1.0);
+            for &zoom in ZOOM_STEPS {
+                let exact = measure_text(text, zoom);
+                let scaled = at_100 * zoom;
+                assert!(
+                    (exact.width - scaled.width).abs() < 0.01 && (exact.height - scaled.height).abs() < 0.01,
+                    "{text:?} at {zoom}: measured {exact:?}, scaled {scaled:?}"
+                );
+            }
+        }
     }
 }

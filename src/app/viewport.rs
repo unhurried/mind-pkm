@@ -22,14 +22,14 @@ pub const ZOOM_STEPS: &[f32] = &[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1
 const WHEEL_PIXELS_PER_STEP: f32 = 60.0;
 
 /// What the map window shows of the map: the zoom, the scroll position, the
-/// viewport's size, a pan in progress, and what is drawn at the zoom (the
-/// measured text sizes, which hold the current zoom only, and the edges).
+/// viewport's size, a pan in progress, the measured text sizes (at 100%,
+/// scaled to the zoom) and the edges as drawn.
 pub struct MapViewport {
     /// One of `ZOOM_STEPS`.
     zoom: f32,
     /// Ctrl+wheel movement not yet turned into a zoom step, in notches.
     wheel_zoom: f32,
-    /// Node text sizes at the current zoom, by text.
+    /// Node text sizes at 100%, by text.
     measure_cache: HashMap<String, Size>,
     /// The drawn edges, cleared on every relayout.
     pub(super) edges: canvas::Cache,
@@ -63,20 +63,18 @@ impl MapViewport {
         self.zoom
     }
 
-    /// Sets the zoom level; the text sizes measured at the old one go.
-    /// Returns whether it changed.
+    /// Sets the zoom level. Returns whether it changed.
     pub(super) fn set_zoom(&mut self, zoom: f32) -> bool {
         if zoom == self.zoom {
             return false;
         }
         self.zoom = zoom;
-        self.measure_cache.clear();
         true
     }
 
-    /// The size of a node's text, as measured at the current zoom.
+    /// The size of a node's text at the current zoom, as measured.
     pub(super) fn measured(&self, text: &str) -> Option<Size> {
-        self.measure_cache.get(text).copied()
+        self.measure_cache.get(text).map(|&size| super::view::text_at_zoom(size, self.zoom))
     }
 }
 

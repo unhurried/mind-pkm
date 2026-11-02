@@ -427,7 +427,7 @@ impl Doc {
     /// Lays out the shown part of the map at the zoom, with `margin` around
     /// it, unless nothing the layout depends on changed since the last time
     /// (the map, the filter, the margin, the zoom); text sizes are measured
-    /// once and kept in `measure_cache`, which holds sizes at this zoom only.
+    /// once and kept in `measure_cache`, at 100% (`view::text_at_zoom`).
     /// Either way the selection is kept to existing, shown nodes. Returns
     /// whether the map was laid out anew.
     pub(super) fn relayout(&mut self, margin: Size, zoom: f32, measure_cache: &mut HashMap<String, Size>) -> bool {
