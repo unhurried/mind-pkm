@@ -36,10 +36,6 @@ pub enum ConfirmAction {
 /// What an input dialog's value is for.
 #[derive(Debug, Clone)]
 pub enum InputAction {
-    EditText(NodeId),
-    /// A node just created, with the serial number of the checkpoint before
-    /// it: cancelling or leaving it empty removes it again.
-    NewNode(NodeId, u64),
     Rename(NodeId, DocType),
     Filter,
     SetLink(NodeId),
@@ -168,27 +164,7 @@ impl App {
             return Task::none();
         }
         let Some(doc) = &mut self.doc else { return Task::none() };
-        let non_empty = value.clone().filter(|v| !v.is_empty());
         match action {
-            InputAction::EditText(id) => {
-                if let Some(v) = non_empty
-                    && doc.map().exists(id)
-                    && doc.map().text(id) != v
-                {
-                    doc.change(|map| map.set_text(id, &v));
-                }
-            }
-            InputAction::NewNode(id, serial) => match non_empty {
-                Some(v) if doc.map().exists(id) => doc.set_new_node_text(id, &v),
-                _ => {
-                    // The node goes; changes made meanwhile (a refresh) stay.
-                    let parent = doc.map().exists(id).then(|| doc.map().parent(id)).flatten();
-                    doc.cancel_new_node(id, serial);
-                    if let Some(p) = parent.filter(|&p| doc.map().exists(p)) {
-                        doc.select(vec![p]);
-                    }
-                }
-            },
             InputAction::Rename(..) => {}
             InputAction::Filter => {
                 // Cancelled: the current filter stays.

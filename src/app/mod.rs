@@ -20,6 +20,7 @@ mod file;
 mod ime;
 mod keys;
 mod layout;
+mod node_edit;
 mod placed;
 mod press_point;
 pub mod profile;
@@ -46,8 +47,9 @@ use drag::NodeDrag;
 use editor::{Editor, EditorMsg, EditorPrefs, RenderCache, RenderKey};
 use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
-use iced::widget::scrollable;
+use iced::widget::{scrollable, text_editor};
 use iced::{Point, Size, Subscription, Task, window};
+use node_edit::NodeEdit;
 use search_panel::{PanelFocus, SearchMsg, SearchPanel};
 use settings::WindowGeometry;
 use std::collections::{BTreeMap, VecDeque};
@@ -204,6 +206,10 @@ pub enum MapMsg {
     },
     CloseRequested,
     Tick,
+    /// An action of the text box of the node being edited.
+    NodeEdit(text_editor::Action),
+    /// Enter in the text box of the node being edited.
+    NodeEditConfirm,
     DialogInput(String),
     DialogOk,
     DialogCancel,
@@ -249,6 +255,8 @@ impl MapMsg {
             MapMsg::Key(_)
                 | MapMsg::Escape
                 | MapMsg::Command(_)
+                | MapMsg::NodeEdit(_)
+                | MapMsg::NodeEditConfirm
                 | MapMsg::Search(_)
                 | MapMsg::DialogOk
                 | MapMsg::FileChosen(..)
@@ -270,6 +278,8 @@ pub struct App {
     next_generation: u64,
     /// The queued dialogs; the first one is shown.
     dialogs: VecDeque<Dialog>,
+    /// The node whose text is being edited on the map.
+    node_edit: Option<NodeEdit>,
     search: SearchPanel,
     /// The open menu: an index into `view::MENUS`.
     menu: Option<usize>,
@@ -335,6 +345,7 @@ impl App {
             doc: None,
             next_generation: 0,
             dialogs: VecDeque::new(),
+            node_edit: None,
             search: SearchPanel::default(),
             menu: None,
             context_menu: None,
@@ -463,6 +474,13 @@ impl App {
                 return Task::none();
             }
         };
+        // Acting elsewhere than in the text box confirms the text being edited.
+        if let Some(edited) = self.node_edit.as_ref().map(NodeEdit::id)
+            && message.confirms_node_edit(edited)
+        {
+            self.confirm_node_edit();
+            self.relayout();
+        }
         if !message.may_change_layout() {
             return self.handle(message);
         }
@@ -566,6 +584,14 @@ impl App {
                 let pages = self.editors_tick();
                 let due = self.doc.as_ref().is_some_and(|d| d.refresh_due(UPDATE_INTERVAL));
                 Task::batch([pages, if due { self.start_update(false) } else { Task::none() }])
+            }
+            MapMsg::NodeEdit(action) => {
+                self.node_edit_action(action);
+                Task::none()
+            }
+            MapMsg::NodeEditConfirm => {
+                self.confirm_node_edit();
+                Task::none()
             }
             MapMsg::DialogInput(value) => {
                 self.dialog_input(value);

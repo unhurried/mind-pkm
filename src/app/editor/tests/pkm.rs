@@ -35,8 +35,8 @@ fn undo_in_the_map_does_not_go_back_across_a_rename() {
     std::fs::create_dir(f.doc_dir.join("Plan.assets")).unwrap();
     // An edit before the rename: its undo step would bring back the old name too.
     send(&mut app, MapMsg::Command(Command::NewChild));
-    send(&mut app, MapMsg::DialogInput("child".into()));
-    send(&mut app, MapMsg::DialogOk);
+    crate::app::test_support::type_node_text(&mut app, "child");
+    send(&mut app, MapMsg::NodeEditConfirm);
     app.doc.as_mut().unwrap().select(vec![node]);
     rename_with_f2(&mut app, "Done");
     assert_eq!(app.doc.as_ref().unwrap().map().text(node), "Done");

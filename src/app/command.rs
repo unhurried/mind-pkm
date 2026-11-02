@@ -2,6 +2,7 @@
 
 use super::dialog::{ConfirmAction, InputAction};
 use super::file::{AfterUnsaved, FileAction};
+use super::node_edit::EditFor;
 use super::ui::zoom_step;
 use super::{App, MapMsg, Message, blocking, settings, viewport};
 use crate::mindmap::{MindMap, NodeId, Subtree};
@@ -12,7 +13,6 @@ use chrono::Local;
 use iced::Task;
 use std::path::{Path, PathBuf};
 
-const NEW_TEXT_PROMPT: &str = "New Text";
 const NEW_NAME_PROMPT: &str = "New Name";
 const LINK_PROMPT: &str = "Link (a file path, URL, or #ID of a node; empty removes it)";
 
@@ -111,16 +111,16 @@ impl App {
             Command::NewChild => {
                 let (n, serial) = doc.new_child();
                 self.warn_if_under_page(&[n]);
-                self.open_input(NEW_TEXT_PROMPT, String::new(), InputAction::NewNode(n, serial))
+                self.start_node_edit(n, "", EditFor::NewNode(serial))
             }
             Command::NewSibling => {
                 let (n, serial) = doc.new_sibling();
                 self.warn_if_under_page(&[n]);
-                self.open_input(NEW_TEXT_PROMPT, String::new(), InputAction::NewNode(n, serial))
+                self.start_node_edit(n, "", EditFor::NewNode(serial))
             }
             Command::EditText => {
                 let text = doc.map().text(focus);
-                self.open_input(NEW_TEXT_PROMPT, text, InputAction::EditText(focus))
+                self.start_node_edit(focus, &text, EditFor::Text)
             }
             Command::Cut => self.cut_or_copy(true),
             Command::Copy => self.cut_or_copy(false),
@@ -293,7 +293,7 @@ impl App {
         let focus = doc.focus();
         let text = doc.map().text(focus);
         match commands::edit_kind(doc.map(), doc.selection(), focus) {
-            Ok(EditKind::Text) => self.open_input(NEW_TEXT_PROMPT, text, InputAction::EditText(focus)),
+            Ok(EditKind::Text) => self.start_node_edit(focus, &text, EditFor::Text),
             Ok(EditKind::Rename(kind)) => self.open_input(NEW_NAME_PROMPT, text, InputAction::Rename(focus, kind)),
             Err(e) => {
                 self.message(e);

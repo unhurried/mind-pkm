@@ -325,8 +325,13 @@ fn report(fanout: usize, sections: usize) {
         b.step(t, MapMsg::Command(if i % 2 == 0 { Command::ZoomIn } else { Command::ZoomOut }))
     });
     b.unmeasured(MapMsg::Command(Command::EditText));
-    run("map: typing in a dialog", &mut b, &mut |b, t, i| b.step(t, MapMsg::DialogInput("x".repeat(i + 1))));
-    b.unmeasured(MapMsg::DialogCancel);
+    run("map: typing in a node", &mut b, &mut |b, t, _| {
+        b.step(
+            t,
+            MapMsg::NodeEdit(iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Insert('x'))),
+        )
+    });
+    b.unmeasured(MapMsg::Escape);
     run("map: tick (any message)", &mut b, &mut |b, t, _| b.step(t, MapMsg::Tick));
 
     // The editor window.

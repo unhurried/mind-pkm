@@ -2,9 +2,10 @@
 
 use super::command::Command;
 use super::dialog::Dialog;
-use super::doc::Doc;
+use super::doc::{Doc, Draft};
 use super::drag::DropPlace;
 use super::layout::{MapLayout, NodeBox};
+use super::node_edit::{self, NODE_EDIT_ID};
 use super::placed;
 use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SCOPES, SEARCH_INPUT_ID, SORTS, SearchMsg};
 use super::ui::{self, DialogStyle, Menu, MenuStyle};
@@ -17,11 +18,11 @@ use iced::widget::canvas::{self, Cache, Path, Stroke};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::{
     Column, Stack, button, canvas as canvas_widget, center, column, container, mouse_area, pick_list, pin, rich_text,
-    row, scrollable, space, stack, text, text_input, tooltip,
+    row, scrollable, space, stack, text, text_editor, text_input, tooltip,
 };
 use iced::{
-    Alignment, Background, Color, Element, Fill, Font, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector, border,
-    mouse,
+    Alignment, Background, Border, Color, Element, Fill, Font, Point, Rectangle, Renderer, Shadow, Size, Theme, Vector,
+    border, mouse,
 };
 use std::collections::HashMap;
 
@@ -38,6 +39,10 @@ const NODE_LINE_HEIGHT: f32 = 1.2;
 /// from the Next Steps) at `TODO_ITEM_MAX_TEXT_WIDTH`.
 const NODE_MAX_TEXT_WIDTH: f32 = 400.0;
 const TODO_ITEM_MAX_TEXT_WIDTH: f32 = 800.0;
+/// The width a node's text box has at least while its text is edited, and the
+/// room it keeps for the caret at the end of a line (at 100% zoom).
+const EDIT_MIN_WIDTH: f32 = 24.0;
+const EDIT_CARET_ROOM: f32 = 3.0;
 const NODE_PADDING: [f32; 2] = [1.0, 7.0];
 const ICON_WIDTH: f32 = 18.0;
 const ROW_SPACING: f32 = 3.0;
@@ -263,10 +268,29 @@ fn text_size(cache: &mut HashMap<MeasureKey, Size>, text: &str, wide: bool, zoom
     text_at_zoom(at_100, zoom)
 }
 
+/// The size of the text box of a node being edited: the text typed so far (not
+/// kept in the cache of measured sizes: it changes with every key), with room
+/// for the caret at the end of a line, and not narrower than `EDIT_MIN_WIDTH`.
+fn edited_text_size(text: &str, wide: bool, zoom: f32) -> Size {
+    let max_width = if wide { TODO_ITEM_MAX_TEXT_WIDTH } else { NODE_MAX_TEXT_WIDTH };
+    let size = text_at_zoom(measure_text(text, max_width, 1.0), zoom);
+    Size::new(size.width.max(EDIT_MIN_WIDTH * zoom) + EDIT_CARET_ROOM * zoom, size.height)
+}
+
 /// The size of a node's box at the zoom: its text, icons and link marker,
 /// with padding and the border.
-pub fn node_size(cache: &mut HashMap<MeasureKey, Size>, map: &MindMap, id: NodeId, zoom: f32) -> Size {
-    let t = text_size(cache, &map.text(id), is_below_todo(map, id), zoom);
+pub fn node_size(
+    cache: &mut HashMap<MeasureKey, Size>,
+    map: &MindMap,
+    id: NodeId,
+    zoom: f32,
+    draft: Option<&Draft>,
+) -> Size {
+    let wide = is_below_todo(map, id);
+    let t = match draft.filter(|d| d.id == id) {
+        Some(d) => edited_text_size(&d.text, wide, zoom),
+        None => text_size(cache, &map.text(id), wide, zoom),
+    };
     let extras = map.icons(id).len() + usize::from(map.link(id).is_some());
     let pad = NODE_PADDING;
     Size::new(
@@ -406,6 +430,7 @@ impl App {
         // of thousands of nodes would mean thousands of widgets to build, lay
         // out and hand every event after every message.
         let near = self.near_view(size);
+        let edited = self.node_edit.as_ref().map(|e| e.id());
         let mut nodes = placed::placed(size);
         // The branch point handles go under the nodes: a wide node next to a
         // narrow parent keeps its own clicks where it reaches into a handle.
@@ -419,7 +444,8 @@ impl App {
             }
         }
         for b in &layout.boxes {
-            if b.rect.intersects(&near) {
+            // The node being edited is always built: it has the keyboard.
+            if b.rect.intersects(&near) || edited == Some(b.id) {
                 nodes.push((b.id, Part::Node), b.rect.position(), self.node_view(doc, b));
             }
             if b.folded
@@ -472,10 +498,14 @@ impl App {
         let map = &doc.map();
         let label = map.text(id);
         let zoom = self.viewport.zoom();
-        let tsize = self
-            .viewport
-            .measured(&label, is_below_todo(map, id))
-            .unwrap_or(Size::new(max_text_width(map, id), 20.0) * zoom);
+        let edit = self.node_edit.as_ref().filter(|e| e.id() == id);
+        let tsize = match edit {
+            Some(e) => edited_text_size(&e.text(), is_below_todo(map, id), zoom),
+            None => self
+                .viewport
+                .measured(&label, is_below_todo(map, id))
+                .unwrap_or(Size::new(max_text_width(map, id), 20.0) * zoom),
+        };
         let (font_size, icon_width) = (NODE_FONT_SIZE * zoom, ICON_WIDTH * zoom);
         let mut content = row![].spacing(ROW_SPACING * zoom).align_y(Alignment::Center);
         for icon in map.icons(id) {
@@ -484,16 +514,36 @@ impl App {
                 text(glyph).size(font_size).line_height(NODE_LINE_HEIGHT).color(color).width(icon_width).center(),
             );
         }
-        content = content.push(
-            text(label)
+        let label: Element<MapMsg> = match edit {
+            Some(e) => text_editor(e.content())
+                .id(NODE_EDIT_ID)
+                .on_action(MapMsg::NodeEdit)
+                .key_binding(node_edit::key_binding)
+                .size(font_size)
+                .line_height(NODE_LINE_HEIGHT)
+                .font(APP_FONT)
+                .padding(0)
+                .wrapping(Wrapping::WordOrGlyph)
+                .width(tsize.width)
+                .style(|_, _| text_editor::Style {
+                    background: Background::Color(Color::TRANSPARENT),
+                    border: Border::default(),
+                    placeholder: MUTED,
+                    value: Color::BLACK,
+                    selection: SELECTED_BORDER.scale_alpha(0.35),
+                })
+                .into(),
+            None => text(label)
                 .size(font_size)
                 .line_height(NODE_LINE_HEIGHT)
                 .font(APP_FONT)
                 .shaping(Shaping::Advanced)
                 .wrapping(Wrapping::WordOrGlyph)
                 .width(tsize.width)
-                .color(if map.has_icon(id, ICON_CHECKMARK) { MUTED } else { Color::BLACK }),
-        );
+                .color(if map.has_icon(id, ICON_CHECKMARK) { MUTED } else { Color::BLACK })
+                .into(),
+        };
+        content = content.push(label);
         if map.link(id).is_some() {
             let glyph = if map.link_node(id).is_some() { "→" } else { "↗" };
             content = content.push(super::arrow_cursor::hand_cursor(
@@ -985,7 +1035,7 @@ mod tests {
 
     /// The width of a node's box at 100% zoom.
     fn width(map: &MindMap, id: NodeId) -> f32 {
-        node_size(&mut HashMap::new(), map, id, 1.0).width
+        node_size(&mut HashMap::new(), map, id, 1.0, None).width
     }
 
     #[test]

@@ -125,8 +125,10 @@ impl App {
     /// Recomputes the layout if anything it depends on changed; the edges
     /// are drawn again only then.
     pub(super) fn relayout(&mut self) {
+        let draft = self.draft();
         let Some(doc) = &mut self.doc else { return };
-        if doc.relayout(Size::new(MAP_MARGIN, MAP_MARGIN), self.viewport.zoom, &mut self.viewport.measure_cache) {
+        if doc.relayout(Size::new(MAP_MARGIN, MAP_MARGIN), self.viewport.zoom, &mut self.viewport.measure_cache, draft)
+        {
             self.viewport.edges.clear();
         }
     }
