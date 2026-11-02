@@ -238,6 +238,15 @@ pub fn node_size(cache: &mut HashMap<String, Size>, map: &MindMap, id: NodeId, z
 
 impl App {
     pub(super) fn view(&self, window: iced::window::Id) -> Element<'_, Message> {
+        if !super::profile::enabled() {
+            return self.window_view(window);
+        }
+        let name = if self.editors.contains_key(&window) { "editor" } else { "map" };
+        let view = super::profile::time(super::profile::Phase::View, || name.into(), || self.window_view(window));
+        super::profile::timed(name, view)
+    }
+
+    fn window_view(&self, window: iced::window::Id) -> Element<'_, Message> {
         if let Some(editor) = self.editors.get(&window) {
             return editor.view(&self.editor_prefs, &self.renders).map(move |m| Message::Editor(window, m));
         }

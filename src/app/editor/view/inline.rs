@@ -6,6 +6,7 @@ use super::hit::{HitInfo, HitRun};
 use super::theme::{CODE_FONT, LINE_HEIGHT, bold, italic};
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::{EditorMsg, RightClick};
+use crate::app::press_point::press_in;
 use crate::markdown::content::{Inline, Link, SourceMap, Style};
 use iced::advanced::text::Wrapping;
 use iced::widget::text::Span;
@@ -214,10 +215,15 @@ fn text_line<'a>(
     let info = Arc::new(HitInfo { block, runs: hits, width: width.unwrap_or(f32::INFINITY) });
     // Where an item dragged from the assets pane would go, in this text.
     let mark = ctx.editor.drop_mark_in(&info);
-    let area = mouse_area(rich)
-        .on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt))
-        .on_press(EditorMsg::TextPressed)
-        .on_right_press(EditorMsg::RightClicked(RightClick::Text));
+    let mut area =
+        mouse_area(rich).on_press(EditorMsg::TextPressed).on_right_press(EditorMsg::RightClicked(RightClick::Text));
+    // While an item of the assets pane is dragged, where the pointer is in the text.
+    if ctx.editor.asset_dragging() {
+        let info = info.clone();
+        area = area.on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt));
+    }
+    // Where a press lands in the text, before the press itself.
+    let area = press_in(area, move |pt| EditorMsg::PointerOver(info.clone(), pt));
     match mark {
         Some(r) => stack![
             area,

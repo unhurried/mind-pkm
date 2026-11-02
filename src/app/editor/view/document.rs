@@ -133,8 +133,12 @@ impl Editor {
                             let boxed = container(rendered).width(Fill).id(self.id(&format!("block-{i}")));
                             let mut area = mouse_area(boxed)
                                 .on_press(EditorMsg::BlockPressed(i))
-                                .on_right_press(EditorMsg::RightClicked(RightClick::Block(i)))
-                                .on_enter(EditorMsg::BlockEntered(i));
+                                .on_right_press(EditorMsg::RightClicked(RightClick::Block(i)));
+                            // Entering a block matters while the button is held from a
+                            // press on the page (selecting blocks) or an item is dragged.
+                            if self.pressed() || dragging {
+                                area = area.on_enter(EditorMsg::BlockEntered(i));
+                            }
                             if dragging {
                                 area = area.on_move(move |_| EditorMsg::Assets(AssetsMsg::BlockHovered(i)));
                             }

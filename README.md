@@ -205,6 +205,16 @@ cargo build --release            # target/release/mind-pkm(.exe)
 
 The application is developed for Windows but builds and runs on Linux too, which is handy for development; `cargo build --release --target x86_64-pc-windows-gnu` cross-compiles the Windows exe from Linux (with the MinGW toolchain installed).
 
+### Measuring Performance
+
+With the environment variable `MIND_PKM_PROFILE` naming a file (e.g. `set MIND_PKM_PROFILE=C:\temp\mind-pkm-profile.tsv` before starting the exe), the application writes there how long each message took to handle and, after it, how long every window took to build, compare, lay out and draw, and to handle its events: one tab-separated line `<seconds since start> <phase> <message or window> <microseconds>` each. Without the variable nothing is timed.
+
+The benchmark `app::perf` measures the same without windows (a headless renderer) on a generated map of about 3,600 nodes with a page of 40 code blocks open: keys, clicks, zooming, typing, pointer moves. It runs in release mode (iced's test renderer, which other tests use, needs debug assertions in `iced_core`):
+
+```bash
+cargo test --release --lib --config 'profile.release.package.iced_core.debug-assertions=true' perf -- --ignored --nocapture --test-threads=1
+```
+
 ### Dev Container
 
 The [devcontainer-claude-code](https://github.com/unhurried/devcontainer-claude-code) dev container has everything else this repository needs. Clone this repository under its `repos/` and, with `PROXY_MODE=open` (crates.io, npm and the IPADIC dictionary are outside its allowlist), set it up once:
@@ -225,7 +235,7 @@ Then switch back to the allowlist: building, testing and `openspec validate` nee
 - `src/pkm/` - the PKM conventions and commands (`commands.rs`), the Next Steps refresh (`next_steps.rs`), the filter (`filter.rs`)
 - `src/search/` - the full-text index (tantivy + lindera), text extraction from PDF/Office files
 - `src/markdown/` - Markdown for the page editor without UI: blocks and inline content (pulldown-cmark), the editing rules, tables, find, word counts, HTML and PDF export
-- `src/app/` - the iced UI: state and messages (`mod.rs`), the open map and its undo history (`doc.rs`), commands (`command.rs`), keyboard (`keys.rs`), dialogs (`dialog.rs`), file handling (`file.rs`), scrolling (`viewport.rs`), drag and drop of nodes (`drag.rs`), rendering (`view.rs`), map layout (`layout.rs`), the search panel (`search_panel.rs`), the page editor's windows (`editor/`)
+- `src/app/` - the iced UI: state and messages (`mod.rs`), the open map and its undo history (`doc.rs`), commands (`command.rs`), keyboard (`keys.rs`), dialogs (`dialog.rs`), file handling (`file.rs`), scrolling (`viewport.rs`), drag and drop of nodes (`drag.rs`), rendering (`view.rs`), map layout (`layout.rs`), the search panel (`search_panel.rs`), the page editor's windows (`editor/`), timings (`profile.rs`) and the benchmark (`perf.rs`)
 - `src/lib.rs` - the library holding all of the above (`src/main.rs` only starts the application); `tests/` - property tests against it
 
 ### Specifications

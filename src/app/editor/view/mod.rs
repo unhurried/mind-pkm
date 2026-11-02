@@ -27,6 +27,7 @@ pub use theme::{BODY_SIZE, CODE_FONT, Palette, TEXT_LINE_HEIGHT, code_text_style
 use super::render::RenderCache;
 use super::{Editor, EditorMsg, EditorPrefs};
 use crate::app::arrow_cursor::arrow_cursor;
+use crate::app::press_point::press_at;
 use crate::app::right_press::right_press_at;
 use chrome::dialog_view;
 use iced::widget::{Stack, column, container, mouse_area, row, space, stack};
@@ -108,12 +109,14 @@ impl Editor {
         if let Some(dialog) = self.dialogs.front() {
             layers = layers.push(dialog_view(dialog, p, self.id("rename")));
         }
-        // While a table is edited or the assets pane is shown, where the
-        // pointer is (a menu opens there, a dragged item follows it).
+        // Where the pointer is while an item of the assets pane is pressed (a
+        // dragged item follows it), else where a press is (a drag starts or an
+        // item's menu opens there).
         let mut root = mouse_area(layers);
-        if self.page.active().is_some_and(|a| a.table().is_some()) || self.assets.is_some() {
+        if self.asset_pressed() {
             root = root.on_move(EditorMsg::PointerAt);
         }
+        let root = press_at(root, EditorMsg::PointerAt);
         // Where a right click is, for the menu it opens.
         arrow_cursor(right_press_at(root, EditorMsg::RightPressedAt)).into()
     }

@@ -33,12 +33,17 @@ pub struct FindBar {
 }
 
 impl FindBar {
+    /// Whether the matches were found in this revision of the page, for the
+    /// query as it is.
+    fn found_in(&self, revision: u64) -> bool {
+        self.found.as_ref().is_some_and(|(r, q, c)| *r == revision && *q == self.query && *c == self.match_case)
+    }
+
     /// Finds the matches again if the page or the query changed.
     pub fn refresh(&mut self, text: &str, revision: u64) {
-        let key = (revision, self.query.clone(), self.match_case);
-        if self.found.as_ref() != Some(&key) {
+        if !self.found_in(revision) {
             self.matches = find::find_all(text, &self.query, self.match_case);
-            self.found = Some(key);
+            self.found = Some((revision, self.query.clone(), self.match_case));
         }
     }
 }
@@ -64,13 +69,14 @@ impl Editor {
         }
     }
 
+    /// Finds the matches again if the find bar is open and the page or the
+    /// query changed (after every message: the text is taken only then).
     pub(super) fn refresh_find(&mut self) {
-        let text = match &self.source {
-            Some(source) => source.text(),
-            None => self.page.text().to_string(),
-        };
-        if let Some(bar) = &mut self.find {
-            bar.refresh(&text, self.page.revision());
+        let revision = self.page.revision();
+        let Some(bar) = self.find.as_mut().filter(|bar| !bar.found_in(revision)) else { return };
+        match &self.source {
+            Some(source) => bar.refresh(&source.text(), revision),
+            None => bar.refresh(self.page.text(), revision),
         }
     }
 

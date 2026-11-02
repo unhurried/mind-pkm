@@ -18,6 +18,7 @@ impl App {
         if focused {
             editor.check_disk();
             editor.assets_stale();
+            editor.forget_image_files();
             return Task::none();
         }
         let mut effects = Vec::new();

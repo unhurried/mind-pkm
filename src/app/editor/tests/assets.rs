@@ -369,3 +369,25 @@ fn an_asset_dropped_in_source_mode_goes_at_the_cursor() {
     editor(&mut app, id, EditorMsg::Released);
     assert_eq!(page_text(&app, id), "a![](Plan.assets/a.png)b\n");
 }
+
+#[test]
+fn an_image_is_looked_up_again_after_a_change_the_focus_or_a_read_of_the_pane() {
+    let (mut app, f, id) = app_with_assets("![shot](Plan.assets/shot.png)\n", &[]);
+    let image = f.doc_dir.join("Plan.assets").join("shot.png");
+    assert!(!app.editors[&id].is_image_file(&image));
+    std::fs::write(&image, "png").unwrap();
+    // Not in every view...
+    assert!(!app.editors[&id].is_image_file(&image));
+    // ...but once the window got the focus,
+    send(&mut app, Message::Window(id, WindowEvent::Focused));
+    assert!(app.editors[&id].is_image_file(&image));
+    // the page changed,
+    std::fs::remove_file(&image).unwrap();
+    click_after(&mut app, id, "png)");
+    typing(&mut app, id, "x");
+    assert!(!app.editors[&id].is_image_file(&image));
+    // or the assets pane was read.
+    std::fs::write(&image, "png").unwrap();
+    finish_read(&mut app, id);
+    assert!(app.editors[&id].is_image_file(&image));
+}

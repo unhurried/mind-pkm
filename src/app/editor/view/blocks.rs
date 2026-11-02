@@ -12,6 +12,7 @@ use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::highlight::{self};
 use crate::app::editor::render::{RenderKey, Rendered};
 use crate::app::editor::{Editor, EditorMsg, RightClick};
+use crate::app::press_point::press_in;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Node, TableNode};
 use crate::markdown::{BlockKind, ListItem, images};
@@ -111,11 +112,17 @@ fn code_text_view<'a>(
     let p = ctx.p;
     let code = code.strip_suffix('\n').unwrap_or(code);
     let size = ctx.size(0.9);
-    let colored = highlight::highlight_code(code, lang, p.dark);
+    let colored = highlight::highlight_code_cached(code, lang, p.dark);
     let mut lines = Column::new();
     for (n, line) in code.split('\n').enumerate() {
-        let pieces: Vec<(String, Color)> =
-            colored.as_ref().and_then(|c| c.get(n).cloned()).unwrap_or_else(|| vec![(line.to_string(), p.text)]);
+        let plain;
+        let pieces: &[(String, Color)] = match colored.as_ref().as_ref().and_then(|c| c.get(n)) {
+            Some(pieces) => pieces,
+            None => {
+                plain = [(line.to_string(), p.text)];
+                &plain
+            }
+        };
         let spans: Vec<Span<'static, SpanLink, Font>> =
             pieces.iter().map(|(t, c)| Span::new(t.clone()).color(*c).font(CODE_FONT).size(size)).collect();
         let rich = rich_text(spans).size(size).font(CODE_FONT).line_height(LINE_HEIGHT).wrapping(Wrapping::WordOrGlyph);
@@ -127,11 +134,16 @@ fn code_text_view<'a>(
                     runs: vec![HitRun { text: line.to_string(), size, font: CODE_FONT, map: Some(map) }],
                     width: width - 2.0 * CODE_PADDING,
                 });
-                mouse_area(rich.width(width - 2.0 * CODE_PADDING))
-                    .on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt))
+                let mut area = mouse_area(rich.width(width - 2.0 * CODE_PADDING))
                     .on_press(EditorMsg::TextPressed)
-                    .on_right_press(EditorMsg::RightClicked(RightClick::Text))
-                    .into()
+                    .on_right_press(EditorMsg::RightClicked(RightClick::Text));
+                // As in other text: where a press lands, and where the pointer is
+                // while an item of the assets pane is dragged.
+                if ctx.editor.asset_dragging() {
+                    let info = info.clone();
+                    area = area.on_move(move |pt| EditorMsg::PointerOver(info.clone(), pt));
+                }
+                press_in(area, move |pt| EditorMsg::PointerOver(info.clone(), pt)).into()
             }
             None => rich.into(),
         };
@@ -201,7 +213,7 @@ pub(super) fn image_view<'a>(inline: &Inline, ctx: &Ctx<'a>, width: f32, block: 
     let path = images::image_path(editor.page.path(), editor.page.text(), src);
     let max = w.map_or(width, |w| (w * ctx.zoom).min(width));
     let shown: Element<EditorMsg> = match path {
-        Some(path) if path.is_file() => {
+        Some(path) if editor.is_image_file(&path) => {
             let is_svg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"));
             if is_svg {
                 svg(svg::Handle::from_path(&path)).width(Length::Shrink).height(Length::Shrink).into()

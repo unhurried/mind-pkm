@@ -106,11 +106,13 @@ impl App {
         })
     }
 
-    /// Recomputes the layout.
+    /// Recomputes the layout if anything it depends on changed; the edges
+    /// are drawn again only then.
     pub(super) fn relayout(&mut self) {
         let Some(doc) = &mut self.doc else { return };
-        doc.relayout(Size::new(MAP_MARGIN, MAP_MARGIN), self.viewport.zoom, &mut self.viewport.measure_cache);
-        self.viewport.edges.clear();
+        if doc.relayout(Size::new(MAP_MARGIN, MAP_MARGIN), self.viewport.zoom, &mut self.viewport.measure_cache) {
+            self.viewport.edges.clear();
+        }
     }
 
     /// Ctrl+wheel: zooms by the notches turned (pixel deltas are added up),

@@ -115,7 +115,7 @@ fn live_runs(
                         let path = images::image_path(page.path(), page.text(), src);
                         let max_width = w.map(|w| w * ctx.zoom);
                         match path {
-                            Some(path) if path.is_file() => {
+                            Some(path) if ctx.editor.is_image_file(&path) => {
                                 if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
                                     RunKind::SvgFile { handle: svg::Handle::from_path(&path), max_width }
                                 } else {

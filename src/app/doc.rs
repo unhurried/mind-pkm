@@ -39,6 +39,18 @@ pub struct Doc {
     serial: u64,
     /// The map as last laid out: where a selected node that is gone was.
     shown: MindMap,
+    /// What the layout was computed from.
+    laid_out: Option<LayoutInputs>,
+}
+
+/// What a layout depends on: the map (its version), the filter, the margin
+/// and the zoom.
+#[derive(Debug, PartialEq)]
+struct LayoutInputs {
+    map: u64,
+    filter: Filter,
+    margin: Size,
+    zoom: f32,
 }
 
 /// The map as it was before a change, with the serial number identifying it
@@ -74,6 +86,7 @@ impl Doc {
             undo: VecDeque::new(),
             redo: Vec::new(),
             serial: 0,
+            laid_out: None,
         }
     }
 
@@ -370,7 +383,6 @@ impl Doc {
         if self.selection.is_empty() {
             self.selection = vec![self.focus];
         }
-        self.shown = self.map.clone();
     }
 
     /// The node of the map nearest to where `gone` was in the map last laid
@@ -412,16 +424,26 @@ impl Doc {
 
     // --- Layout ---
 
-    /// Lays out the shown part of the map at the zoom, with `margin` around it;
-    /// text sizes are measured once and kept in `measure_cache`, which holds
-    /// sizes at this zoom only.
-    pub(super) fn relayout(&mut self, margin: Size, zoom: f32, measure_cache: &mut HashMap<String, Size>) {
+    /// Lays out the shown part of the map at the zoom, with `margin` around
+    /// it, unless nothing the layout depends on changed since the last time
+    /// (the map, the filter, the margin, the zoom); text sizes are measured
+    /// once and kept in `measure_cache`, which holds sizes at this zoom only.
+    /// Either way the selection is kept to existing, shown nodes. Returns
+    /// whether the map was laid out anew.
+    pub(super) fn relayout(&mut self, margin: Size, zoom: f32, measure_cache: &mut HashMap<String, Size>) -> bool {
         self.fix_selection();
-        let visible = self.filter.visible(&self.map);
-        let map = &self.map;
-        self.layout =
-            layout::layout(map, &visible, margin, zoom, &mut |id| view::node_size(measure_cache, map, id, zoom));
+        let inputs = LayoutInputs { map: self.map.version(), filter: self.filter.clone(), margin, zoom };
+        let anew = self.laid_out.as_ref() != Some(&inputs);
+        if anew {
+            self.shown = self.map.clone();
+            let visible = self.filter.visible(&self.map);
+            let map = &self.map;
+            self.layout =
+                layout::layout(map, &visible, margin, zoom, &mut |id| view::node_size(measure_cache, map, id, zoom));
+            self.laid_out = Some(inputs);
+        }
         self.select_shown();
+        anew
     }
 
     pub(super) fn focus_rect(&self) -> Option<Rectangle> {
@@ -590,6 +612,41 @@ mod tests {
         let refreshed = doc.map.children(root)[1];
         doc.redo();
         assert_ne!(doc.map.children(root)[1], refreshed);
+    }
+
+    #[test]
+    fn the_map_is_laid_out_again_only_when_its_layout_may_change() {
+        let mut doc = doc();
+        let root = doc.map.root();
+        let a = doc.map.add_child(root, "a");
+        let a1 = doc.map.add_child(a, "a1");
+        let mut cache = HashMap::new();
+        let mut relayout = |doc: &mut Doc, zoom: f32| doc.relayout(Size::ZERO, zoom, &mut cache);
+        assert!(relayout(&mut doc, 1.0));
+        assert!(!relayout(&mut doc, 1.0));
+        // Selecting changes nothing laid out.
+        doc.select(vec![a1]);
+        assert!(!relayout(&mut doc, 1.0));
+        // The map, the filter and the zoom do.
+        doc.change(|map| map.set_text(a1, "a1 renamed"));
+        assert!(relayout(&mut doc, 1.0));
+        assert_eq!(doc.layout.get(a1).unwrap().rect.width, box_width(&doc.map, a1));
+        doc.undo();
+        assert!(relayout(&mut doc, 1.0));
+        doc.set_filter(Filter::All);
+        assert!(relayout(&mut doc, 1.0));
+        assert!(relayout(&mut doc, 2.0));
+        assert!(!relayout(&mut doc, 2.0));
+        // A fold hiding the selected node: laid out anew, the selection to the folded node.
+        doc.toggle_folded(a);
+        assert!(relayout(&mut doc, 2.0));
+        assert!(!doc.layout.contains(a1));
+        assert_eq!(doc.focus, a);
+    }
+
+    /// The width of a node's box at 100%, as laid out.
+    fn box_width(map: &MindMap, id: NodeId) -> f32 {
+        view::node_size(&mut HashMap::new(), map, id, 1.0).width
     }
 
     #[test]
