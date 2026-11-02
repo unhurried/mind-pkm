@@ -5,6 +5,7 @@ use super::dialog::Dialog;
 use super::doc::Doc;
 use super::drag::DropPlace;
 use super::layout::{MapLayout, NodeBox};
+use super::placed;
 use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SCOPES, SEARCH_INPUT_ID, SORTS, SearchMsg};
 use super::ui::{self, DialogStyle, Menu, MenuStyle};
 use super::{App, DIALOG_INPUT_ID, MAP_SCROLL_ID, MapMsg, Message};
@@ -198,8 +199,8 @@ const CONTEXT_MENU_STYLE: MenuStyle = MenuStyle { width: 300.0, ..MENU_STYLE };
 
 // --- Measuring ---
 
-/// The size of a node's text as the text widget will lay it out at the zoom
-/// (the same font size for every node, the root included).
+/// The size of a node's text as the text widget lays it out at the zoom (the
+/// same font size for every node, the root included), not rounded.
 fn measure_text(content: &str, zoom: f32) -> Size {
     let content = if content.is_empty() { " " } else { content };
     let p = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
@@ -213,13 +214,24 @@ fn measure_text(content: &str, zoom: f32) -> Size {
         shaping: Shaping::Advanced,
         wrapping: Wrapping::WordOrGlyph,
     });
-    let b = p.min_bounds();
-    Size::new(b.width.ceil() + 1.0, b.height.ceil())
+    p.min_bounds()
 }
 
-/// `cache` holds the sizes at this zoom.
+/// The size of a node's text at the zoom, from its size at 100%: the text
+/// layout is not hinted, so at any zoom the text breaks into the same lines
+/// and every size grows with the font size. Rounded up, a pixel wider.
+pub fn text_at_zoom(at_100: Size, zoom: f32) -> Size {
+    Size::new((at_100.width * zoom).ceil() + 1.0, (at_100.height * zoom).ceil())
+}
+
+/// The size of a text at the zoom; `cache` holds the sizes at 100%, so that
+/// a text is measured once, whatever the zoom.
 fn text_size(cache: &mut HashMap<String, Size>, text: &str, zoom: f32) -> Size {
-    *cache.entry(text.to_string()).or_insert_with(|| measure_text(text, zoom))
+    let at_100 = match cache.get(text) {
+        Some(&size) => size,
+        None => *cache.entry(text.to_string()).or_insert(measure_text(text, 1.0)),
+    };
+    text_at_zoom(at_100, zoom)
 }
 
 /// The size of a node's box at the zoom: its text, icons and link marker,
@@ -353,27 +365,46 @@ impl App {
     // --- The map ---
 
     fn map_view<'a>(&'a self, doc: &'a Doc) -> Element<'a, MapMsg> {
-        let size = doc.layout().size;
+        let layout = doc.layout();
+        let (size, zoom) = (layout.size, self.viewport.zoom());
         let mut layers: Stack<MapMsg> = Stack::new().width(size.width).height(size.height);
         layers = layers.push(
-            canvas_widget(EdgeLayer { layout: doc.layout(), cache: &self.viewport.edges, zoom: self.viewport.zoom() })
+            canvas_widget(EdgeLayer { layout, cache: &self.viewport.edges, zoom })
                 .width(size.width)
                 .height(size.height),
         );
+        // Widgets only for the nodes near the visible part of the map: a map
+        // of thousands of nodes would mean thousands of widgets to build, lay
+        // out and hand every event after every message.
+        let near = self.near_view(size);
+        let mut nodes = placed::placed(size);
         // The branch point handles go under the nodes: a wide node next to a
         // narrow parent keeps its own clicks where it reaches into a handle.
         let root = doc.map().root();
-        for b in doc.layout().boxes.iter().filter(|b| b.id != root) {
-            if let Some(point) = branch_point(doc.layout(), b) {
-                layers = layers.push(branch_handle(b.id, point, self.viewport.zoom()));
+        for b in layout.boxes.iter().filter(|b| b.id != root) {
+            if let Some(point) = branch_point(layout, b)
+                && let at = fold_button_rect(point, zoom)
+                && at.intersects(&near)
+            {
+                nodes.push((b.id, Part::Handle), at.position(), branch_handle(b.id, zoom));
             }
         }
-        for b in &doc.layout().boxes {
-            layers = layers.push(pin(self.node_view(doc, b)).position(b.rect.position()));
-            if b.folded {
-                layers = layers.push(fold_marker(b, doc.map().children(b.id).len(), self.viewport.zoom()));
+        for b in &layout.boxes {
+            if b.rect.intersects(&near) {
+                nodes.push((b.id, Part::Node), b.rect.position(), self.node_view(doc, b));
+            }
+            if b.folded
+                && let at = fold_button_rect(fold_marker_center(b, zoom), zoom)
+                && at.intersects(&near)
+            {
+                nodes.push(
+                    (b.id, Part::Marker),
+                    at.position(),
+                    fold_marker(b.id, doc.map().children(b.id).len(), zoom),
+                );
             }
         }
+        layers = layers.push(nodes);
         if let Some(target) = self.drop_indicator()
             && let Some(b) = doc.layout().get(target.node)
         {
@@ -633,9 +664,13 @@ fn highlighted_spans(snippet: &Snippet) -> Vec<Span<'static, (), Font>> {
 }
 
 /// The child count shown right of a folded node; clicking it unfolds the node.
-fn fold_marker<'a>(b: &NodeBox, count: usize, zoom: f32) -> Element<'a, MapMsg> {
-    let center = Point::new(b.rect.x + b.rect.width + (2.0 + FOLD_MARKER_SIZE / 2.0) * zoom, b.rect.center_y());
-    fold_button(count.to_string(), b.id, center, zoom, true)
+fn fold_marker<'a>(id: NodeId, count: usize, zoom: f32) -> Element<'a, MapMsg> {
+    fold_button(count.to_string(), id, zoom, true)
+}
+
+/// Where the fold marker of the folded node `b` is centered.
+fn fold_marker_center(b: &NodeBox, zoom: f32) -> Point {
+    Point::new(b.rect.x + b.rect.width + (2.0 + FOLD_MARKER_SIZE / 2.0) * zoom, b.rect.center_y())
 }
 
 /// Where the edges from a node to its shown children branch: halfway to the
@@ -652,13 +687,19 @@ fn branch_x(start: f32, child: f32) -> f32 {
 
 /// The clickable branch point of an unfolded node: invisible until hovered,
 /// then a circle like the fold marker; clicking it folds the node.
-fn branch_handle<'a>(id: NodeId, point: Point, zoom: f32) -> Element<'a, MapMsg> {
-    fold_button("−".into(), id, point, zoom, false)
+fn branch_handle<'a>(id: NodeId, zoom: f32) -> Element<'a, MapMsg> {
+    fold_button("−".into(), id, zoom, false)
 }
 
-/// A round button centered at `center` that folds or unfolds `id`; unless
+/// Where a fold button centered at `center` is.
+fn fold_button_rect(center: Point, zoom: f32) -> Rectangle {
+    let size = FOLD_MARKER_SIZE * zoom;
+    Rectangle::new(center - Vector::new(size / 2.0, size / 2.0), Size::new(size, size))
+}
+
+/// A round button (at `fold_button_rect`) that folds or unfolds `id`; unless
 /// `always_shown`, it shows only while hovered.
-fn fold_button<'a>(label: String, id: NodeId, center: Point, zoom: f32, always_shown: bool) -> Element<'a, MapMsg> {
+fn fold_button<'a>(label: String, id: NodeId, zoom: f32, always_shown: bool) -> Element<'a, MapMsg> {
     let size = FOLD_MARKER_SIZE * zoom;
     let button = button(text(label).size(FOLD_MARKER_FONT_SIZE * zoom).center())
         .width(size)
@@ -677,7 +718,16 @@ fn fold_button<'a>(label: String, id: NodeId, center: Point, zoom: f32, always_s
             }
         })
         .on_press(MapMsg::FoldClicked(id));
-    pin(super::arrow_cursor::hand_cursor(button)).position(center - Vector::new(size / 2.0, size / 2.0)).into()
+    super::arrow_cursor::hand_cursor(button).into()
+}
+
+/// What a widget of the map stands for: a node, the fold marker of a folded
+/// one, the branch handle of an unfolded one with children.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Part {
+    Handle,
+    Node,
+    Marker,
 }
 
 /// Where dragged nodes would be dropped: an outline around the target for a
@@ -867,5 +917,37 @@ impl canvas::Program<MapMsg> for EdgeLayer<'_> {
             frame.stroke(&path, stroke);
         });
         vec![geometry]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::viewport::ZOOM_STEPS;
+    use super::*;
+
+    /// What zooming relies on: a text measured at 100% takes the same lines
+    /// at every zoom step, its sizes grown with the font size.
+    #[test]
+    fn a_text_measured_at_100_percent_gives_its_size_at_every_zoom() {
+        let texts = [
+            "",
+            "root",
+            "07 プロジェクト Alpha 7 の資料と進め方",
+            "日本語だけの長いノードのテキストで、折り返しが何度も起きるくらいの長さにして、さらに続けて三行目にも届くようにする。",
+            "A long English node text that wraps at the maximum width of a node, three hundred and sixty pixels at 100%, and then goes on.",
+            "24/05/01 a task with emoji 😀 and marks ✔ ✘",
+            &"x".repeat(200),
+        ];
+        for text in texts {
+            let at_100 = measure_text(text, 1.0);
+            for &zoom in ZOOM_STEPS {
+                let exact = measure_text(text, zoom);
+                let scaled = at_100 * zoom;
+                assert!(
+                    (exact.width - scaled.width).abs() < 0.01 && (exact.height - scaled.height).abs() < 0.01,
+                    "{text:?} at {zoom}: measured {exact:?}, scaled {scaled:?}"
+                );
+            }
+        }
     }
 }

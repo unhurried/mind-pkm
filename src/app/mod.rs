@@ -20,6 +20,7 @@ mod file;
 mod ime;
 mod keys;
 mod layout;
+mod placed;
 mod press_point;
 pub mod profile;
 mod right_press;
