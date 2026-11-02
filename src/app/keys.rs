@@ -28,6 +28,11 @@ impl App {
                 _ => Task::none(),
             };
         }
+        // While a node's text is edited the map's keys don't act.
+        if self.node_edit.is_some() {
+            self.node_edit_key(&key);
+            return Task::none();
+        }
         if self.menu.is_some() || self.context_menu.is_some() {
             return Task::none();
         }
@@ -62,6 +67,9 @@ impl App {
             Task::none()
         } else if !self.dialogs.is_empty() {
             self.dialog_cancel()
+        } else if self.node_edit.is_some() {
+            self.cancel_node_edit();
+            Task::none()
         } else if self.menu.is_some() || self.context_menu.is_some() {
             (self.menu, self.context_menu) = (None, None);
             Task::none()

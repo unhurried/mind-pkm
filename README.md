@@ -116,7 +116,7 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 | Arrow keys, Home | Move between nodes, go to the root |
 | Tab / Insert | New child node |
 | Enter | New sibling node |
-| Ctrl+E | Edit node text |
+| Ctrl+E | Edit node text, in the node itself (also for a new node and F2 / double-click on other nodes): Enter or a click elsewhere confirms, Esc cancels |
 | Delete / Ctrl+Delete | Delete the selected nodes and the files of pages and directories, with / without a confirmation (as F11) |
 | Space | Fold / unfold |
 | Ctrl+Up / Ctrl+Down | Move the node up / down among its siblings |
@@ -235,7 +235,7 @@ Then switch back to the allowlist: building, testing and `openspec validate` nee
 - `src/pkm/` - the PKM conventions and commands (`commands.rs`), the Next Steps refresh (`next_steps.rs`), the filter (`filter.rs`)
 - `src/search/` - the full-text index (tantivy + lindera), text extraction from PDF/Office files
 - `src/markdown/` - Markdown for the page editor without UI: blocks and inline content (pulldown-cmark), the editing rules, tables, find, word counts, HTML and PDF export
-- `src/app/` - the iced UI: state and messages (`mod.rs`), the open map and its undo history (`doc.rs`), commands (`command.rs`), keyboard (`keys.rs`), dialogs (`dialog.rs`), file handling (`file.rs`), scrolling (`viewport.rs`), drag and drop of nodes (`drag.rs`), rendering (`view.rs`), map layout (`layout.rs`), the search panel (`search_panel.rs`), the page editor's windows (`editor/`), timings (`profile.rs`) and the benchmark (`perf.rs`)
+- `src/app/` - the iced UI: state and messages (`mod.rs`), the open map and its undo history (`doc.rs`), commands (`command.rs`), keyboard (`keys.rs`), dialogs (`dialog.rs`), editing a node's text in the node (`node_edit.rs`), file handling (`file.rs`), scrolling (`viewport.rs`), drag and drop of nodes (`drag.rs`), rendering (`view.rs`), map layout (`layout.rs`), the search panel (`search_panel.rs`), the page editor's windows (`editor/`), timings (`profile.rs`) and the benchmark (`perf.rs`)
 - `src/lib.rs` - the library holding all of the above (`src/main.rs` only starts the application); `tests/` - property tests against it
 
 ### Specifications

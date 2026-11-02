@@ -4,7 +4,7 @@
 use super::command::Command;
 use super::dialog::Dialog;
 use super::file::{AfterUnsaved, FileAction};
-use super::test_support::{key_event, send};
+use super::test_support::{key_event, send, type_node_text};
 use super::{App, MapMsg, settings};
 use crate::mindmap::MindMap;
 use crate::pkm::filter::Filter;
@@ -34,10 +34,10 @@ fn root_texts(app: &App) -> Vec<String> {
 fn a_new_node_asks_for_its_text_and_undo_removes_it() {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
-    assert!(matches!(app.dialogs.front(), Some(Dialog::Input { .. })));
-    send(&mut app, MapMsg::DialogInput("child".into()));
+    assert!(app.dialogs.is_empty() && app.node_edit.is_some());
+    type_node_text(&mut app, "child");
     press(&mut app, Named::Enter);
-    assert!(app.dialogs.is_empty());
+    assert!(app.dialogs.is_empty() && app.node_edit.is_none());
     assert_eq!(root_texts(&app), vec!["child"]);
     assert!(app.doc.as_ref().unwrap().dirty());
     send(&mut app, MapMsg::Command(Command::Undo));
@@ -57,7 +57,7 @@ fn cancelling_a_new_node_leaves_the_map_as_it_was() {
     assert!(!doc.dirty() && !doc.edited_since_refresh());
     // Leaving the text empty removes it too.
     press(&mut app, Named::Enter);
-    send(&mut app, MapMsg::DialogOk);
+    send(&mut app, MapMsg::NodeEditConfirm);
     assert_eq!(map(&app).to_xml(), before);
 }
 
@@ -126,11 +126,11 @@ fn a_new_page_that_already_exists_links_the_node_as_a_change_to_undo() {
 fn undo_selects_what_was_selected_before_the_change() {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
-    send(&mut app, MapMsg::DialogInput("a".into()));
+    type_node_text(&mut app, "a");
     press(&mut app, Named::Enter);
     let a = app.doc.as_ref().unwrap().focus();
     press(&mut app, Named::Tab);
-    send(&mut app, MapMsg::DialogInput("b".into()));
+    type_node_text(&mut app, "b");
     press(&mut app, Named::Enter);
     send(&mut app, MapMsg::Command(Command::Undo));
     assert_eq!(app.doc.as_ref().unwrap().focus(), a);
@@ -178,8 +178,8 @@ fn a_node_added_under_a_page_node_is_warned_about() {
 fn edited_app() -> App {
     let mut app = app_with(MindMap::new("root"));
     press(&mut app, Named::Tab);
-    send(&mut app, MapMsg::DialogInput("x".into()));
-    send(&mut app, MapMsg::DialogOk);
+    type_node_text(&mut app, "x");
+    press(&mut app, Named::Enter);
     app
 }
 
@@ -410,7 +410,7 @@ fn only_edits_call_for_the_periodic_refresh() {
     press(&mut app, Named::F5);
     send(&mut app, MapMsg::DialogOk);
     press(&mut app, Named::F2);
-    send(&mut app, MapMsg::DialogCancel);
+    send(&mut app, MapMsg::Escape);
     assert!(!edited(&app));
     press(&mut app, Named::F7);
     assert!(edited(&app));
@@ -538,9 +538,9 @@ fn a_right_click_on_an_unselected_node_selects_only_it() {
     // Its command acts on the node.
     send(&mut app, MapMsg::Command(Command::NewChild));
     assert_eq!(app.context_menu, None);
-    assert!(matches!(app.dialogs.front(), Some(Dialog::Input { .. })));
-    send(&mut app, MapMsg::DialogInput("child".into()));
-    send(&mut app, MapMsg::DialogOk);
+    assert!(app.node_edit.is_some());
+    type_node_text(&mut app, "child");
+    send(&mut app, MapMsg::NodeEditConfirm);
     assert_eq!(map(&app).child_texts(c), vec!["child"]);
 }
 
@@ -581,4 +581,177 @@ fn context_menu_items_are_commands_of_the_menu_bar() {
     for cmd in NODE_MENU.iter().chain(MAP_MENU).flatten() {
         assert!(super::ui::entry_of(MENUS, *cmd).is_some(), "{cmd:?} is not in the menu bar");
     }
+}
+
+// --- Editing a node's text in the node ---
+
+fn app_with_child(text: &str) -> (App, crate::mindmap::NodeId) {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let a = m.add_child(root, text);
+    let mut app = app_with(m);
+    app.doc.as_mut().unwrap().select(vec![a]);
+    (app, a)
+}
+
+fn ctrl_e(app: &mut App) {
+    press_char(app, "e", Modifiers::CTRL);
+}
+
+#[test]
+fn ctrl_e_edits_the_text_in_the_node_and_enter_confirms_as_one_undo_step() {
+    let (mut app, a) = app_with_child("a");
+    ctrl_e(&mut app);
+    assert!(app.dialogs.is_empty());
+    assert_eq!(app.node_edit.as_ref().unwrap().id(), a);
+    type_node_text(&mut app, "b");
+    // Nothing changed in the map before the text is confirmed.
+    assert_eq!(map(&app).text(a), "a");
+    assert!(!app.doc.as_ref().unwrap().dirty());
+    press(&mut app, Named::Enter);
+    assert!(app.node_edit.is_none());
+    assert_eq!(map(&app).text(a), "b");
+    send(&mut app, MapMsg::Command(Command::Undo));
+    assert_eq!(map(&app).text(a), "a");
+}
+
+#[test]
+fn escape_cancels_an_edit() {
+    let (mut app, a) = app_with_child("a");
+    ctrl_e(&mut app);
+    type_node_text(&mut app, "b");
+    send(&mut app, MapMsg::Escape);
+    assert!(app.node_edit.is_none());
+    assert_eq!(map(&app).text(a), "a");
+    assert!(!app.doc.as_ref().unwrap().dirty());
+}
+
+#[test]
+fn f2_and_a_double_click_edit_a_plain_node_in_place_but_a_page_node_asks_for_a_name() {
+    let (mut app, a) = app_with_child("a");
+    press(&mut app, Named::F2);
+    assert_eq!(app.node_edit.as_ref().map(|e| e.id()), Some(a));
+    send(&mut app, MapMsg::Escape);
+    send(&mut app, MapMsg::NodeDoubleClicked(a));
+    assert_eq!(app.node_edit.as_ref().map(|e| e.id()), Some(a));
+    send(&mut app, MapMsg::Escape);
+
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    f.write_page("Plan", "x\n");
+    let page = f.add_page_node(root, "Plan");
+    let mut app = app_with(f.map.clone());
+    send(&mut app, MapMsg::NodeDoubleClicked(page));
+    assert!(app.node_edit.is_none());
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Input { .. })));
+}
+
+#[test]
+fn the_text_box_holds_the_text_selected() {
+    let (mut app, _) = app_with_child("old");
+    ctrl_e(&mut app);
+    assert_eq!(app.node_edit.as_ref().unwrap().content().selection().as_deref(), Some("old"));
+}
+
+#[test]
+fn keys_of_the_map_do_not_act_while_a_text_is_edited() {
+    let (mut app, a) = app_with_child("a");
+    ctrl_e(&mut app);
+    let before = map(&app).to_xml();
+    for key in [Named::Tab, Named::Delete, Named::Space, Named::F7, Named::F11, Named::ArrowLeft] {
+        press(&mut app, key);
+    }
+    press_char(&mut app, "z", Modifiers::CTRL);
+    assert!(app.node_edit.is_some() && app.dialogs.is_empty());
+    assert_eq!(app.doc.as_ref().unwrap().focus(), a);
+    assert_eq!(map(&app).to_xml(), before);
+}
+
+#[test]
+fn clicking_elsewhere_confirms_the_text() {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let a = m.add_child(root, "a");
+    let b = m.add_child(root, "b");
+    let mut app = app_with(m);
+    app.doc.as_mut().unwrap().select(vec![a]);
+    ctrl_e(&mut app);
+    type_node_text(&mut app, "a2");
+    // Ctrl is released again.
+    send(&mut app, MapMsg::Key(iced::keyboard::Event::ModifiersChanged(Modifiers::empty())));
+    send(&mut app, MapMsg::NodeClicked(b));
+    assert!(app.node_edit.is_none());
+    assert_eq!(map(&app).text(a), "a2");
+    assert_eq!(app.doc.as_ref().unwrap().selection(), &[b]);
+    // Empty map space too.
+    ctrl_e(&mut app);
+    type_node_text(&mut app, "b2");
+    send(&mut app, MapMsg::PanStart);
+    assert_eq!(map(&app).text(b), "b2");
+}
+
+#[test]
+fn a_menu_command_confirms_the_text_first() {
+    let (mut app, a) = app_with_child("a");
+    ctrl_e(&mut app);
+    type_node_text(&mut app, "b");
+    send(&mut app, MapMsg::Command(Command::Undo));
+    // The text was confirmed, then Undo took it back.
+    assert!(app.node_edit.is_none());
+    assert_eq!(map(&app).text(a), "a");
+}
+
+#[test]
+fn an_emptied_text_leaves_a_node_as_it_was_and_removes_a_new_one() {
+    let (mut app, a) = app_with_child("a");
+    ctrl_e(&mut app);
+    type_node_text(&mut app, "");
+    press(&mut app, Named::Enter);
+    assert_eq!(map(&app).text(a), "a");
+    press(&mut app, Named::Tab);
+    press(&mut app, Named::Enter);
+    assert_eq!(map(&app).children(a).len(), 0);
+}
+
+#[test]
+fn line_breaks_become_spaces() {
+    let (mut app, a) = app_with_child("a");
+    ctrl_e(&mut app);
+    type_node_text(&mut app, "x\ny\r\nz");
+    assert_eq!(app.node_edit.as_ref().unwrap().text(), "x y z");
+    send(&mut app, MapMsg::NodeEdit(iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Enter)));
+    send(
+        &mut app,
+        MapMsg::NodeEdit(iced::widget::text_editor::Action::Edit(iced::widget::text_editor::Edit::Insert('\n'))),
+    );
+    assert_eq!(app.node_edit.as_ref().unwrap().text(), "x y z");
+    send(&mut app, MapMsg::NodeEditConfirm);
+    assert_eq!(map(&app).text(a), "x y z");
+}
+
+#[test]
+fn the_node_grows_with_its_text_and_is_shown_despite_the_filter() {
+    let (mut app, a) = app_with_child("a");
+    let width = |app: &App, n| app.doc.as_ref().unwrap().layout().get(n).unwrap().rect.width;
+    let before = width(&app, a);
+    ctrl_e(&mut app);
+    type_node_text(&mut app, "a much longer text than before");
+    app.relayout();
+    assert!(width(&app, a) > before + 50.0);
+    let long = "word ".repeat(200);
+    type_node_text(&mut app, &long);
+    app.relayout();
+    let wrapped = app.doc.as_ref().unwrap().layout().get(a).unwrap().rect;
+    assert!(wrapped.width < 420.0 && wrapped.height > 100.0, "{wrapped:?}");
+    send(&mut app, MapMsg::Escape);
+
+    // A filter hiding the new, empty node.
+    app.doc.as_mut().unwrap().set_filter(Filter::ToDo);
+    app.relayout();
+    press(&mut app, Named::Tab);
+    let n = app.node_edit.as_ref().unwrap().id();
+    app.relayout();
+    assert!(app.doc.as_ref().unwrap().layout().contains(n));
+    send(&mut app, MapMsg::Escape);
+    assert!(!map(&app).exists(n) || !app.doc.as_ref().unwrap().layout().contains(n));
 }

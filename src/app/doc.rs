@@ -43,14 +43,23 @@ pub struct Doc {
     laid_out: Option<LayoutInputs>,
 }
 
-/// What a layout depends on: the map (its version), the filter, the margin
-/// and the zoom.
+/// What a layout depends on: the map (its version), the filter, the margin,
+/// the zoom and the text being edited.
 #[derive(Debug, PartialEq)]
 struct LayoutInputs {
     map: u64,
     filter: Filter,
     margin: Size,
     zoom: f32,
+    draft: Option<Draft>,
+}
+
+/// The text typed so far into a node being edited: the node is laid out with
+/// it, and shown even if the filter hides it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Draft {
+    pub id: NodeId,
+    pub text: String,
 }
 
 /// The map as it was before a change, with the serial number identifying it
@@ -435,16 +444,24 @@ impl Doc {
         margin: Size,
         zoom: f32,
         measure_cache: &mut HashMap<view::MeasureKey, Size>,
+        draft: Option<Draft>,
     ) -> bool {
         self.fix_selection();
-        let inputs = LayoutInputs { map: self.map.version(), filter: self.filter.clone(), margin, zoom };
+        let inputs = LayoutInputs { map: self.map.version(), filter: self.filter.clone(), margin, zoom, draft };
         let anew = self.laid_out.as_ref() != Some(&inputs);
         if anew {
             self.shown = self.map.clone();
-            let visible = self.filter.visible(&self.map);
+            let mut visible = self.filter.visible(&self.map);
             let map = &self.map;
-            self.layout =
-                layout::layout(map, &visible, margin, zoom, &mut |id| view::node_size(measure_cache, map, id, zoom));
+            let draft = inputs.draft.as_ref().filter(|d| map.exists(d.id));
+            if let Some(d) = draft {
+                // The node being edited is shown, under its ancestors.
+                visible.insert(d.id);
+                visible.extend(map.ancestors(d.id));
+            }
+            self.layout = layout::layout(map, &visible, margin, zoom, &mut |id| {
+                view::node_size(measure_cache, map, id, zoom, draft)
+            });
             self.laid_out = Some(inputs);
         }
         self.select_shown();
@@ -626,7 +643,7 @@ mod tests {
         let a = doc.map.add_child(root, "a");
         let a1 = doc.map.add_child(a, "a1");
         let mut cache = HashMap::new();
-        let mut relayout = |doc: &mut Doc, zoom: f32| doc.relayout(Size::ZERO, zoom, &mut cache);
+        let mut relayout = |doc: &mut Doc, zoom: f32| doc.relayout(Size::ZERO, zoom, &mut cache, None);
         assert!(relayout(&mut doc, 1.0));
         assert!(!relayout(&mut doc, 1.0));
         // Selecting changes nothing laid out.
@@ -651,7 +668,7 @@ mod tests {
 
     /// The width of a node's box at 100%, as laid out.
     fn box_width(map: &MindMap, id: NodeId) -> f32 {
-        view::node_size(&mut HashMap::new(), map, id, 1.0).width
+        view::node_size(&mut HashMap::new(), map, id, 1.0, None).width
     }
 
     #[test]
@@ -662,7 +679,7 @@ mod tests {
         let b = doc.map.add_child(root, "b");
         let b1 = doc.map.add_child(b, "b1");
         let c = doc.map.add_child(root, "c");
-        let relayout = |doc: &mut Doc| doc.relayout(Size::ZERO, 1.0, &mut HashMap::new());
+        let relayout = |doc: &mut Doc| doc.relayout(Size::ZERO, 1.0, &mut HashMap::new(), None);
         doc.select(vec![b]);
         relayout(&mut doc);
         doc.map.delete(b);

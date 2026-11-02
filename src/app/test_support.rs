@@ -16,6 +16,13 @@ pub fn send(app: &mut App, message: impl Into<Message>) {
     let _ = app.update(message.into());
 }
 
+/// Types `text` into the node being edited, replacing what is there.
+pub fn type_node_text(app: &mut App, text: &str) {
+    use iced::widget::text_editor::{Action, Edit};
+    send(app, super::MapMsg::NodeEdit(Action::SelectAll));
+    send(app, super::MapMsg::NodeEdit(Action::Edit(Edit::Paste(std::sync::Arc::new(text.to_string())))));
+}
+
 /// A key pressed with `modifiers`, as a window reports it (typing no text).
 pub fn key_event(key: Key, modifiers: Modifiers) -> keyboard::Event {
     key_press(key, modifiers, None)
