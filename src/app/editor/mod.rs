@@ -133,6 +133,9 @@ pub enum EditorMsg {
     CellPressed(usize, usize),
     /// A press on a cell (row, column) of a rendered table: the table block, the cell.
     TableCellPressed(usize, usize, usize),
+    /// A table wider than the page was scrolled sideways: where the table
+    /// starts in the source, and how far it is scrolled.
+    TableScrolled(usize, f32),
     /// A press on a source offset of a rendered block (a link, a task box...).
     PressedAt(usize),
     /// A link clicked: its destination and where its text is in the source.
@@ -292,6 +295,11 @@ pub struct Editor {
     /// Whether the image files the page shows exist, as looked up for a
     /// revision of the page (`is_image_file`).
     image_files: RefCell<(u64, HashMap<PathBuf, bool>)>,
+    /// The widths of the lines of table cells, as measured for their columns.
+    table_widths: view::WidthCache,
+    /// How far the table that was last scrolled sideways is scrolled: where
+    /// it starts in the source and its offset (kept when it is clicked).
+    table_x: Option<(usize, f32)>,
 }
 
 impl Editor {
@@ -328,6 +336,8 @@ impl Editor {
             right_pressed_at: Point::ORIGIN,
             context_menu: None,
             image_files: RefCell::default(),
+            table_widths: view::WidthCache::default(),
+            table_x: None,
         }
     }
 
@@ -401,6 +411,7 @@ impl Editor {
             self.forget_image_files();
         }
         let before = self.cursor_state();
+        let table_before = self.active_table_start();
         let revision = self.page.revision();
         let shown = self.status.text().to_string();
         let task = self.handle(msg, prefs, effects);
@@ -420,7 +431,17 @@ impl Editor {
             self.table_ui = TableUi::default();
         }
         let reveals = command || (may_reveal && self.cursor_state() != before);
-        if reveals { Task::batch([task, self.reveal(prefs)]) } else { task }
+        let task = if reveals { Task::batch([task, self.reveal(prefs)]) } else { task };
+        // A table that scrolls sideways shows the cursor's cell; one that was
+        // rendered until now is scrolled as far as it was then.
+        let table_after = self.active_table_start();
+        match table_after {
+            Some(start) if table_after != table_before || reveals => {
+                let from = self.table_x.filter(|t| t.0 == start && table_after != table_before).map(|t| t.1);
+                Task::batch([task, scroll::reveal_cell(self.id("active-cell"), self.id("table-scroll"), from)])
+            }
+            _ => task,
+        }
     }
 
     /// What moving the cursor or editing changes: the selection (of the
@@ -434,6 +455,11 @@ impl Editor {
             cell: self.page.active().and_then(|a| a.table()).map(|t| (t.cell, t.cell_sel)),
             source: self.source.as_ref().map(Content::cursor),
         }
+    }
+
+    /// Where the table being edited starts in the source.
+    fn active_table_start(&self) -> Option<usize> {
+        self.page.active().filter(|a| a.table().is_some()).map(|a| a.region.start)
     }
 
     /// Scrolls the page to show the cursor.
@@ -557,6 +583,10 @@ impl Editor {
             }
             EditorMsg::CellPressed(r, c) => self.cell_pressed((r, c)),
             EditorMsg::TableCellPressed(block, r, c) => self.table_cell_pressed(block, (r, c)),
+            EditorMsg::TableScrolled(start, x) => {
+                self.table_x = Some((start, x));
+                Task::none()
+            }
             EditorMsg::PressedAt(offset) => {
                 self.menu = None;
                 self.page.place(Sel::caret(offset));

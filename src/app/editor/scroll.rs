@@ -245,6 +245,76 @@ pub fn to_top(target: Id, page: Id) -> Task<EditorMsg> {
     find_and_scroll(find(target, page.clone()), page, at_top)
 }
 
+/// Where the cell with the cursor and the table's sideways scrollable are.
+struct FindCell {
+    cell: Id,
+    table: Id,
+    cell_bounds: Option<Rectangle>,
+    /// The scrollable's bounds and how far it is scrolled.
+    table_state: Option<(Rectangle, Vector)>,
+    /// How far the table is scrolled when it was just shown (a rendered
+    /// table that became the one edited), instead of where it is now.
+    from: Option<f32>,
+}
+
+impl Operation for FindCell {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self)
+    }
+
+    fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+        if id == Some(&self.cell) {
+            self.cell_bounds = Some(bounds);
+        }
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&Id>,
+        bounds: Rectangle,
+        _content_bounds: Rectangle,
+        translation: Vector,
+        _state: &mut dyn Scrollable,
+    ) {
+        if id == Some(&self.table) {
+            self.table_state = Some((bounds, translation));
+        }
+    }
+
+    fn finish(&self) -> Outcome<()> {
+        let (Some(cell), Some((viewport, offset))) = (self.cell_bounds, self.table_state) else { return Outcome::None };
+        let current = self.from.unwrap_or(offset.x);
+        let x = offset_x_to_show(cell.x, cell.x + cell.width, viewport, current);
+        if (x - offset.x).abs() < 0.5 {
+            return Outcome::None;
+        }
+        Outcome::Chain(Box::new(operation::scrollable::scroll_to(
+            self.table.clone(),
+            AbsoluteOffset { x: Some(x), y: None },
+        )))
+    }
+}
+
+/// The sideways offset of a table scrolled `current` far that shows the
+/// cell from `left` to `right` (in the table's coordinates, unscrolled):
+/// `current` if the cell is in view, else just far enough to show it.
+fn offset_x_to_show(left: f32, right: f32, viewport: Rectangle, current: f32) -> f32 {
+    let visible_left = viewport.x + current;
+    if left < visible_left {
+        (left - viewport.x).max(0.0)
+    } else if right > visible_left + viewport.width {
+        (right - viewport.x - viewport.width).max(0.0)
+    } else {
+        current
+    }
+}
+
+/// Scrolls the table `table` sideways so that the cell `cell` is in view,
+/// starting from the offset `from` if the table was just shown.
+pub fn reveal_cell(cell: Id, table: Id, from: Option<f32>) -> Task<EditorMsg> {
+    widget::operate(FindCell { cell, table, cell_bounds: None, table_state: None, from }).discard()
+}
+
 /// The offset that shows the whole of what was found, if it isn't shown.
 fn show_target(f: Found) -> Option<f32> {
     offset_to_show(f.target.y, f.target.y + f.target.height, f.viewport, f.offset)
@@ -346,5 +416,49 @@ mod tests {
         // A long line wraps in a narrow box.
         let (top, _) = caret_span(&caret(&"word ".repeat(40)), 100.0);
         assert!(top > 100.0, "{top}");
+    }
+
+    #[test]
+    fn a_cell_out_of_view_is_scrolled_into_view_sideways() {
+        // A table at x = 40, 600 wide, scrolled 100 far: 140..740 shows.
+        let viewport = Rectangle::new(Point::new(40.0, 0.0), Size::new(600.0, 300.0));
+        assert_eq!(offset_x_to_show(300.0, 500.0, viewport, 100.0), 100.0);
+        assert_eq!(offset_x_to_show(90.0, 200.0, viewport, 100.0), 50.0);
+        assert_eq!(offset_x_to_show(700.0, 900.0, viewport, 100.0), 260.0);
+        assert_eq!(offset_x_to_show(20.0, 100.0, viewport, 100.0), 0.0);
+    }
+
+    #[test]
+    fn a_table_just_shown_is_scrolled_as_it_was() {
+        let (cell, table) = (Id::new("cell"), Id::new("table"));
+        let viewport = Rectangle::new(Point::new(40.0, 0.0), Size::new(600.0, 300.0));
+        let content = Rectangle::new(Point::new(40.0, 0.0), Size::new(1500.0, 300.0));
+        let scrolled = |at: Rectangle, offset: f32, from: Option<f32>| {
+            let mut op: Box<dyn Operation> = Box::new(FindCell {
+                cell: cell.clone(),
+                table: table.clone(),
+                cell_bounds: None,
+                table_state: None,
+                from,
+            });
+            let mut state = Recorded::default();
+            loop {
+                op.scrollable(Some(&table), viewport, content, Vector::new(offset, 0.0), &mut state);
+                op.container(Some(&cell), at);
+                match op.finish() {
+                    Outcome::Chain(next) => op = next,
+                    _ => break,
+                }
+            }
+            state.0.map(|o| (o.x, o.y))
+        };
+        let at = Rectangle::new(Point::new(500.0, 0.0), Size::new(100.0, 30.0));
+        // In view: nothing scrolls.
+        assert_eq!(scrolled(at, 0.0, None), None);
+        // Just shown at the left, but the rendered table was scrolled 300 far.
+        assert_eq!(scrolled(at, 0.0, Some(300.0)), Some((Some(300.0), None)));
+        // Out of view on the right.
+        let right = Rectangle::new(Point::new(800.0, 0.0), Size::new(100.0, 30.0));
+        assert_eq!(scrolled(right, 0.0, None), Some((Some(260.0), None)));
     }
 }

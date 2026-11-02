@@ -3,10 +3,11 @@
 
 use super::heading;
 use super::hit::{HitInfo, HitRun};
-use super::inline::{inline_text, paragraph_view};
+use super::inline::{cell_lines, inline_text, paragraph_view};
+use super::table_widths::ColumnWidths;
 use super::theme::{
-    BLOCK_GAP, CODE_FONT, CODE_PADDING, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING,
-    bold,
+    BLOCK_GAP, CELL_PADDING, CODE_FONT, CODE_PADDING, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR,
+    QUOTE_PADDING, bold,
 };
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::highlight::{self};
@@ -19,7 +20,8 @@ use crate::markdown::{BlockKind, ListItem, images};
 use iced::advanced::text::Wrapping;
 use iced::widget::text::Span;
 use iced::widget::{
-    Column, Row, Stack, button, column, container, image, mouse_area, rich_text, row, rule, space, svg, text,
+    Column, Row, Stack, button, column, container, image, mouse_area, rich_text, row, rule, scrollable, space, svg,
+    text,
 };
 use iced::{Alignment, Color, Element, Fill, Font, Length, border};
 use std::sync::Arc;
@@ -66,7 +68,7 @@ fn nodes_view<'a>(nodes: &[Node], ctx: &Ctx<'a>, width: f32, block: usize) -> El
                 list.into()
             }
             Node::Rule => rule::horizontal(1).into(),
-            Node::Table(t) => table_view(t, ctx, block),
+            Node::Table(t) => table_view(t, ctx, block, width),
             Node::FrontMatter(t) => text(t.clone()).font(CODE_FONT).color(p.muted).into(),
             Node::Footnote { number, children } => {
                 row![text(format!("[{number}]")).color(p.muted), nodes_view(children, ctx, width - 32.0, block)].into()
@@ -255,45 +257,85 @@ pub(super) fn embed_view<'a>(tag: &str, src: Option<&str>, p: Palette, ctx: &Ctx
         .into()
 }
 
-/// A table that is not being edited.
-fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize) -> Element<'a, EditorMsg> {
-    let p = ctx.p;
+/// The base text of a table's row `r` (the header in bold).
+pub(super) fn cell_base(r: usize, ctx: &Ctx) -> TextBase {
+    TextBase { size: ctx.size(1.0), font: if r == 0 { bold(APP_FONT) } else { APP_FONT }, color: ctx.p.text }
+}
+
+/// The widths of the columns of a rendered table, in a page column of `width`.
+pub(super) fn rendered_widths(t: &TableNode, ctx: &Ctx, width: f32) -> ColumnWidths {
     let columns = t.header.len().max(1);
+    let rows: Vec<&Vec<Vec<Inline>>> = std::iter::once(&t.header).chain(t.rows.iter()).collect();
+    let natural: Vec<f32> = (0..columns)
+        .map(|c| {
+            let lines = |(r, cells): (usize, &&Vec<Vec<Inline>>)| {
+                cells
+                    .get(c)
+                    .map_or(0.0, |inlines| ctx.editor.table_widths.widest(&cell_lines(inlines, cell_base(r, ctx))))
+            };
+            rows.iter().enumerate().map(lines).fold(0.0, f32::max)
+        })
+        .collect();
+    ctx.column_widths(&natural, width)
+}
+
+/// A table that is not being edited, in a page column of `width`.
+fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize, width: f32) -> Element<'a, EditorMsg> {
+    let p = ctx.p;
+    let rows: Vec<&Vec<Vec<Inline>>> = std::iter::once(&t.header).chain(t.rows.iter()).collect();
+    let base = |r: usize| cell_base(r, ctx);
+    let widths = rendered_widths(t, ctx, width);
     let mut grid = Column::new();
-    let all_rows = std::iter::once(&t.header).chain(t.rows.iter());
-    for (r, cells) in all_rows.enumerate() {
+    for (r, cells) in rows.iter().enumerate() {
         let mut contents = Row::new();
         let mut frames = Row::new();
-        for c in 0..columns {
+        for (c, &w) in widths.widths.iter().enumerate() {
             let inlines = cells.get(c).cloned().unwrap_or_default();
             let header = r == 0;
-            let base =
-                TextBase { size: ctx.size(1.0), font: if header { bold(APP_FONT) } else { APP_FONT }, color: p.text };
             let align_x = match t.align.get(c) {
                 Some(pulldown_cmark::Alignment::Center) => Alignment::Center,
                 Some(pulldown_cmark::Alignment::Right) => Alignment::End,
                 _ => Alignment::Start,
             };
             contents = contents.push(
-                container(inline_text(&inlines, base, ctx, None, block))
-                    .width(Length::FillPortion(1))
-                    .padding([4, 8])
+                container(inline_text(&inlines, base(r), ctx, None, block))
+                    .width(w)
+                    .padding(CELL_PADDING)
                     .align_x(align_x),
             );
             // The whole cell (beside and below its text too) takes the clicks.
             frames = frames.push(
-                mouse_area(cell_frame(
-                    Length::FillPortion(1),
-                    if header { p.header_bg } else { Color::TRANSPARENT },
-                    p,
-                ))
-                .on_press(EditorMsg::TableCellPressed(block, r, c))
-                .on_right_press(EditorMsg::RightClicked(RightClick::TableCell(block, r, c))),
+                mouse_area(cell_frame(w, if header { p.header_bg } else { Color::TRANSPARENT }, p))
+                    .on_press(EditorMsg::TableCellPressed(block, r, c))
+                    .on_right_press(EditorMsg::RightClicked(RightClick::TableCell(block, r, c))),
             );
         }
         grid = grid.push(table_row(contents, frames));
     }
-    grid.into()
+    let start = ctx.editor.page.doc().blocks.get(block).map_or(usize::MAX, |b| b.range.start);
+    sideways(grid.into(), widths.scrolls, None, move |x| EditorMsg::TableScrolled(start, x))
+}
+
+/// A table's grid, scrolled sideways (its scroll bar below it) when it is
+/// wider than the page; `on_scroll` is told how far it is scrolled.
+pub(super) fn sideways<'a>(
+    grid: Element<'a, EditorMsg>,
+    scrolls: bool,
+    id: Option<iced::widget::Id>,
+    on_scroll: impl Fn(f32) -> EditorMsg + 'a,
+) -> Element<'a, EditorMsg> {
+    if !scrolls {
+        return grid;
+    }
+    let bar = scrollable::Scrollbar::new().spacing(2);
+    let mut s = scrollable(grid)
+        .direction(scrollable::Direction::Horizontal(bar))
+        .width(Fill)
+        .on_scroll(move |v| on_scroll(v.absolute_offset().x));
+    if let Some(id) = id {
+        s = s.id(id);
+    }
+    s.into()
 }
 
 /// A table row: the cells' contents over their frames (background and
@@ -355,7 +397,7 @@ impl Editor {
                     .unwrap_or_default();
                 math_view(&tex, true, ctx)
             }
-            BlockKind::Table => table_view(&content::table_block(doc, i), ctx, i),
+            BlockKind::Table => table_view(&content::table_block(doc, i), ctx, i, width),
             BlockKind::FrontMatter => {
                 let source = &self.page.text()[block.range.clone()];
                 container(text(source.to_string()).font(CODE_FONT).size(ctx.size(0.85)).color(p.muted))
