@@ -32,6 +32,12 @@ pub(super) const CODE_PADDING: f32 = 10.0;
 
 pub(super) const OUTLINE_WIDTH: f32 = 220.0;
 
+/// The most text a table's column takes on a line at 100%; longer text wraps.
+pub(super) const TABLE_COLUMN_MAX: f32 = 320.0;
+
+/// A table cell's padding: above and below, left and right.
+pub(super) const CELL_PADDING: [f32; 2] = [4.0, 8.0];
+
 /// The editor's colors in a theme.
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {

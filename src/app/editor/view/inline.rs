@@ -3,6 +3,7 @@
 
 use super::blocks::{embed_view, image_view, math_view};
 use super::hit::{HitInfo, HitRun};
+use super::table_widths::Piece;
 use super::theme::{CODE_FONT, LINE_HEIGHT, bold, italic};
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::{EditorMsg, RightClick};
@@ -235,7 +236,26 @@ fn text_line<'a>(
     }
 }
 
-/// The size and font of a run's style.
+/// A table cell's lines (split at its breaks) as pieces of text to measure,
+/// each set as `text_line` sets it.
+pub(super) fn cell_lines(inlines: &[Inline], base: TextBase) -> Vec<Vec<Piece>> {
+    inlines
+        .split(|i| matches!(i, Inline::Break { .. }))
+        .map(|line| {
+            line.iter()
+                .filter_map(|run| match run {
+                    Inline::Text { text, style, .. } => {
+                        let (size, font) = run_font(*style, base);
+                        Some((text.clone(), size, font))
+                    }
+                    Inline::FootnoteRef { number, .. } => Some((format!("[{number}]"), base.size * 0.75, base.font)),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect()
+}
+
 /// A text run cut where find matches start and end: each piece, and whether
 /// it is in a match (and in the selected one).
 fn match_pieces(t: &str, map: &SourceMap, ctx: &Ctx) -> Vec<(std::ops::Range<usize>, Option<bool>)> {
@@ -262,6 +282,7 @@ fn match_pieces(t: &str, map: &SourceMap, ctx: &Ctx) -> Vec<(std::ops::Range<usi
     pieces
 }
 
+/// The size and font of a run's style.
 pub(super) fn run_font(style: Style, base: TextBase) -> (f32, Font) {
     let mut font = if style.code || style.kbd { CODE_FONT } else { base.font };
     if style.bold {

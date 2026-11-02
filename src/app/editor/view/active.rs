@@ -1,12 +1,13 @@
 //! The active region: a block edited in its rendered form, a code block or
 //! another code-like block as source, the table being edited.
 
-use super::blocks::{cell_frame, math_view, mermaid_view, quote_view, table_row};
+use super::blocks::{cell_base, cell_frame, math_view, mermaid_view, quote_view, sideways, table_row};
 use super::heading;
-use super::inline::{inline_text, run_font};
+use super::inline::{cell_lines, inline_text, run_font};
+use super::table_widths::{ColumnWidths, Piece};
 use super::theme::{
-    CODE_FONT, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING, bold, code_text_style,
-    editor_style, region_text_style,
+    CELL_PADDING, CODE_FONT, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING,
+    TABLE_COLUMN_MAX, bold, code_text_style, editor_style, region_text_style,
 };
 use super::{Ctx, TextBase};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
@@ -29,6 +30,37 @@ use iced::widget::{
     Column, Row, button, column, container, image, mouse_area, row, space, svg, text, text_editor, text_input,
 };
 use iced::{Alignment, Background, Color, Element, Fill, Font, Padding, Theme, border};
+
+/// What the cells of the table being edited show.
+pub(super) struct EditedCells<'a> {
+    /// The cursor's cell: its live region and the runs it shows.
+    live_cell: Option<(&'a Live, Vec<Run>)>,
+    /// Every cell's text (the cursor's cell's too, as it is in the file).
+    shown: Vec<Vec<Vec<content::Inline>>>,
+}
+
+/// The most text a table's column takes on a line, at the zoom.
+fn cell_max(ctx: &Ctx) -> f32 {
+    TABLE_COLUMN_MAX * ctx.zoom
+}
+
+/// The lines (split at the line breaks) of the text the editing widget
+/// shows, as pieces of text to measure.
+fn run_lines(runs: &[Run]) -> Vec<Vec<Piece>> {
+    let mut lines = vec![Vec::new()];
+    for run in runs {
+        match &run.kind {
+            RunKind::Text { text, look } | RunKind::Label { text, look } => {
+                if let Some(line) = lines.last_mut() {
+                    line.push((text.clone(), look.size, look.font));
+                }
+            }
+            RunKind::Newline => lines.push(Vec::new()),
+            _ => {}
+        }
+    }
+    lines
+}
 
 /// The runs the editing widget draws for what a live region shows: styled
 /// like the rendered blocks, with the Markdown at the cursor dimmed.
@@ -384,8 +416,20 @@ impl Editor {
         width: f32,
         marks: Vec<(std::ops::Range<usize>, Color)>,
     ) -> LiveText<'a> {
-        let p = ctx.p;
         let runs = live_runs(&live.display, base, ctx, &self.page, width);
+        self.live_widget(live, runs, base, ctx, marks)
+    }
+
+    /// The editing widget of a live region showing `runs`.
+    fn live_widget<'a>(
+        &'a self,
+        live: &'a Live,
+        runs: Vec<Run>,
+        base: TextBase,
+        ctx: &Ctx<'a>,
+        marks: Vec<(std::ops::Range<usize>, Color)>,
+    ) -> LiveText<'a> {
+        let p = ctx.p;
         LiveText::new(self.id("active"), runs, live.display.text.len(), (live.sel.anchor, live.sel.head))
             .base(base.font, base.size, LINE_HEIGHT)
             .colors(p.selection, base.color)
@@ -393,7 +437,9 @@ impl Editor {
             .marks(marks)
     }
 
-    /// The table with the cursor, as a grid of cells; the cursor's cell is a text editor.
+    /// The table with the cursor, as a grid of cells; the cursor's cell is a
+    /// text editor. Its columns are as wide as when it is rendered, measured
+    /// from what the cells show (the cursor's cell with its Markdown).
     fn table_editor<'a>(
         &'a self,
         a: &'a Active,
@@ -404,43 +450,40 @@ impl Editor {
     ) -> Element<'a, EditorMsg> {
         let p = ctx.p;
         let t = &state.table;
-        let columns = t.columns().max(1);
-        let cell_width = (width / columns as f32).max(40.0);
         let bind = BindContext { auto_pair: prefs.auto_pair, code: false, source_mode: false, table: true };
+        let base = |r: usize| cell_base(r, ctx);
+        let cells = self.edited_cells(a, state, ctx);
+        let widths = self.edited_widths(state, &cells, ctx, width);
+        let EditedCells { mut live_cell, shown } = cells;
         let mut grid = Column::new();
-        for (r, cells) in t.rows.iter().enumerate() {
+        // `shown` has a cell for every cell of the table.
+        for (r, row_shown) in shown.iter().enumerate() {
             let mut contents = Row::new();
             let mut frames = Row::new();
-            for (c, cell) in cells.iter().enumerate() {
+            for (c, inlines) in row_shown.iter().enumerate() {
+                let cell_width = widths.widths.get(c).copied().unwrap_or(40.0);
                 let align = t.align.get(c).copied().unwrap_or_default();
                 let selected = state.range.is_some_and(|range| range.contains((r, c)));
-                let base = TextBase {
-                    size: ctx.size(1.0),
-                    font: if r == 0 { bold(APP_FONT) } else { APP_FONT },
-                    color: p.text,
-                };
                 let active = (r, c) == state.cell;
-                let content: Element<EditorMsg> = if active && let Some(live) = a.live() {
-                    let editor = self
-                        .live_text(live, base, ctx, cell_width - 16.0, Vec::new())
-                        .key_binding(move |k| keys::binding(k, bind));
-                    mouse_area(editor)
-                        .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
-                        .on_release(EditorMsg::Table(TableMsg::Released))
-                        .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)))
-                        .into()
-                } else {
-                    let doc = crate::markdown::Document::parse(&table::cell_to_text(cell));
-                    let inlines =
-                        if doc.blocks.is_empty() { Vec::new() } else { content::inlines(&doc, doc.block_events(0)) };
-                    inline_text(&inlines, base, ctx, None, usize::MAX)
+                let content: Element<EditorMsg> = match live_cell.take_if(|_| active) {
+                    Some((live, runs)) => {
+                        let editor = self
+                            .live_widget(live, runs, base(r), ctx, Vec::new())
+                            .key_binding(move |k| keys::binding(k, bind));
+                        mouse_area(editor)
+                            .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
+                            .on_release(EditorMsg::Table(TableMsg::Released))
+                            .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)))
+                            .into()
+                    }
+                    None => inline_text(inlines, base(r), ctx, None, usize::MAX),
                 };
                 let align_x = match align {
                     table::Align::Center => Alignment::Center,
                     table::Align::Right => Alignment::End,
                     _ => Alignment::Start,
                 };
-                let mut cell_box = container(content).width(cell_width).padding([4, 8]).align_x(align_x);
+                let mut cell_box = container(content).width(cell_width).padding(CELL_PADDING).align_x(align_x);
                 if active {
                     cell_box = cell_box.id(self.id("active-cell"));
                 }
@@ -464,7 +507,49 @@ impl Editor {
             }
             grid = grid.push(table_row(contents, frames));
         }
+        let start = a.region.start;
+        let grid = sideways(grid.into(), widths.scrolls, Some(self.id("table-scroll")), move |x| {
+            EditorMsg::TableScrolled(start, x)
+        });
         column![self.table_toolbar(p), grid].spacing(4).into()
+    }
+
+    /// What the cells of the table being edited show: the cursor's cell its
+    /// live runs, the others their text.
+    pub(super) fn edited_cells<'a>(&'a self, a: &'a Active, state: &TableState, ctx: &Ctx<'a>) -> EditedCells<'a> {
+        let live_cell = a
+            .live()
+            .map(|live| (live, live_runs(&live.display, cell_base(state.cell.0, ctx), ctx, &self.page, cell_max(ctx))));
+        let shown = state
+            .table
+            .rows
+            .iter()
+            .map(|cells| {
+                cells
+                    .iter()
+                    .map(|cell| {
+                        let doc = crate::markdown::Document::parse(&table::cell_to_text(cell));
+                        if doc.blocks.is_empty() { Vec::new() } else { content::inlines(&doc, doc.block_events(0)) }
+                    })
+                    .collect()
+            })
+            .collect();
+        EditedCells { live_cell, shown }
+    }
+
+    /// The widths of the columns of the table being edited, from what its
+    /// cells show, in a page column of `width`.
+    pub(super) fn edited_widths(&self, state: &TableState, cells: &EditedCells, ctx: &Ctx, width: f32) -> ColumnWidths {
+        let widest = |r: usize, c: usize| match &cells.live_cell {
+            Some((_, runs)) if (r, c) == state.cell => self.table_widths.widest(&run_lines(runs)),
+            _ => cells.shown[r]
+                .get(c)
+                .map_or(0.0, |inlines| self.table_widths.widest(&cell_lines(inlines, cell_base(r, ctx)))),
+        };
+        let rows = state.table.rows.len();
+        let natural: Vec<f32> =
+            (0..state.table.columns().max(1)).map(|c| (0..rows).map(|r| widest(r, c)).fold(0.0, f32::max)).collect();
+        ctx.column_widths(&natural, width)
     }
 
     /// Above the table being edited: alignment, size and deleting the table.

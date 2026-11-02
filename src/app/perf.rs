@@ -136,7 +136,7 @@ fn large_map(f: &mut Fixture, fanout: usize) -> Vec<NodeId> {
 }
 
 /// A page of `sections` sections, each with a heading, paragraphs with
-/// inline markup, a list and a code block of 25 lines.
+/// inline markup, a list, a code block of 25 lines and a table.
 fn long_page(sections: usize) -> String {
     let mut s = String::from("# Benchmark page\n\n");
     for i in 0..sections {
@@ -152,6 +152,11 @@ fn long_page(sections: usize) -> String {
             let _ = writeln!(s, "fn function_{i}_{l}(x: u32) -> u32 {{ let y = x * {l} + 1; y.pow(2) }} // line {l}");
         }
         s.push_str("```\n\nAnother paragraph after the code, with a footnote-like remark and more text.\n\n");
+        let _ = write!(
+            s,
+            "| Key | Value | Note |\n| --- | ---: | --- |\n| a{i} | 1 | short |\n\
+             | b{i} | 22 | 日本語の少し長めのメモで、列の最大幅を超えて折り返すくらいの長さにしておく |\n\n"
+        );
     }
     s
 }
