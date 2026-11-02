@@ -6,7 +6,7 @@ use super::{App, MAP_SCROLL_ID, MapMsg, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
 use iced::widget::{canvas, operation, scrollable};
-use iced::{Point, Size, Task, Vector, window};
+use iced::{Point, Rectangle, Size, Task, Vector, window};
 use std::collections::HashMap;
 
 /// Room kept around the focused node when it is scrolled into view.
@@ -15,6 +15,10 @@ const REVEAL_PADDING: f32 = 24.0;
 const MAP_MARGIN: f32 = 40.0;
 /// The height of the menu and status bars, for a viewport not measured yet.
 const BARS_HEIGHT: f32 = 64.0;
+/// The room around the visible part of the map whose nodes are built as
+/// widgets too (`near_view`), in screen pixels. The map's view is built for
+/// the scroll position it is drawn at, so a little room is enough.
+pub(super) const NEAR_MARGIN: f32 = 200.0;
 
 /// The zoom levels, 100% among them.
 pub const ZOOM_STEPS: &[f32] = &[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -102,6 +106,18 @@ impl App {
             let search = if self.search.open { self.search_panel_height() } else { 0.0 };
             Size::new(self.window_size.width, (self.window_size.height - BARS_HEIGHT - search).max(100.0))
         })
+    }
+
+    /// The part of the map whose nodes are shown as widgets, in the map's
+    /// coordinates: the visible part, at the scroll position as the
+    /// scrollable keeps it (inside the map of `map_size`), with
+    /// `NEAR_MARGIN` around it.
+    pub(super) fn near_view(&self, map_size: Size) -> Rectangle {
+        let view = self.viewport_size();
+        let max = Vector::new((map_size.width - view.width).max(0.0), (map_size.height - view.height).max(0.0));
+        let scroll = self.viewport.scroll;
+        let at = Point::new(scroll.x.clamp(0.0, max.x) - NEAR_MARGIN, scroll.y.clamp(0.0, max.y) - NEAR_MARGIN);
+        Rectangle::new(at, Size::new(view.width + 2.0 * NEAR_MARGIN, view.height + 2.0 * NEAR_MARGIN))
     }
 
     /// Recomputes the layout if anything it depends on changed; the edges

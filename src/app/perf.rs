@@ -15,17 +15,20 @@
 use super::command::Command;
 use super::editor::EditorMsg;
 use super::profile::{self, Phase};
-use super::test_support::key_event;
-use super::{App, MapMsg, Message, WindowEvent};
+use super::test_support::{headless_renderer, key_event};
+use super::viewport::NEAR_MARGIN;
+use super::{App, MAP_SCROLL_ID, MapMsg, Message, WindowEvent};
 use crate::mindmap::NodeId;
 use crate::pkm::testutil::Fixture;
 use iced::advanced::clipboard;
 use iced::advanced::renderer;
+use iced::advanced::widget::operation::scrollable::AbsoluteOffset;
+use iced::advanced::widget::{self, Operation, operation};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::text_editor::{Action, Edit};
-use iced::{Color, Event, Font, Pixels, Point, Size, mouse, window};
+use iced::{Color, Event, Point, Rectangle, Size, Vector, mouse, window};
 use iced_runtime::user_interface::{Cache, UserInterface};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
@@ -167,11 +170,7 @@ impl Bench {
         let _ = app.update(MapMsg::Key(key_event(Key::Named(Named::F1), Modifiers::empty())).into());
         let editor = *app.editors.keys().last().expect("the page opened in an editor");
         let _ = app.update(Message::Window(editor, WindowEvent::Resized(WINDOW)));
-        let renderer = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .block_on(<iced::Renderer as renderer::Headless>::new(Font::DEFAULT, Pixels(16.0), Some("tiny-skia")))
-            .expect("a headless renderer");
+        let renderer = headless_renderer();
         let mut bench = Bench { app, renderer, caches: BTreeMap::new(), editor, nodes, _fixture: f };
         bench.rebuild();
         bench
@@ -183,12 +182,19 @@ impl Bench {
 
     /// What iced does after handling messages: builds every window's
     /// interface again (the view, compared with the last one, laid out) and
-    /// draws it.
+    /// draws it. The tasks the messages gave are not run here; of them, the
+    /// map's scrolling is done: its scrollable is moved to where the
+    /// application scrolled the map.
     fn rebuild(&mut self) {
         for id in self.windows() {
             let cache = self.caches.remove(&id).unwrap_or_default();
             let theme = self.app.theme(id);
             let mut ui = UserInterface::build(self.app.view(id), WINDOW, cache, &mut self.renderer);
+            if id == self.app.main_window {
+                let Vector { x, y } = self.app.viewport.scroll;
+                let to = AbsoluteOffset { x, y }.into();
+                ui.operate(&self.renderer, &mut operation::scrollable::scroll_to(widget::Id::new(MAP_SCROLL_ID), to));
+            }
             let style = renderer::Style { text_color: Color::BLACK };
             ui.draw(&mut self.renderer, &theme, &style, mouse::Cursor::Unavailable);
             self.caches.insert(id, ui.into_cache());
@@ -231,6 +237,26 @@ impl Bench {
         ui.update(&[event], mouse::Cursor::Available(cursor), &mut self.renderer, &mut clipboard::Null, &mut messages);
         self.caches.insert(id, ui.into_cache());
         (messages, start)
+    }
+
+    /// An event in a window, as iced handles it: the messages it gives are
+    /// handled and the windows rebuilt; untimed.
+    fn deliver(&mut self, id: window::Id, event: Event, cursor: Point) {
+        let (messages, _) = self.messages(id, event, cursor, false);
+        for m in messages {
+            let _ = self.app.update(m);
+        }
+        self.rebuild();
+    }
+
+    /// What a window shows: the map's scrollable and the texts.
+    fn shown(&mut self, id: window::Id) -> Shown {
+        let cache = self.caches.remove(&id).unwrap_or_default();
+        let mut ui = UserInterface::build(self.app.view(id), WINDOW, cache, &mut self.renderer);
+        let mut shown = Shown::default();
+        ui.operate(&self.renderer, &mut shown);
+        self.caches.insert(id, ui.into_cache());
+        shown
     }
 
     /// An event in a window, as iced handles it: the messages it gives are
@@ -337,6 +363,86 @@ fn perf_large_map_and_long_page() {
     report(15, 40);
 }
 
+/// What a window shows, as an operation finds it: where the map's scrollable
+/// is and how far it is scrolled, and the texts of the text widgets.
+#[derive(Default)]
+struct Shown {
+    map: Option<(Rectangle, Vector)>,
+    texts: HashSet<String>,
+}
+
+impl Operation for Shown {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        operate(self);
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        _content_bounds: Rectangle,
+        translation: Vector,
+        _state: &mut dyn operation::Scrollable,
+    ) {
+        if id == Some(&widget::Id::new(MAP_SCROLL_ID)) {
+            self.map = Some((bounds, translation));
+        }
+    }
+
+    fn text(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, text: &str) {
+        self.texts.insert(text.to_string());
+    }
+}
+
+/// The map builds widgets for the nodes near the part it shows, wherever it
+/// is scrolled to - and those take presses.
+#[test]
+fn the_map_builds_widgets_for_the_nodes_near_what_it_shows() {
+    let mut b = Bench::new(6, 2);
+    let main = b.app.main_window;
+    let check = |b: &mut Bench| {
+        let shown = b.shown(main);
+        let (bounds, scroll) = shown.map.expect("the map");
+        let visible = Rectangle::new(Point::ORIGIN + scroll, bounds.size());
+        let near = visible.expand(NEAR_MARGIN + 1.0);
+        let doc = b.app.doc.as_ref().unwrap();
+        let (mut built, mut left_out) = (0, 0);
+        for node in &doc.layout().boxes {
+            let text = doc.map().text(node.id);
+            if node.rect.intersects(&visible) {
+                assert!(shown.texts.contains(&text), "{text:?} is visible");
+                built += 1;
+            } else if !node.rect.intersects(&near) {
+                assert!(!shown.texts.contains(&text), "{text:?} is far from the view");
+                left_out += 1;
+            }
+        }
+        assert!(built > 10 && left_out > 100, "{built} built, {left_out} left out");
+        // A press on a node in view takes it.
+        let node = doc.layout().boxes.iter().rev().find(|n| visible.contains(n.rect.center())).unwrap();
+        let (id, at) = (node.id, bounds.position() + (n_center(node.rect) - scroll));
+        let _ = b.messages(main, moved(at), at, false);
+        let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+        let (messages, _) = b.messages(main, press, at, false);
+        assert!(messages.iter().any(|m| matches!(m, Message::Map(MapMsg::NodeClicked(n)) if *n == id)), "{messages:?}");
+        scroll
+    };
+    // Shown scrolled down to the selected page node at the bottom.
+    let start = check(&mut b);
+    assert!(start.y > 1000.0);
+    // Up the map with the wheel.
+    let at = Point::new(640.0, 400.0);
+    for _ in 0..40 {
+        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: 3.0 };
+        b.deliver(main, Event::Mouse(mouse::Event::WheelScrolled { delta }), at);
+    }
+    assert!(check(&mut b).y < start.y - 1000.0);
+}
+
+fn n_center(r: Rectangle) -> Vector {
+    Vector::new(r.center_x(), r.center_y())
+}
+
 fn moved(at: Point) -> Event {
     Event::Mouse(mouse::Event::CursorMoved { position: at })
 }
@@ -367,4 +473,46 @@ fn pointer_moves_send_no_messages() {
     let pointer = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::PointerOver(..))));
     let text = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed)));
     assert!(pointer.is_some() && pointer < text, "{messages:?}");
+}
+
+/// The fold buttons of the nodes near the view take presses: the branch
+/// handle of a node with children folds it, its fold marker unfolds it.
+#[test]
+fn the_fold_buttons_near_the_view_take_presses() {
+    let mut b = Bench::new(3, 1);
+    let main = b.app.main_window;
+    let click = |b: &mut Bench, point: Point| {
+        let (bounds, scroll) = b.shown(main).map.expect("the map");
+        let at = bounds.position() + (Vector::new(point.x, point.y) - scroll);
+        let _ = b.messages(main, moved(at), at, false);
+        let _ = b.messages(main, Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), at, false);
+        let (messages, _) =
+            b.messages(main, Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)), at, false);
+        for m in &messages {
+            let _ = b.app.update(m.clone());
+        }
+        b.rebuild();
+        messages
+    };
+    let (bounds, scroll) = b.shown(main).map.expect("the map");
+    let visible = Rectangle::new(Point::ORIGIN + scroll, bounds.size());
+    let layout = b.app.doc.as_ref().unwrap().layout().clone();
+    let node = layout
+        .boxes
+        .iter()
+        .find(|n| n.parent.is_some() && !layout.visible_children(n.id).is_empty() && visible.contains(n.rect.center()))
+        .expect("a node with children in view");
+    // The branch handle: halfway to the children, at the node's underline.
+    let first = layout.get(layout.visible_children(node.id)[0]).unwrap();
+    let end = node.rect.x + node.rect.width;
+    let handle = Point::new(end + (first.rect.x - end) / 2.0, node.rect.y + node.rect.height);
+    let messages = click(&mut b, handle);
+    assert!(matches!(messages[..], [Message::Map(MapMsg::FoldClicked(n))] if n == node.id), "{messages:?}");
+    assert!(b.app.doc.as_ref().unwrap().map().is_folded(node.id));
+    // The fold marker, right of the folded node.
+    let folded = b.app.doc.as_ref().unwrap().layout().get(node.id).unwrap().rect;
+    let marker = Point::new(folded.x + folded.width + 11.0, folded.center_y());
+    let messages = click(&mut b, marker);
+    assert!(matches!(messages[..], [Message::Map(MapMsg::FoldClicked(n))] if n == node.id), "{messages:?}");
+    assert!(!b.app.doc.as_ref().unwrap().map().is_folded(node.id));
 }

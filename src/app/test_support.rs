@@ -4,6 +4,13 @@ use super::{App, Message};
 use iced::keyboard::key::{NativeCode, Physical};
 use iced::keyboard::{self, Key, Location, Modifiers};
 
+/// A renderer without a window (tiny-skia), for laying out and drawing widgets.
+pub fn headless_renderer() -> iced::Renderer {
+    use iced::advanced::renderer::Headless;
+    let renderer = <iced::Renderer as Headless>::new(iced::Font::DEFAULT, iced::Pixels(16.0), Some("tiny-skia"));
+    tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(renderer).expect("a headless renderer")
+}
+
 /// Handles `message` as the running application would (the task is dropped).
 pub fn send(app: &mut App, message: impl Into<Message>) {
     let _ = app.update(message.into());
