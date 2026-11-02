@@ -16,7 +16,7 @@
 
 ## 4. Checks
 
-- [ ] 4.1 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `openspec validate --all --strict` and the benchmark; verify all pass
+- [x] 4.1 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `openspec validate --all --strict` and the benchmark; verify all pass
 
 ## Workflow follow-up
 

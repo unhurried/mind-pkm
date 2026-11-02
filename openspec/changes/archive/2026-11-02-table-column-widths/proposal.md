@@ -20,7 +20,7 @@ The page editor gives every column of a table the same width (the page's width d
 
 ### Modified Capabilities
 
-- `markdown-rendering`: the Tables requirement gains column widths taken from the cells' contents and sideways scrolling for wide tables.
+- `markdown-rendering`: a new requirement for the column widths of tables, taken from the cells' contents, and sideways scrolling for wide tables.
 - `table-editing`: a new requirement for the column widths and scrolling of the table being edited.
 
 ## Impact
