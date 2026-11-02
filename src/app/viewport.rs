@@ -7,7 +7,7 @@ use super::{App, MAP_SCROLL_ID, MapMsg, Message};
 use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
 use iced::widget::{canvas, operation, scrollable};
-use iced::{Point, Size, Task, Vector, window};
+use iced::{Point, Rectangle, Size, Task, Vector, window};
 use std::collections::HashMap;
 
 /// Room kept around the focused node when it is scrolled into view.
@@ -16,6 +16,10 @@ const REVEAL_PADDING: f32 = 24.0;
 const MAP_MARGIN: f32 = 40.0;
 /// The height of the menu and status bars, for a viewport not measured yet.
 const BARS_HEIGHT: f32 = 64.0;
+/// The room around the visible part of the map whose nodes are built as
+/// widgets too (`near_view`), in screen pixels. The map's view is built for
+/// the scroll position it is drawn at, so a little room is enough.
+pub(super) const NEAR_MARGIN: f32 = 200.0;
 
 /// The zoom levels, 100% among them.
 pub const ZOOM_STEPS: &[f32] = &[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -23,14 +27,14 @@ pub const ZOOM_STEPS: &[f32] = &[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1
 const WHEEL_PIXELS_PER_STEP: f32 = 60.0;
 
 /// What the map window shows of the map: the zoom, the scroll position, the
-/// viewport's size, a pan in progress, and what is drawn at the zoom (the
-/// measured text sizes, which hold the current zoom only, and the edges).
+/// viewport's size, a pan in progress, the measured text sizes (at 100%,
+/// scaled to the zoom) and the edges as drawn.
 pub struct MapViewport {
     /// One of `ZOOM_STEPS`.
     zoom: f32,
     /// Ctrl+wheel movement not yet turned into a zoom step, in notches.
     wheel_zoom: f32,
-    /// Node text sizes at the current zoom, by text and width.
+    /// Node text sizes at 100%, by text and width.
     measure_cache: HashMap<view::MeasureKey, Size>,
     /// The drawn edges, cleared on every relayout.
     pub(super) edges: canvas::Cache,
@@ -64,20 +68,19 @@ impl MapViewport {
         self.zoom
     }
 
-    /// Sets the zoom level; the text sizes measured at the old one go.
-    /// Returns whether it changed.
+    /// Sets the zoom level. Returns whether it changed.
     pub(super) fn set_zoom(&mut self, zoom: f32) -> bool {
         if zoom == self.zoom {
             return false;
         }
         self.zoom = zoom;
-        self.measure_cache.clear();
         true
     }
 
-    /// The size of a node's text, as measured at the current zoom.
+    /// The size of a node's text at the current zoom, as measured; `wide`: for
+    /// a node below ToDo, which wraps at a larger width.
     pub(super) fn measured(&self, text: &str, wide: bool) -> Option<Size> {
-        self.measure_cache.get(&(text.to_string(), wide)).copied()
+        self.measure_cache.get(&(text.to_string(), wide)).map(|&size| view::text_at_zoom(size, self.zoom))
     }
 }
 
@@ -105,6 +108,18 @@ impl App {
             let search = if self.search.open { self.search_panel_height() } else { 0.0 };
             Size::new(self.window_size.width, (self.window_size.height - BARS_HEIGHT - search).max(100.0))
         })
+    }
+
+    /// The part of the map whose nodes are shown as widgets, in the map's
+    /// coordinates: the visible part, at the scroll position as the
+    /// scrollable keeps it (inside the map of `map_size`), with
+    /// `NEAR_MARGIN` around it.
+    pub(super) fn near_view(&self, map_size: Size) -> Rectangle {
+        let view = self.viewport_size();
+        let max = Vector::new((map_size.width - view.width).max(0.0), (map_size.height - view.height).max(0.0));
+        let scroll = self.viewport.scroll;
+        let at = Point::new(scroll.x.clamp(0.0, max.x) - NEAR_MARGIN, scroll.y.clamp(0.0, max.y) - NEAR_MARGIN);
+        Rectangle::new(at, Size::new(view.width + 2.0 * NEAR_MARGIN, view.height + 2.0 * NEAR_MARGIN))
     }
 
     /// Recomputes the layout if anything it depends on changed; the edges
