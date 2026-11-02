@@ -33,7 +33,10 @@ pub const APP_FONT: Font = Font::with_name("Meiryo UI");
 const NODE_FONT_SIZE: f32 = 14.0;
 /// The line height of node texts and icons, relative to the font size.
 const NODE_LINE_HEIGHT: f32 = 1.2;
-const NODE_MAX_TEXT_WIDTH: f32 = 360.0;
+/// Node texts wrap at this width; below root > ToDo (long sentences copied
+/// from the Next Steps) at `TODO_ITEM_MAX_TEXT_WIDTH`.
+const NODE_MAX_TEXT_WIDTH: f32 = 400.0;
+const TODO_ITEM_MAX_TEXT_WIDTH: f32 = 800.0;
 const NODE_PADDING: [f32; 2] = [1.0, 7.0];
 const ICON_WIDTH: f32 = 18.0;
 const ROW_SPACING: f32 = 3.0;
@@ -200,11 +203,11 @@ const CONTEXT_MENU_STYLE: MenuStyle = MenuStyle { width: 300.0, ..MENU_STYLE };
 
 /// The size of a node's text as the text widget will lay it out at the zoom
 /// (the same font size for every node, the root included).
-fn measure_text(content: &str, zoom: f32) -> Size {
+fn measure_text(content: &str, max_width: f32, zoom: f32) -> Size {
     let content = if content.is_empty() { " " } else { content };
     let p = iced::advanced::graphics::text::Paragraph::with_text(iced::advanced::Text {
         content,
-        bounds: Size::new(NODE_MAX_TEXT_WIDTH * zoom, f32::INFINITY),
+        bounds: Size::new(max_width * zoom, f32::INFINITY),
         size: (NODE_FONT_SIZE * zoom).into(),
         line_height: LineHeight::Relative(NODE_LINE_HEIGHT),
         font: APP_FONT,
@@ -217,15 +220,38 @@ fn measure_text(content: &str, zoom: f32) -> Size {
     Size::new(b.width.ceil() + 1.0, b.height.ceil())
 }
 
+/// Whether the node is below the root's ToDo node (ToDo itself is not).
+fn is_below_todo(map: &MindMap, id: NodeId) -> bool {
+    let root = map.root();
+    let mut node = id;
+    while let Some(parent) = map.parent(node) {
+        if parent == root {
+            return node != id && map.text(node) == pkm::TODO_NODE_NAME;
+        }
+        node = parent;
+    }
+    false
+}
+
+/// The width at 100% zoom a node's text wraps at.
+fn max_text_width(map: &MindMap, id: NodeId) -> f32 {
+    if is_below_todo(map, id) { TODO_ITEM_MAX_TEXT_WIDTH } else { NODE_MAX_TEXT_WIDTH }
+}
+
+/// The key of a measured text size: the text, and whether it wraps at the
+/// wider width.
+pub type MeasureKey = (String, bool);
+
 /// `cache` holds the sizes at this zoom.
-fn text_size(cache: &mut HashMap<String, Size>, text: &str, zoom: f32) -> Size {
-    *cache.entry(text.to_string()).or_insert_with(|| measure_text(text, zoom))
+fn text_size(cache: &mut HashMap<MeasureKey, Size>, text: &str, wide: bool, zoom: f32) -> Size {
+    let max_width = if wide { TODO_ITEM_MAX_TEXT_WIDTH } else { NODE_MAX_TEXT_WIDTH };
+    *cache.entry((text.to_string(), wide)).or_insert_with(|| measure_text(text, max_width, zoom))
 }
 
 /// The size of a node's box at the zoom: its text, icons and link marker,
 /// with padding and the border.
-pub fn node_size(cache: &mut HashMap<String, Size>, map: &MindMap, id: NodeId, zoom: f32) -> Size {
-    let t = text_size(cache, &map.text(id), zoom);
+pub fn node_size(cache: &mut HashMap<MeasureKey, Size>, map: &MindMap, id: NodeId, zoom: f32) -> Size {
+    let t = text_size(cache, &map.text(id), is_below_todo(map, id), zoom);
     let extras = map.icons(id).len() + usize::from(map.link(id).is_some());
     let pad = NODE_PADDING;
     Size::new(
@@ -412,7 +438,10 @@ impl App {
         let map = &doc.map();
         let label = map.text(id);
         let zoom = self.viewport.zoom();
-        let tsize = self.viewport.measured(&label).unwrap_or(Size::new(NODE_MAX_TEXT_WIDTH, 20.0) * zoom);
+        let tsize = self
+            .viewport
+            .measured(&label, is_below_todo(map, id))
+            .unwrap_or(Size::new(max_text_width(map, id), 20.0) * zoom);
         let (font_size, icon_width) = (NODE_FONT_SIZE * zoom, ICON_WIDTH * zoom);
         let mut content = row![].spacing(ROW_SPACING * zoom).align_y(Alignment::Center);
         for icon in map.icons(id) {
@@ -867,5 +896,53 @@ impl canvas::Program<MapMsg> for EdgeLayer<'_> {
             frame.stroke(&path, stroke);
         });
         vec![geometry]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The width of a node's box at 100% zoom.
+    fn width(map: &MindMap, id: NodeId) -> f32 {
+        node_size(&mut HashMap::new(), map, id, 1.0).width
+    }
+
+    #[test]
+    fn node_texts_wrap_at_400_px_and_below_todo_at_800() {
+        let long = "word ".repeat(200);
+        // The padding and the border around the text.
+        let around = 2.0 * NODE_PADDING[1] + 2.0;
+        let mut map = MindMap::new("root");
+        let root = map.root();
+        let other = map.add_child(root, &long);
+        let todo = map.add_child(root, pkm::TODO_NODE_NAME);
+        let item = map.add_child(todo, &long);
+        let deeper = map.add_child(item, &long);
+        let nested = map.add_child(other, pkm::TODO_NODE_NAME);
+        let nested_child = map.add_child(nested, &long);
+
+        assert!(width(&map, other) <= NODE_MAX_TEXT_WIDTH + 1.0 + around);
+        assert!(width(&map, other) > NODE_MAX_TEXT_WIDTH * 0.9);
+        for wide in [item, deeper] {
+            assert!(width(&map, wide) <= TODO_ITEM_MAX_TEXT_WIDTH + 1.0 + around);
+            assert!(width(&map, wide) > NODE_MAX_TEXT_WIDTH + 1.0 + around);
+        }
+        // ToDo itself, and a node named ToDo elsewhere, are ordinary nodes.
+        assert!(!is_below_todo(&map, todo));
+        assert!(!is_below_todo(&map, root));
+        assert!(!is_below_todo(&map, nested));
+        assert!(!is_below_todo(&map, nested_child));
+    }
+
+    #[test]
+    fn a_text_is_measured_at_each_width() {
+        let long = "word ".repeat(200);
+        let mut cache = HashMap::new();
+        let narrow = text_size(&mut cache, &long, false, 1.0);
+        let wide = text_size(&mut cache, &long, true, 1.0);
+        assert!(wide.width > narrow.width);
+        assert!(wide.height < narrow.height);
+        assert_eq!(cache.len(), 2);
     }
 }
