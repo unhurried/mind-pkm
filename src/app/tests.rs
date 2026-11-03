@@ -454,6 +454,44 @@ fn moving_a_node_among_its_siblings_scrolls_only_to_keep_it_in_view() {
 }
 
 #[test]
+fn ctrl_right_makes_the_node_the_last_child_of_the_node_above() {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let (a, b, c) = (m.add_child(root, "a"), m.add_child(root, "b"), m.add_child(root, "c"));
+    m.add_child(a, "a1");
+    m.set_folded(a, true);
+    let mut app = app_with(m);
+
+    // The first child has no node above, and neither has the root: nothing happens.
+    app.doc.as_mut().unwrap().select(vec![a]);
+    press_ctrl(&mut app, Named::ArrowRight);
+    app.doc.as_mut().unwrap().select(vec![root]);
+    press_ctrl(&mut app, Named::ArrowRight);
+    assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
+    assert!(!app.doc.as_ref().unwrap().dirty());
+
+    // b goes under a (after a1), which is unfolded; the selection stays on b.
+    app.doc.as_mut().unwrap().select(vec![b]);
+    press_ctrl(&mut app, Named::ArrowRight);
+    assert_eq!(root_texts(&app), vec!["a", "c"]);
+    assert_eq!(map(&app).child_texts(a), vec!["a1", "b"]);
+    assert_eq!(map(&app).parent(b), Some(a));
+    assert!(!map(&app).is_folded(a));
+    assert_eq!(app.doc.as_ref().unwrap().focus(), b);
+
+    // c goes under a as well; Ctrl+Z takes back one move at a time.
+    app.doc.as_mut().unwrap().select(vec![c]);
+    press_ctrl(&mut app, Named::ArrowRight);
+    assert_eq!(map(&app).child_texts(a), vec!["a1", "b", "c"]);
+    send(&mut app, MapMsg::Command(Command::Undo));
+    assert_eq!(root_texts(&app), vec!["a", "c"]);
+    send(&mut app, MapMsg::Command(Command::Undo));
+    assert_eq!(root_texts(&app), vec!["a", "b", "c"]);
+    assert_eq!(map(&app).child_texts(a), vec!["a1"]);
+    assert!(map(&app).is_folded(a));
+}
+
+#[test]
 fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
     for key in [Named::Delete, Named::F11] {
         let mut m = MindMap::new("root");

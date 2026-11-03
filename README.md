@@ -120,6 +120,7 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 | Delete / Ctrl+Delete | Delete the selected nodes and the files of pages and directories, with / without a confirmation (as F11) |
 | Space | Fold / unfold |
 | Ctrl+Up / Ctrl+Down | Move the node up / down among its siblings |
+| Ctrl+Right | Make the node the last child of the node above it (its previous sibling) |
 | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste nodes (text from other applications is pasted one node per line) |
 | Ctrl+K | Set or remove a node's link |
 | Ctrl+Z / Ctrl+Y | Undo / redo |

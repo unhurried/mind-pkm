@@ -33,6 +33,7 @@ pub enum Command {
     Paste,
     MoveUp,
     MoveDown,
+    Indent,
     ToggleFold,
     SetLink,
     CenterSelected,
@@ -128,6 +129,12 @@ impl App {
             Command::MoveUp | Command::MoveDown => {
                 doc.move_focus(cmd == Command::MoveUp);
                 self.viewport.keep_parent_in_place = true;
+                Task::none()
+            }
+            Command::Indent => {
+                doc.indent_focus();
+                self.viewport.keep_parent_in_place = true;
+                self.warn_if_under_page(&[focus]);
                 Task::none()
             }
             Command::ToggleFold => {

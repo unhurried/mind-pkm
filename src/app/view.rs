@@ -130,6 +130,7 @@ pub const MENUS: &[Menu<Command>] = &[
             ("Paste", "Ctrl+V", Command::Paste),
             ("Move Up", "Ctrl+Up", Command::MoveUp),
             ("Move Down", "Ctrl+Down", Command::MoveDown),
+            ("Make Child of Node Above", "Ctrl+Right", Command::Indent),
             ("Fold / Unfold", "Space", Command::ToggleFold),
             ("Set Link...", "Ctrl+K", Command::SetLink),
             ("Center Selected Node", "Esc", Command::CenterSelected),
@@ -564,6 +565,8 @@ impl App {
         // The focused node is always among the selected ones.
         let selected = doc.selection().contains(&id);
         let border_width = if doc.focus() == id { 2 } else { 1 };
+        // A node being edited keeps its border but gets no background.
+        let selected_bg = selected && edit.is_none();
         let boxed = container(content)
             .padding(NODE_PADDING.map(|p| p * zoom))
             .width(b.rect.width)
@@ -571,8 +574,12 @@ impl App {
             .align_y(Alignment::Center)
             .style(move |_| {
                 if selected {
-                    container::background(SELECTED_BG)
-                        .border(border::color(SELECTED_BORDER).width(border_width).rounded(NODE_RADIUS * zoom))
+                    let frame = border::color(SELECTED_BORDER).width(border_width).rounded(NODE_RADIUS * zoom);
+                    if selected_bg {
+                        container::background(SELECTED_BG).border(frame)
+                    } else {
+                        container::Style::default().border(frame)
+                    }
                 } else {
                     container::Style::default()
                 }
