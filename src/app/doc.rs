@@ -6,6 +6,7 @@
 //! changes that are not say why (`unfold_to_navigate`, `reveal`,
 //! `apply_refresh`, `set_new_node_text`).
 
+use super::drag::{DropPlace, DropTarget};
 use super::layout::{self, MapLayout};
 use super::view;
 use crate::mindmap::{MindMap, NodeId};
@@ -509,6 +510,20 @@ impl Doc {
         if let Some(i) = new_index.filter(|&i| i < self.map.children(parent).len()) {
             self.checkpoint();
             self.map.move_node(focus, parent, Some(i));
+        }
+    }
+
+    /// Makes the focused node the last child of its previous sibling (the
+    /// node above it), unfolding that node. Nothing happens for the root or a
+    /// first child.
+    pub(super) fn indent_focus(&mut self) {
+        let focus = self.focus;
+        let above = self.map.parent(focus).and_then(|parent| {
+            let index = self.map.index_in_parent(focus)?.checked_sub(1)?;
+            self.map.children(parent).get(index).copied()
+        });
+        if let Some(node) = above {
+            self.move_nodes(&[focus], DropTarget { node, place: DropPlace::Child });
         }
     }
 
