@@ -69,7 +69,13 @@ pub fn entries(page: &Page) -> Vec<Entry> {
                 }
                 continue;
             }
-            if !placed && page.pending().is_some_and(|pd| pd.at <= block.range.start) {
+            // A new paragraph, or a block typed empty that covers none of
+            // the parse: before the block after it.
+            let before = match page.pending() {
+                Some(pd) => pd.at <= block.range.start,
+                None => a.region.end < block.range.start,
+            };
+            if !placed && before {
                 shown.push(Shown::Active);
             }
         }
@@ -129,6 +135,7 @@ fn shared(above: &[(ContainerKind, Option<usize>)], below: &[(ContainerKind, Opt
 mod tests {
     use super::*;
     use crate::markdown::edit::{self, Sel};
+    use iced::widget::text_editor::{Action, Edit};
     use std::path::PathBuf;
 
     fn page(text: &str) -> Page {
@@ -171,6 +178,23 @@ mod tests {
             [Shown::Block(0), Shown::Active, Shown::Block(1)]
         );
         assert_eq!((entries[1].kind.clone(), entries[1].covers.clone()), (BlockKind::Paragraph, at..at));
+    }
+
+    #[test]
+    fn a_block_typed_empty_stays_in_its_place() {
+        // A new paragraph typed into, then its text deleted.
+        let mut p = page("one\n\ntwo\n");
+        let e = edit::enter(p.text(), p.doc(), 0..3, Sel::caret(3)).unwrap();
+        p.apply(e);
+        p.perform(Action::Edit(Edit::Insert('a')));
+        p.perform(Action::Edit(Edit::Backspace));
+        assert_eq!(shown(&p), [Shown::Block(0), Shown::Active, Shown::Block(1)]);
+        // A paragraph's text deleted.
+        let mut p = page("a\n\nb\n\nc\n");
+        p.place(Sel::caret(4));
+        p.perform(Action::Edit(Edit::Backspace));
+        assert_eq!(p.text(), "a\n\n\n\nc\n");
+        assert_eq!(shown(&p), [Shown::Block(0), Shown::Active, Shown::Block(1)]);
     }
 
     #[test]
