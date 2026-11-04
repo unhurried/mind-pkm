@@ -187,3 +187,21 @@ fn typing_then_a_rule_that_changes_nothing_still_tidies() {
     click_after(&mut app, id, "en!");
     assert_eq!(page_text(&app, id), "* a\n\n* b\n\nen!d\n");
 }
+
+#[test]
+fn backspace_in_an_empty_task_item_makes_a_paragraph_at_once() {
+    let (mut app, _f, _, _) = app_with_page("- [ ] a\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "a");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
+    assert_eq!(page_text(&app, id), "- [ ] a\n- [ ] \n");
+    // No empty plain item between: the box and the bullet go together.
+    editor(&mut app, id, EditorMsg::Bind(Bind::Backspace));
+    assert_eq!(page_text(&app, id), "- [ ] a\n");
+    type_keys(&mut app, id, "more");
+    assert_eq!(page_text(&app, id), "- [ ] a\n\n  more\n");
+    // Undo takes back the typing, then the Backspace: the empty task item again.
+    editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
+    editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
+    assert_eq!(page_text(&app, id), "- [ ] a\n- [ ] \n");
+}
