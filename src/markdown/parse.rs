@@ -53,6 +53,23 @@ pub struct Container {
     pub range: Range<usize>,
 }
 
+/// A list (a nested one too), and where its items and the blocks of its
+/// items are separated: what decides whether it is tight or loose.
+#[derive(Debug, Clone, PartialEq)]
+pub struct List {
+    /// From the start of its first item's line to its last non-blank character.
+    pub range: Range<usize>,
+    /// 0 for a list at the top level, or at the top of a quote.
+    pub depth: usize,
+    /// The kinds of the containers around it, outermost first.
+    pub outer: Vec<ContainerKind>,
+    /// Where the blocks following its separators start: every item's after
+    /// the first item's, and the first block of each further block of an
+    /// item (a nested list's first item, a quote's first block, any other
+    /// block). Nested lists' separators are their own.
+    pub separators: Vec<usize>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerKind {
     /// Its lines start with `>` (and a space).
@@ -179,6 +196,8 @@ pub struct Document {
     pub events: Vec<(Event<'static>, Range<usize>)>,
     pub blocks: Vec<Block>,
     pub containers: Vec<Container>,
+    /// Every list of the page, in the order they start (a list before the lists nested in it).
+    pub lists: Vec<List>,
     /// Footnote labels by the number they are shown with (order of first reference).
     pub footnotes: HashMap<String, usize>,
     pub headings: Vec<HeadingInfo>,
@@ -255,10 +274,11 @@ impl Document {
             events,
             blocks: Vec::new(),
             containers: Vec::new(),
+            lists: Vec::new(),
             footnotes: HashMap::new(),
             headings: Vec::new(),
         };
-        (doc.blocks, doc.containers) = segment(&doc.text, &doc.events);
+        (doc.blocks, doc.containers, doc.lists) = segment(&doc.text, &doc.events);
         doc.footnotes = number_footnotes(&doc.events);
         doc.headings = headings(&doc);
         doc
@@ -546,12 +566,14 @@ fn matching_end(events: &[(Event<'static>, Range<usize>)], start: usize) -> usiz
     events.len() - 1
 }
 
-fn segment(text: &str, events: &[(Event<'static>, Range<usize>)]) -> (Vec<Block>, Vec<Container>) {
-    let mut s = Segmenter { text, events, blocks: Vec::new(), containers: Vec::new() };
+fn segment(text: &str, events: &[(Event<'static>, Range<usize>)]) -> (Vec<Block>, Vec<Container>, Vec<List>) {
+    let mut s = Segmenter { text, events, blocks: Vec::new(), containers: Vec::new(), lists: Vec::new() };
     s.children(0, events.len(), &[]);
     let mut blocks = s.blocks;
     blocks.sort_by_key(|b| b.range.start);
-    (fill_gaps(text, blocks), s.containers)
+    let mut lists = s.lists;
+    lists.sort_by_key(|l| (l.range.start, l.depth));
+    (fill_gaps(text, blocks), s.containers, lists)
 }
 
 /// Turns the parser's events into blocks and containers.
@@ -560,6 +582,7 @@ struct Segmenter<'a> {
     events: &'a [(Event<'static>, Range<usize>)],
     blocks: Vec<Block>,
     containers: Vec<Container>,
+    lists: Vec<List>,
 }
 
 impl Segmenter<'_> {
@@ -650,6 +673,10 @@ impl Segmenter<'_> {
             }
             loose
         };
+        let range = trim_end(text, self.start(events[start].1.start, outer)..events[start].1.end, &self.kinds(outer));
+        let me = self.lists.len();
+        self.lists.push(List { range, depth, outer: self.kinds(outer), separators: Vec::new() });
+        let mut separators = Vec::new();
         let mut index = 0;
         let mut i = start + 1;
         while i < end {
@@ -683,14 +710,19 @@ impl Segmenter<'_> {
                 if j < item_end { line_start_if_indented(text, events[j].1.start, true) } else { item_range.end };
             let range = trim_end(text, item_start..own_end.max(item_start), &self.kinds(outer));
             let kind = BlockKind::ListItem(item);
+            if index > 1 {
+                separators.push(range.start);
+            }
             self.blocks.push(Block { range, kind, events: i + 1..j, outer: outer.to_vec() });
             // The rest: nested lists as items, any other block a block of its own inside the item.
             let mut container: Option<usize> = None;
             while j < item_end {
                 let e = &events[j].0;
                 let child_end = if matches!(e, Event::Start(_)) { matching_end(events, j) } else { j };
+                let first = self.blocks.len();
                 if let Event::Start(Tag::List(n)) = e {
                     self.list(j, child_end, *n, depth + 1, outer, top);
+                    separators.extend(self.blocks.get(first).map(|b| b.range.start));
                     j = child_end + 1;
                     continue;
                 }
@@ -724,13 +756,16 @@ impl Segmenter<'_> {
                     let start = line_start_if_indented(text, events[j].1.start, true);
                     let range = trim_end(text, start..events[k - 1].1.end, &self.kinds(&inner));
                     self.blocks.push(Block { range, kind: BlockKind::Paragraph, events: j..k, outer: inner });
+                    separators.extend(self.blocks.get(first).map(|b| b.range.start));
                     j = k;
                     continue;
                 }
+                separators.extend(self.blocks.get(first).map(|b| b.range.start));
                 j = child_end + 1;
             }
             i = item_end + 1;
         }
+        self.lists[me].separators = separators;
     }
 }
 
@@ -1102,6 +1137,44 @@ mod tests {
         assert!(matches!(&doc.blocks[0].kind, BlockKind::ListItem(i) if i.loose));
         let doc = Document::parse("- a\n- b\n");
         assert!(matches!(&doc.blocks[0].kind, BlockKind::ListItem(i) if !i.loose));
+    }
+
+    /// The lists of a text: (range, depth, the texts of the blocks after their separators).
+    fn lists(text: &str) -> Vec<(&str, usize, Vec<&str>)> {
+        let doc = Document::parse(text);
+        let source =
+            |at: usize| doc.blocks.iter().find(|b| b.range.start == at).map_or("?", |b| &text[b.range.clone()]);
+        doc.lists
+            .iter()
+            .map(|l| (&text[l.range.clone()], l.depth, l.separators.iter().map(|&s| source(s)).collect()))
+            .collect()
+    }
+
+    #[test]
+    fn lists_and_their_separators() {
+        assert_eq!(lists("- a\n- b\n\n- c\n"), [("- a\n- b\n\n- c", 0, vec!["- b", "- c"])]);
+        assert_eq!(
+            lists("* a\n\n  * b\n  * c\n\n* d\n"),
+            [("* a\n\n  * b\n  * c\n\n* d", 0, vec!["  * b", "* d"]), ("  * b\n  * c", 1, vec!["  * c"])]
+        );
+        // The blocks of an item: a code block, a quote (its first block), a paragraph after a nested list.
+        assert_eq!(
+            lists("* a\n  ```\n  x\n  ```\n  > q\n* b\n  * n\n\n  t\n"),
+            [
+                (
+                    "* a\n  ```\n  x\n  ```\n  > q\n* b\n  * n\n\n  t",
+                    0,
+                    vec!["  ```\n  x\n  ```", "  > q", "* b", "  * n", "  t"]
+                ),
+                ("  * n", 1, vec![]),
+            ]
+        );
+        assert_eq!(lists("* a\n\n  p\n"), [("* a\n\n  p", 0, vec!["  p"])]);
+        // In a quote: its lines with their `>`.
+        assert_eq!(lists("> * a\n>\n> * b\n"), [("> * a\n>\n> * b", 0, vec!["> * b"])]);
+        let doc = Document::parse("> * a\n");
+        assert_eq!(doc.lists[0].outer, [ContainerKind::Quote]);
+        assert!(Document::parse("a\n\nb\n").lists.is_empty());
     }
 
     #[test]

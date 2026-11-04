@@ -12,6 +12,7 @@ pub mod format;
 pub mod history;
 pub mod html;
 pub mod images;
+pub mod lists;
 pub mod live;
 pub mod page;
 pub mod parse;

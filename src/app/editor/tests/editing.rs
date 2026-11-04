@@ -411,7 +411,8 @@ fn enter_after_an_items_text_keeps_its_code_block() {
     click_after(&mut app, id, "* aaa");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     typing(&mut app, id, "b");
-    assert_eq!(page_text(&app, id), "* aaa\n\n  \n  ```json\n  aaa\n  ```\n\n* b\n");
+    // The list needs no blank lines before the code block: it is written tight.
+    assert_eq!(page_text(&app, id), "* aaa\n  ```json\n  aaa\n  ```\n* b\n");
     assert_eq!(app.editors[&id].page.region_text(), Some("* b"));
 }
 

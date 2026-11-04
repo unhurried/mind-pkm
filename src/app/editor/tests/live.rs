@@ -118,18 +118,6 @@ fn typing_into_a_new_paragraph() {
     assert_eq!(page_text(&app, id), "last\n\nq2\n");
 }
 
-/// Types `s` as the editing widget sends it: characters auto-pairing may
-/// apply to as key bindings, the others as inserted text.
-fn type_keys(app: &mut App, id: window::Id, s: &str) {
-    for c in s.chars() {
-        if "()[]{}\"'`*_~$".contains(c) {
-            editor(app, id, EditorMsg::Bind(Bind::Type(c)));
-        } else {
-            live(app, id, LiveMsg::Insert(c.into()));
-        }
-    }
-}
-
 /// An editor on `text` with the cursor in a new paragraph after its first line.
 fn new_paragraph_after_first(text: &str) -> (App, window::Id, crate::pkm::testutil::Fixture) {
     let (mut app, f, _, _) = app_with_page(text);
@@ -314,14 +302,14 @@ fn blocks_typed_under_a_list_item() {
     assert_eq!(pending.outer, vec![crate::markdown::parse::ContainerKind::Item { depth: 0, indent: 2 }]);
     type_keys(&mut app, id, "| bbb | ccc |");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
-    assert_eq!(page_text(&app, id), "* aaa\n\n  | bbb | ccc |\n  | --- | --- |\n  |  |  |\n");
+    assert_eq!(page_text(&app, id), "* aaa\n  | bbb | ccc |\n  | --- | --- |\n  |  |  |\n");
     assert_eq!(active_kind(&app, id), crate::markdown::BlockKind::Table);
     let doc = crate::markdown::parse::Document::parse(&page_text(&app, id));
     assert_eq!(doc.blocks[1].kind, crate::markdown::BlockKind::Table);
     assert_eq!(doc.blocks[1].outer, vec![0]);
     // Typing into a cell keeps the table in the item.
     type_keys(&mut app, id, "x");
-    assert_eq!(page_text(&app, id), "* aaa\n\n  | bbb | ccc |\n  | --- | --- |\n  | x   |     |\n");
+    assert_eq!(page_text(&app, id), "* aaa\n  | bbb | ccc |\n  | --- | --- |\n  | x   |     |\n");
     // A code block the same way, between the item and the next one.
     let (mut app, _f, _, _) = app_with_page("- a\n- b\n");
     let id = open_with_f1(&mut app);
@@ -331,7 +319,8 @@ fn blocks_typed_under_a_list_item() {
     type_keys(&mut app, id, "```");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     typing(&mut app, id, "x");
-    assert_eq!(page_text(&app, id), "- a\n\n  ```\n  x\n  ```\n\n- b\n");
+    // The list needs no blank lines: it stays tight.
+    assert_eq!(page_text(&app, id), "- a\n  ```\n  x\n  ```\n- b\n");
     // A table in a quote keeps its `>` the same way.
     let (mut app, _f, _, _) = app_with_page("> | a | b |\n> | --- | --- |\n> |  |  |\n");
     let id = open_with_f1(&mut app);
