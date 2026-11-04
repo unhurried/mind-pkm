@@ -1044,6 +1044,27 @@ fn into_previous_item(
     Some(Edited::new(splice(text, first.start..content, &insert), first.start + insert.len()))
 }
 
+/// A new empty paragraph right below the text of the list item at
+/// `region`, inside the item (before its nested lists and other blocks),
+/// where a block is inserted. None for another block.
+pub fn block_below_item(text: &str, doc: &Document, region: Range<usize>, _sel: Sel) -> Option<Edited> {
+    let block = doc.blocks.iter().find(|b| b.range.start == region.start)?;
+    let BlockKind::ListItem(item) = &block.kind else { return None };
+    let first = line_range(text, block.range.start);
+    let m = line_marker(&text[first.clone()])?;
+    // Its content column (a task's box is part of its text).
+    let column = m.task.as_ref().map_or(m.end, |t| t.start);
+    let at = block.range.end;
+    let mut pending = Pending::after(text, at);
+    // An empty item cannot have a blank line before its first block.
+    if text[first.start + m.end..at].trim().is_empty() {
+        pending.prefix = "\n".into();
+    }
+    pending.prefix.push_str(&" ".repeat(column));
+    pending.outer.push(ContainerKind::Item { depth: item.depth, indent: column });
+    Some(Edited::pending(text.to_string(), pending))
+}
+
 /// Delete with nothing selected at the end of the region: joins the next
 /// block. None leaves it to the text editor.
 pub fn delete(text: &str, doc: &Document, region: Range<usize>, c: usize) -> Option<Edited> {
@@ -1234,6 +1255,30 @@ mod tests {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
         nested(&text, &doc, region, Sel::caret(c), |t, d, r, s| delete(t, d, r, s.head)).map(|e| show(&e))
+    }
+
+    /// `typed` put in the new paragraph below the text of the item at the cursor.
+    fn below_item_at(marked: &str, typed: &str) -> String {
+        let (text, region, c) = setup(marked);
+        let doc = Document::parse(&text);
+        let e = nested(&text, &doc, region, Sel::caret(c), block_below_item).expect("an item");
+        e.pending.expect("a new paragraph").materialize(&e.text, typed).0
+    }
+
+    #[test]
+    fn a_block_below_an_items_text() {
+        assert_eq!(below_item_at("* a\n* b‸\n* c", "```\n```"), "* a\n* b\n\n  ```\n  ```\n\n* c");
+        assert_eq!(below_item_at("* a\n* b‸", "x"), "* a\n* b\n\n  x");
+        // Before the item's nested list.
+        assert_eq!(below_item_at("* a‸\n  * n", "x"), "* a\n\n  x\n\n  * n");
+        assert_eq!(below_item_at("1. a‸\n2. b", "x"), "1. a\n\n   x\n\n2. b");
+        assert_eq!(below_item_at("- [ ] a‸", "x"), "- [ ] a\n\n  x");
+        assert_eq!(below_item_at("* a\n  * n‸", "x"), "* a\n  * n\n\n    x");
+        // In a quote: the lines keep its `>`.
+        assert_eq!(below_item_at("> * a‸\n> * b", "```\n```"), "> * a\n>\n>   ```\n>   ```\n>\n> * b");
+        // Not an item.
+        let (text, region, c) = setup("para‸");
+        assert!(block_below_item(&text, &Document::parse(&text), region, Sel::caret(c)).is_none());
     }
 
     fn tab_at(marked: &str, outdent: bool) -> String {

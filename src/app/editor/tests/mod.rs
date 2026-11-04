@@ -25,6 +25,7 @@ mod clipboard;
 mod context_menu;
 mod editing;
 mod find;
+mod lists;
 mod live;
 mod pkm;
 mod tables;
@@ -100,6 +101,18 @@ fn cell(app: &App, id: window::Id) -> (usize, usize) {
 
 fn live(app: &mut App, id: window::Id, msg: LiveMsg) {
     editor(app, id, EditorMsg::Live(msg));
+}
+
+/// Types `s` as the editing widget sends it: characters auto-pairing may
+/// apply to as key bindings, the others as inserted text.
+fn type_keys(app: &mut App, id: window::Id, s: &str) {
+    for c in s.chars() {
+        if "()[]{}\"'`*_~$".contains(c) {
+            editor(app, id, EditorMsg::Bind(Bind::Type(c)));
+        } else {
+            live(app, id, LiveMsg::Insert(c.into()));
+        }
+    }
 }
 
 /// The kind of the block being edited.

@@ -12,6 +12,7 @@
 
 use crate::markdown::edit::{self, CodeBody, Edited, Pending, Sel};
 use crate::markdown::history::{History, Snapshot};
+use crate::markdown::lists::{self, Shift};
 use crate::markdown::live::{self, Display};
 use crate::markdown::page::PageText;
 use crate::markdown::parse::{ContainerKind, prefix_len};
@@ -220,6 +221,14 @@ pub struct Page {
     history: History,
     /// Counts the changes of the text.
     revision: u64,
+    /// The text was edited since the lists at the edit were last written in
+    /// their form (see `lists::tidy`): typing, or a rule leaving a new empty
+    /// paragraph. Leaving the active block tidies them.
+    untidy: bool,
+    /// Where a block left by `deactivate` was edited: its lists are tidied by
+    /// the next `place`, which maps the offset it is given (offsets read from
+    /// the view before stay right until then).
+    deferred: Option<Range<usize>>,
 }
 
 fn modified_time(path: &Path) -> Option<SystemTime> {
@@ -251,6 +260,8 @@ impl Page {
             blocks: None,
             history: History::default(),
             revision: 0,
+            untidy: false,
+            deferred: None,
         }
     }
 
@@ -447,7 +458,8 @@ impl Page {
                 }
             }
         }
-        self.deactivate();
+        let shift = self.leave();
+        let sel = Sel { anchor: shift.map(sel.anchor), head: shift.map(sel.head) };
         let head = sel.head;
         let region = edit::region_at(&self.doc, head).or_else(|| hold_break.then(|| self.with_break(head)).flatten());
         match region {
@@ -744,6 +756,7 @@ impl Page {
     }
 
     fn record(&mut self, before: Snapshot, typed: Option<char>) {
+        self.untidy = true;
         let at = self.sel.head;
         self.history.record(before, typed.map(|c| (c, at.saturating_sub(c.len_utf8()))), Instant::now());
     }
@@ -820,8 +833,8 @@ impl Page {
     /// Leaves the active region (see `deactivate`), the cursor at `sel` in no
     /// block: a key or typing places it.
     pub fn leave_at(&mut self, sel: Sel) {
-        self.deactivate();
-        self.sel = sel;
+        let shift = self.leave();
+        self.sel = Sel { anchor: shift.map(sel.anchor), head: shift.map(sel.head) };
     }
 
     /// Drops the active region as it is, without leaving it: the source mode
@@ -829,6 +842,8 @@ impl Page {
     pub fn forget_active(&mut self) {
         self.active = None;
         self.pending = None;
+        self.untidy = false;
+        self.deferred = None;
     }
 
     /// The selection of the source mode's text editor, as page offsets.
@@ -842,24 +857,66 @@ impl Page {
     }
 
     /// Leaves the active region: an empty new paragraph disappears, and so do
-    /// the blank lines of a block whose text was all deleted.
+    /// the blank lines of a block whose text was all deleted. The lists at a
+    /// block edited there are written in their form by the next `place`.
     pub fn deactivate(&mut self) {
-        let Some(active) = self.active.take() else { return };
+        self.leave_block(false);
+    }
+
+    /// `deactivate`, the lists at the block edited written in their form; and
+    /// where the offsets of the text went.
+    fn leave(&mut self) -> Shift {
+        self.leave_block(true)
+    }
+
+    fn leave_block(&mut self, tidy: bool) -> Shift {
+        let Some(active) = self.active.take() else {
+            return match self.deferred.take() {
+                Some(at) if tidy => self.tidy_lists(at),
+                at => {
+                    self.deferred = at;
+                    Shift::default()
+                }
+            };
+        };
         // A marker left undetermined is what the text says it is.
         if self.tentative.take().is_some() {
             self.reparse();
         }
-        if self.pending.take().is_some() {
-            return;
-        }
-        if active.region.is_empty() && !self.text.is_empty() {
-            let (text, at) = edit::collapse_blank_lines(&self.text, active.region.start);
+        let mut shift = Shift::default();
+        let mut at = active.region.clone();
+        if let Some(p) = self.pending.take() {
+            at = p.at..p.at;
+        } else if active.region.is_empty() && !self.text.is_empty() {
+            let (text, to) = edit::collapse_blank_lines(&self.text, active.region.start);
             if text != self.text {
+                shift = Shift::of_change(&self.text, &text);
                 self.text = text;
                 self.reparse();
             }
-            self.sel = Sel::caret(at);
+            self.sel = Sel::caret(to);
+            at = to..to;
         }
+        if std::mem::take(&mut self.untidy) {
+            if tidy {
+                shift = shift.then(self.tidy_lists(at));
+            } else {
+                self.deferred = Some(at);
+            }
+        }
+        shift
+    }
+
+    /// Writes the lists overlapping or touching `at` in their form.
+    fn tidy_lists(&mut self, at: Range<usize>) -> Shift {
+        let len = self.text.len();
+        let (text, shift) = lists::tidy(&self.text, at.start.min(len)..at.end.min(len));
+        if !shift.is_empty() {
+            self.sel = Sel { anchor: shift.map(self.sel.anchor), head: shift.map(self.sel.head) };
+            self.text = text;
+            self.reparse();
+        }
+        shift
     }
 
     /// Applies an action of the text editor to the active region.
@@ -906,6 +963,7 @@ impl Page {
         self.sel = Sel { anchor: local.anchor + active.region.start, head: local.head + active.region.start };
         self.reparse();
         self.history.record(before, typed.map(|c| (c, self.sel.head.saturating_sub(c.len_utf8()))), Instant::now());
+        self.untidy = true;
     }
 
     /// An action of the text editor holding the code of the code block being edited.
@@ -948,6 +1006,7 @@ impl Page {
             }
         }
         self.history.record(before, typed.map(|c| (c, self.sel.head.saturating_sub(c.len_utf8()))), Instant::now());
+        self.untidy = true;
     }
 
     /// Changes the language (the info string) of the code block being edited.
@@ -992,7 +1051,7 @@ impl Page {
             return;
         }
         let at = a.region.end;
-        self.deactivate();
+        let at = self.leave().map(at);
         let pending = edit::gap_pending(&self.text, &self.doc, at, None);
         self.start_pending(pending);
     }
@@ -1046,10 +1105,34 @@ impl Page {
         }
     }
 
-    /// Applies the outcome of an editing rule as one undoable change.
+    /// Applies the outcome of an editing rule as one undoable change, the
+    /// lists it changed written in their form (see `lists::tidy`) - unless it
+    /// leaves a new empty paragraph, whose place is between blocks: then
+    /// when the paragraph is left.
     pub fn apply(&mut self, edited: Edited) {
+        self.apply_edit(edited, true);
+    }
+
+    fn apply_edit(&mut self, mut edited: Edited, tidy: bool) {
         let before = self.snapshot();
         let changed = edited.text != self.text;
+        if !changed {
+            // A block typed in that the rule leaves as it is: tidied by the `place` below.
+            if std::mem::take(&mut self.untidy) {
+                let at = self.pending.as_ref().map(|p| p.at..p.at);
+                self.deferred = at.or_else(|| self.active.as_ref().map(|a| a.region.clone()));
+            }
+        } else if !tidy {
+            (self.untidy, self.deferred) = (false, None);
+        } else if edited.pending.is_none() {
+            let (text, shift) = lists::tidy(&edited.text, lists::changed(&self.text, &edited.text));
+            edited.sel = Sel { anchor: shift.map(edited.sel.anchor), head: shift.map(edited.sel.head) };
+            edited.text = text;
+            (self.untidy, self.deferred) = (false, None);
+        } else {
+            // Tidied when the new paragraph is left.
+            (self.untidy, self.deferred) = (true, None);
+        }
         self.active = None;
         self.pending = None;
         self.tentative = None;
@@ -1088,13 +1171,15 @@ impl Page {
         self.place(edited.sel);
         if changed {
             self.history.record(before, None, Instant::now());
+            self.untidy = true;
         }
         self.history.break_typing();
     }
 
-    /// Replaces the text (one undoable change) and puts the cursor at `sel`.
+    /// Replaces the text (one undoable change) and puts the cursor at `sel`,
+    /// as it is: no list is tidied (find and replace, the source mode).
     pub fn set_text(&mut self, text: String, sel: Sel) {
-        self.apply(Edited { text, sel, pending: None });
+        self.apply_edit(Edited { text, sel, pending: None }, false);
     }
 
     /// Takes the source mode's text as the page's.
@@ -1122,6 +1207,8 @@ impl Page {
         self.pending = None;
         self.tentative = None;
         self.blocks = None;
+        self.untidy = false;
+        self.deferred = None;
         self.text = s.text;
         self.reparse();
         self.place(s.sel);

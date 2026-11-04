@@ -768,7 +768,7 @@ impl Editor {
             (edit::splice(text, range.start..end, ""), range.start)
         };
         self.page.deselect_blocks();
-        self.page.set_text(new, Sel::caret(at));
+        self.page.apply(edit::Edited { text: new, sel: Sel::caret(at), pending: None });
     }
 
     // --- The active region ---
@@ -1493,14 +1493,23 @@ impl Editor {
             (Some(a), None) => a.region.end,
             _ => self.page.blocks_range().map_or(text.len(), |r| r.end),
         };
-        let pending = match self.page.pending() {
-            Some(p) if self.page.active().is_some() => p.clone(),
+        // Below a list item's text: inside the item.
+        let in_item = match (self.page.active(), self.page.pending()) {
+            (Some(a), None) if matches!(a.kind, crate::markdown::BlockKind::ListItem(_)) => {
+                edit::nested(text, self.page.doc(), a.region.clone(), self.page.sel(), edit::block_below_item)
+                    .and_then(|e| e.pending)
+            }
+            _ => None,
+        };
+        let pending = match (in_item, self.page.pending()) {
+            (Some(p), _) => p,
+            (None, Some(p)) if self.page.active().is_some() => p.clone(),
             _ => edit::gap_pending(text, self.page.doc(), at, None),
         };
         let (new, start) = pending.materialize(text, &format!("{open}{close}"));
         let cursor = start + pending.prefixed(open).len();
         self.page.deselect_blocks();
-        self.page.set_text(new, Sel::caret(cursor));
+        self.page.apply(edit::Edited { text: new, sel: Sel::caret(cursor), pending: None });
         self.focus()
     }
 
@@ -1614,7 +1623,7 @@ impl Editor {
             let Some(range) = self.page.blocks_range() else { return };
             let new = edit::splice(self.page.text(), range.clone(), text);
             self.page.deselect_blocks();
-            self.page.set_text(new, Sel::caret(range.start + text.len()));
+            self.page.apply(edit::Edited { text: new, sel: Sel::caret(range.start + text.len()), pending: None });
             return;
         }
         if let Some(source) = &mut self.source {
