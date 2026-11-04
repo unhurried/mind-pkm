@@ -291,8 +291,10 @@ impl Doc {
     /// Takes back the creation of `node`, recorded by the checkpoint `serial`
     /// (a new node whose text dialog was cancelled). Changes recorded since
     /// (a background refresh) are kept; the node is deleted from them instead,
-    /// so that no undo step brings it back.
+    /// so that no undo step brings it back. The nodes selected before the new
+    /// node was created are selected again (those still there; else its parent).
     pub(super) fn cancel_new_node(&mut self, node: NodeId, serial: u64) {
+        let parent = self.map.exists(node).then(|| self.map.parent(node)).flatten();
         match self.undo.iter().position(|c| c.serial == serial) {
             // Nothing happened since: back to the map before the node, parent's
             // fold, selection and unsaved mark included.
@@ -304,7 +306,7 @@ impl Doc {
                 }
             }
             Some(i) => {
-                self.undo.remove(i);
+                let before = self.undo.remove(i).map(|c| c.state);
                 for c in self.undo.range_mut(i..) {
                     c.state.map.delete(node);
                 }
@@ -312,9 +314,28 @@ impl Doc {
                     r.map.delete(node);
                 }
                 self.map.delete(node);
+                match before {
+                    Some(b) => self.select_again(b.selection, b.focus, parent),
+                    None => self.select_again(Vec::new(), node, parent),
+                }
             }
-            None => self.map.delete(node),
+            None => {
+                self.map.delete(node);
+                self.select_again(Vec::new(), node, parent);
+            }
         }
+    }
+
+    /// Selects `selection` again with its `focus`, leaving out the nodes that
+    /// are gone; when none is left, `fallback` (if it is still there).
+    fn select_again(&mut self, selection: Vec<NodeId>, focus: NodeId, fallback: Option<NodeId>) {
+        let mut kept: Vec<NodeId> = selection.into_iter().filter(|&n| self.map.exists(n)).collect();
+        if kept.is_empty() {
+            kept.extend(fallback.filter(|&p| self.map.exists(p)));
+        }
+        let Some(&last) = kept.last() else { return };
+        self.focus = if kept.contains(&focus) { focus } else { last };
+        self.selection = kept;
     }
 
     /// Goes back to the map before the last change, with the selection it had.

@@ -5,7 +5,10 @@
 //! moves that follow, to the editor as a click and drags (`relaying`).
 //! `tracking` also takes a press in the margin beside the content for one at
 //! the content's left edge at that height, so that it puts the cursor at the
-//! start of the line there.
+//! start of the line there, and tells when the button is released after a
+//! press: a quick click can bring the release in the same batch of events as
+//! the press, before the subscription that waits for the release is running,
+//! and the page would think the button still held.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
@@ -41,6 +44,8 @@ struct State {
     relayed: bool,
     /// The button was released since the page last said it was held.
     released: bool,
+    /// Tracking: the left button went down and is not released yet.
+    down: bool,
 }
 
 impl<'a> PressRelay<'a> {
@@ -147,6 +152,17 @@ impl Widget<EditorMsg, Theme, Renderer> for PressRelay<'_> {
         {
             shell.publish(on_press(p));
         }
+        if self.on_press.is_some() {
+            let state = tree.state.downcast_mut::<State>();
+            match event {
+                Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => state.down = true,
+                Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if state.down => {
+                    state.down = false;
+                    shell.publish(EditorMsg::Released);
+                }
+                _ => {}
+            }
+        }
         // A press in the margin, replayed at the content's left edge.
         if let (Some(on_press), Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))) = (self.on_press, event)
             && let Some(at) = margin_press(cursor, bounds, viewport)
@@ -169,7 +185,7 @@ impl Widget<EditorMsg, Theme, Renderer> for PressRelay<'_> {
         }
         let state = tree.state.downcast_mut::<State>();
         let Some(held) = self.held else {
-            *state = State::default();
+            *state = State { down: state.down, ..State::default() };
             return;
         };
         match event {

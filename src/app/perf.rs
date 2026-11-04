@@ -244,6 +244,17 @@ impl Bench {
         (messages, start)
     }
 
+    /// The messages of events that come in one batch (as a quick click's
+    /// press and release can), taken by the window's interface at once.
+    fn batch(&mut self, id: window::Id, events: &[Event], cursor: Point) -> Vec<Message> {
+        let cache = self.caches.remove(&id).unwrap_or_default();
+        let mut ui = UserInterface::build(self.app.view(id), WINDOW, cache, &mut self.renderer);
+        let mut messages = Vec::new();
+        ui.update(events, mouse::Cursor::Available(cursor), &mut self.renderer, &mut clipboard::Null, &mut messages);
+        self.caches.insert(id, ui.into_cache());
+        messages
+    }
+
     /// An event in a window, as iced handles it: the messages it gives are
     /// handled and the windows rebuilt; untimed.
     fn deliver(&mut self, id: window::Id, event: Event, cursor: Point) {
@@ -483,6 +494,33 @@ fn pointer_moves_send_no_messages() {
     let pointer = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::PointerOver(..))));
     let text = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed)));
     assert!(pointer.is_some() && pointer < text, "{messages:?}");
+}
+
+/// A quick click on a page's text, its press and release in one batch of
+/// events (before the subscription waiting for the release runs), leaves no
+/// button held: a text editor shown later (a block turned into a math block
+/// by typing) is not handed that click.
+#[test]
+fn a_quick_click_on_a_page_leaves_no_button_held() {
+    let mut b = Bench::new(3, 6);
+    let editor = b.editor;
+    let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    let clicked = (0..60).find_map(|i| {
+        let at = Point::new(160.0, 40.0 + i as f32 * 12.0);
+        let _ = b.messages(editor, moved(at), at, false);
+        let messages = b.batch(editor, &[press.clone(), release.clone()], at);
+        messages.iter().any(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed))).then_some(messages)
+    });
+    let messages = clicked.expect("a click on text");
+    let released = messages.iter().rposition(|m| matches!(m, Message::Editor(_, EditorMsg::Released)));
+    let pressed = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed)));
+    assert!(released > pressed, "{messages:?}");
+    for m in messages {
+        let _ = b.app.update(m);
+    }
+    let e = &b.app.editors[&editor];
+    assert!(!e.pressed() && e.held(iced::Padding::ZERO).is_none());
 }
 
 /// The fold buttons of the nodes near the view take presses: the branch
