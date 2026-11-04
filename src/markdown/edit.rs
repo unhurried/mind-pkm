@@ -968,15 +968,18 @@ pub fn backspace(text: &str, doc: &Document, region: Range<usize>, c: usize) -> 
         && let Some(m) = line_marker(&text[first.clone()])
         && c == first.start + m.end
     {
-        if m.task.is_none()
+        let content = first.start + m.end;
+        let empty = text[content..region.end.max(content)].trim().is_empty();
+        if (m.task.is_none() || empty)
             && let Some(e) = into_previous_item(text, doc, &region, first.clone(), &m)
         {
             return Some(e);
         }
-        // A task item loses its box first, then its bullet.
+        // A task item with text loses its box first, then its bullet; an
+        // empty one both at once.
         let remove = match &m.task {
-            Some(task) => first.start + task.start..first.start + task.end,
-            None => first.start + m.indent..first.start + m.end,
+            Some(task) if !empty => first.start + task.start..first.start + task.end,
+            _ => first.start + m.indent..content,
         };
         return Some(Edited::new(splice(text, remove.clone(), ""), remove.start));
     }
@@ -1495,6 +1498,10 @@ mod tests {
         assert_eq!(backspace_at("## ‸Plan").as_deref(), Some("‸Plan"));
         assert_eq!(backspace_at("- ‸item").as_deref(), Some("‸item"));
         assert_eq!(backspace_at("- [ ] ‸item").as_deref(), Some("- ‸item"));
+        assert_eq!(backspace_at("- [ ] ‸").as_deref(), Some("‸"));
+        assert_eq!(backspace_at("- [x] ‸").as_deref(), Some("‸"));
+        assert_eq!(backspace_at("1. [ ] ‸").as_deref(), Some("‸"));
+        assert_eq!(backspace_at("> - [ ] ‸").as_deref(), Some("> ‸"));
         assert_eq!(backspace_at("> ‸q").as_deref(), Some("‸q"));
         assert_eq!(backspace_at("1. ‸x").as_deref(), Some("‸x"));
         assert_eq!(backspace_at("ab‸c"), None);
@@ -1508,6 +1515,9 @@ mod tests {
         assert_eq!(backspace_at("* a\n* ‸\n* c").as_deref(), Some("* a\n\n  ¶\n\n* c"));
         assert_eq!(backspace_at("1. a\n2. ‸").as_deref(), Some("1. a\n\n   ¶"));
         assert_eq!(backspace_at("- [ ] a\n- ‸").as_deref(), Some("- [ ] a\n\n  ¶"));
+        // An empty task item loses its box and its bullet at once.
+        assert_eq!(backspace_at("- [ ] a\n- [ ] ‸").as_deref(), Some("- [ ] a\n\n  ¶"));
+        assert_eq!(backspace_at("* a\n  * [x] ‸").as_deref(), Some("* a\n\n  ¶"));
         // A nested first item: of the item its list is in.
         assert_eq!(backspace_at("* a\n  * ‸").as_deref(), Some("* a\n\n  ¶"));
         assert_eq!(backspace_at("* a\n  * b\n  * ‸").as_deref(), Some("* a\n  * b\n\n    ¶"));
