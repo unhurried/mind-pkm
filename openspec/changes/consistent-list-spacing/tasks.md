@@ -21,7 +21,7 @@
 
 - [x] 4.1 CLAUDE.md (Structure: `lists.rs`; the editor tidies the lists it edits); check that the existing editing tests still pass unchanged or are updated only where the spec changed
 - [x] 4.2 Run the app under Xvfb: put a code block, a table and a paragraph under list items and look at the spacing; save and check the source
-- [ ] 4.3 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `openspec validate --all --strict`, and the benchmark (`perf`) shows no regression
+- [x] 4.3 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, `openspec validate --all --strict`, and the benchmark (`perf`) shows no regression
 
 ## Workflow follow-up
 
