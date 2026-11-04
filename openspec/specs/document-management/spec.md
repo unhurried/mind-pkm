@@ -82,11 +82,15 @@ Edit SHALL refuse an invalid page or directory name, a target page, assets direc
 - **THEN** `new name includes invalid characters` is shown and nothing changes
 
 ### Requirement: Edit (F2) on other nodes
-Edit on a node that is neither a page nor a directory node SHALL edit its text; double-clicking a node SHALL do the same as Edit.
+Edit on a node that is neither a page nor a directory node SHALL edit its text in the node on the map (see mindmap-editing, In-place text editing); double-clicking a node SHALL do the same as Edit.
 
 #### Scenario: Plain node
-- **WHEN** F2 is pressed on a node without a link and a new text is entered
+- **WHEN** F2 is pressed on a node without a link and a new text is entered in the node
 - **THEN** only the node's text changes
+
+#### Scenario: Double-clicking a page node
+- **WHEN** a node that links a page is double-clicked
+- **THEN** the dialog asking for a new name is shown, as with F2
 
 ### Requirement: New Page (F9)
 New Page SHALL, for each selected node, create `<docDir>/<text>.md` from the page template (substituting `${page_assets_name}` with the assets directory name and `${today}` with today's date as `yy/MM/dd`), create the empty `<text>.assets/` directory, link the node to the page and open the page as Open (F1) does. When the page already exists it SHALL only link the node and report `page file already exists.`; when the assets directory already exists it SHALL report it and create nothing.

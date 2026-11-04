@@ -68,7 +68,7 @@ Some PKM commands SHALL also be reachable by Ctrl shortcuts: Ctrl+O (Open), Ctrl
 - **THEN** New and Open are listed without a shortcut
 
 ### Requirement: Dialogs
-Errors, confirmations and text input SHALL be shown as modal dialogs inside the window (for editor windows, see page-editor); several messages SHALL be shown one after another. Enter SHALL confirm and Esc SHALL cancel, also while a dialog's text box has the keyboard.
+Errors, confirmations and text input SHALL be shown as modal dialogs inside the window (for editor windows, see page-editor); several messages SHALL be shown one after another. Enter SHALL confirm and Esc SHALL cancel, also while a dialog's text box has the keyboard. The text of a node is no dialog input: it is edited in the node (see mindmap-editing, In-place text editing).
 
 #### Scenario: Errors for several nodes
 - **WHEN** New Page fails for two selected nodes
