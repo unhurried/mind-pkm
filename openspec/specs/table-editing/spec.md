@@ -127,3 +127,14 @@ The cell's right-click menu SHALL offer Cut, Copy, Paste and Select All before i
 #### Scenario: Copying a cell range from its menu
 - **WHEN** a range of cells is selected, right-clicked and Copy is chosen
 - **THEN** the cells are on the clipboard as tab-separated text
+
+### Requirement: Cursor after Insert Table
+After Ctrl+T or Table → Insert Table, the cursor SHALL be in the first header cell of the new table, so that its header is typed first.
+
+#### Scenario: Typing after Insert Table
+- **WHEN** Ctrl+T is pressed in a paragraph and `Name` is typed
+- **THEN** the new table's first header cell holds `Name` and its other cells are empty
+
+#### Scenario: Typing after Insert Table in a list item
+- **WHEN** Ctrl+T is pressed in the list item `a` and `Name` is typed
+- **THEN** the table under `a` holds `Name` in its first header cell

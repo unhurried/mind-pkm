@@ -62,6 +62,42 @@ fn cancelling_a_new_node_leaves_the_map_as_it_was() {
 }
 
 #[test]
+fn cancelling_a_new_sibling_selects_the_node_it_was_added_after() {
+    let mut map = MindMap::new("root");
+    let root = map.root();
+    let a = map.add_child(root, "a");
+    map.add_child(a, "a1");
+    let mut app = app_with(map);
+    app.doc.as_mut().unwrap().select(vec![a]);
+    // Enter, then Esc: `a` is selected again, not its parent.
+    press(&mut app, Named::Enter);
+    send(&mut app, MapMsg::Escape);
+    assert_eq!(app.doc.as_ref().unwrap().selection(), &[a]);
+    // So is a new sibling left empty.
+    press(&mut app, Named::Enter);
+    send(&mut app, MapMsg::NodeEditConfirm);
+    assert_eq!(app.doc.as_ref().unwrap().selection(), &[a]);
+    assert_eq!(root_texts(&app), vec!["a"]);
+}
+
+#[test]
+fn a_new_sibling_cancelled_after_a_refresh_selects_the_node_it_was_added_after() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    f.write_page("Task", "### Next Steps\n* One\n");
+    let page = f.add_page_node(root, "Task");
+    let update = next_steps::compute(&next_steps::snapshot(&f.map, &f.doc_dir), chrono::Local::now().date_naive());
+    let mut app = app_with(f.map.clone());
+    app.doc.as_mut().unwrap().select(vec![page]);
+    press(&mut app, Named::Enter);
+    let generation = app.doc.as_ref().unwrap().generation();
+    send(&mut app, MapMsg::NextStepsComputed(generation, Box::new(update)));
+    send(&mut app, MapMsg::Escape);
+    assert_eq!(map(&app).child_texts(page), vec!["One"]);
+    assert_eq!(app.doc.as_ref().unwrap().selection(), &[page]);
+}
+
+#[test]
 fn a_refresh_landing_while_a_new_node_is_named_is_kept() {
     let mut f = Fixture::new();
     let root = f.map.root();

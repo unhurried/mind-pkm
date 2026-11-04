@@ -133,14 +133,9 @@ impl App {
             }
             EditFor::NewNode(serial) => match non_empty {
                 Some(v) if doc.map().exists(id) => doc.set_new_node_text(id, &v),
-                _ => {
-                    // The node goes; changes made meanwhile (a refresh) stay.
-                    let parent = doc.map().exists(id).then(|| doc.map().parent(id)).flatten();
-                    doc.cancel_new_node(id, serial);
-                    if let Some(p) = parent.filter(|&p| doc.map().exists(p)) {
-                        doc.select(vec![p]);
-                    }
-                }
+                // The node goes, and the nodes selected before it come back;
+                // changes made meanwhile (a refresh) stay.
+                _ => doc.cancel_new_node(id, serial),
             },
         }
     }

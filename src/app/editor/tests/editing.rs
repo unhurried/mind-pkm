@@ -516,3 +516,17 @@ fn typing_at_the_start_of_a_heading_goes_after_its_marker() {
         expected
     );
 }
+
+#[test]
+fn a_paragraph_typed_into_a_math_block_keeps_the_cursor() {
+    let (mut app, _f, _, _) = app_with_page("Intro\n\n$$\n\\frac{1}{0\n$$\n");
+    let id = open_with_f1(&mut app);
+    // Unbalanced, `$$` ... `$$` is a paragraph: clicked into, the cursor to its line's end.
+    let at = page_text(&app, id).find("\\f").unwrap() + 2;
+    editor(&mut app, id, EditorMsg::PressedAt(at));
+    live(&mut app, id, LiveMsg::MoveTo { at: "$$\n\\frac{1}{0".len(), select: false });
+    // `}` makes it a math block, edited as its source; typing goes on where the cursor was.
+    type_keys(&mut app, id, "}");
+    typing(&mut app, id, "X");
+    assert_eq!(page_text(&app, id), "Intro\n\n$$\n\\frac{1}{0}X\n$$\n");
+}

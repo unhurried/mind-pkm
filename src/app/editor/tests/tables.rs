@@ -210,3 +210,24 @@ fn dragging_from_a_rendered_table_selects_cells() {
     editor(&mut app, id, EditorMsg::Released);
     assert!(!app.editors[&id].table_ui.drag);
 }
+
+#[test]
+fn insert_table_puts_the_cursor_in_the_first_header_cell() {
+    let (mut app, _f, _, _) = app_with_page("Intro\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "Intro");
+    editor(&mut app, id, EditorMsg::Command(EditorCommand::InsertTable));
+    assert_eq!(cell(&app, id), (0, 0));
+    typing(&mut app, id, "X");
+    let text = page_text(&app, id);
+    let table = crate::markdown::table::Table::parse(&text[text.find('|').unwrap()..]).unwrap();
+    assert_eq!(table.rows, strings(&[&["X", ""], &["", ""], &["", ""]]));
+    // Also in a list item, under its text.
+    let (mut app, _f, _, _) = app_with_page("* a\n* b\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "a");
+    editor(&mut app, id, EditorMsg::Command(EditorCommand::InsertTable));
+    assert_eq!(cell(&app, id), (0, 0));
+    typing(&mut app, id, "Y");
+    assert_eq!(page_text(&app, id), "* a\n  | Y   |     |\n  | --- | --- |\n  |     |     |\n  |     |     |\n* b\n");
+}

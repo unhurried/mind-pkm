@@ -1200,7 +1200,8 @@ impl Editor {
             C::CodeBlock => self.insert_block("```\n", "\n```"),
             C::MathBlock => self.insert_block("$$\n", "\n$$"),
             C::HorizontalRule => self.insert_block("---", ""),
-            C::InsertTable => self.insert_block("|  |  |\n| --- | --- |\n|  |  |\n|  |  |", ""),
+            // The cursor in the first header cell, between the spaces of `|  |`.
+            C::InsertTable => self.insert_block_with_cursor("|  |  |\n| --- | --- |\n|  |  |\n|  |  |", 2),
             C::Bold => self.toggle(InlineStyle::Bold),
             C::Italic => self.toggle(InlineStyle::Italic),
             C::Underline => self.toggle(InlineStyle::Underline),
@@ -1487,6 +1488,12 @@ impl Editor {
     /// Inserts a new block after the active one (or at the end): `open`, the
     /// cursor, `close`.
     fn insert_block(&mut self, open: &str, close: &str) -> Task<EditorMsg> {
+        self.insert_block_with_cursor(&format!("{open}{close}"), open.len())
+    }
+
+    /// Inserts `block` as a new block after the active one (or at the end),
+    /// with the cursor `cursor` bytes into it.
+    fn insert_block_with_cursor(&mut self, block: &str, cursor: usize) -> Task<EditorMsg> {
         let text = self.page.text();
         let at = match (self.page.active(), self.page.pending()) {
             (Some(_), Some(p)) => p.at,
@@ -1506,8 +1513,8 @@ impl Editor {
             (None, Some(p)) if self.page.active().is_some() => p.clone(),
             _ => edit::gap_pending(text, self.page.doc(), at, None),
         };
-        let (new, start) = pending.materialize(text, &format!("{open}{close}"));
-        let cursor = start + pending.prefixed(open).len();
+        let (new, start) = pending.materialize(text, block);
+        let cursor = start + pending.prefixed(&block[..cursor]).len();
         self.page.deselect_blocks();
         self.page.apply(edit::Edited { text: new, sel: Sel::caret(cursor), pending: None });
         self.focus()
