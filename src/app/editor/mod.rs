@@ -16,6 +16,7 @@ mod highlight;
 mod keys;
 mod live_text;
 mod modal;
+mod near;
 mod page;
 mod press_relay;
 mod render;
@@ -27,6 +28,7 @@ mod view;
 mod tests;
 
 use super::file::file_name;
+use super::scroll_watch::Visible;
 use super::ui::zoom_step;
 use super::{Message, Status, blocking, settings};
 use crate::markdown::count;
@@ -149,6 +151,9 @@ pub enum EditorMsg {
     /// A right click on the page: where it landed.
     RightClicked(RightClick),
     CloseContextMenu,
+    /// The visible part of the page came near the end of the blocks built
+    /// around it (or left them): where it is now.
+    PageScrolled(Visible),
     Dialog(DialogAnswer),
     /// The clipboard was read for pasting (as plain text when `true`).
     Pasted(ClipboardContent, bool),
@@ -308,6 +313,15 @@ pub struct Editor {
     image_files: RefCell<(u64, HashMap<PathBuf, bool>)>,
     /// The status bar's counts, as last counted.
     counted: RefCell<Counted>,
+    /// The heights of the page's blocks as last laid out, for those that
+    /// get no widgets.
+    heights: RefCell<near::Heights>,
+    /// The visible part of the page, as last told: the blocks near it get
+    /// widgets (none told yet: the top of the page).
+    visible: Option<Visible>,
+    /// A block the page is scrolled to, which gets widgets wherever it is
+    /// until the page tells where it is again.
+    scroll_target: Option<usize>,
     /// The widths of the lines of table cells, as measured for their columns.
     table_widths: view::WidthCache,
     /// How far the table that was last scrolled sideways is scrolled: where
@@ -349,6 +363,9 @@ impl Editor {
             context_menu: None,
             image_files: RefCell::default(),
             counted: RefCell::default(),
+            heights: RefCell::default(),
+            visible: None,
+            scroll_target: None,
             table_widths: view::WidthCache::default(),
             table_x: None,
         }
@@ -623,6 +640,10 @@ impl Editor {
             EditorMsg::RightClicked(target) => self.right_clicked(target),
             EditorMsg::CloseContextMenu => {
                 self.context_menu = None;
+                Task::none()
+            }
+            EditorMsg::PageScrolled(visible) => {
+                (self.visible, self.scroll_target) = (Some(visible), None);
                 Task::none()
             }
             EditorMsg::Dialog(answer) => self.dialog_answered(answer, effects),
@@ -1795,8 +1816,22 @@ impl Editor {
 
     // --- Scrolling ---
 
-    fn scroll_to_block(&self, block: usize) -> Task<EditorMsg> {
+    /// Scrolls the page to put `block` at the top: it gets widgets wherever
+    /// it is, for the scroll to find it.
+    fn scroll_to_block(&mut self, block: usize) -> Task<EditorMsg> {
+        self.scroll_target = Some(block);
         scroll::to_top(self.id(&format!("block-{block}")), self.id("doc"))
+    }
+
+    /// The visible part of the page, as last told.
+    fn visible(&self) -> Visible {
+        self.visible.unwrap_or(Visible { top: 0.0, height: self.window_size.height })
+    }
+
+    /// Math or diagrams were rendered: the blocks that may show them are
+    /// measured again.
+    pub(super) fn renders_came_in(&mut self) {
+        self.heights.get_mut().rendered();
     }
 
     // --- Status bar ---

@@ -26,6 +26,7 @@ mod placed;
 mod press_point;
 pub mod profile;
 mod right_press;
+mod scroll_watch;
 mod search_panel;
 pub mod settings;
 mod ui;
@@ -502,6 +503,9 @@ impl App {
             Message::Editor(id, msg) => return self.editor_message(id, msg),
             Message::Rendered(key, svg) => {
                 self.renders.insert(key, svg);
+                for editor in self.editors.values_mut() {
+                    editor.renders_came_in();
+                }
                 return Task::none();
             }
         };

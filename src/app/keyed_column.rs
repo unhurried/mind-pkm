@@ -7,8 +7,11 @@
 //! key gets a new state. Otherwise it is a `Column`: laid out, drawn and
 //! handling events as one.
 //!
+//! It can also tell how tall each child was laid out (`on_layout`).
+//!
 //! The page editor shows the blocks of a page with it, so that a block added
-//! or joined (Enter, Backspace) leaves the shaped text of the others as it is.
+//! or joined (Enter, Backspace) leaves the shaped text of the others as it is,
+//! and keeps the heights of the blocks it built for those it does not build.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
@@ -20,9 +23,13 @@ use iced::{Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, mou
 use std::collections::HashMap;
 use std::hash::Hash;
 
+/// Told the size of each child (by its key) as it was laid out.
+type OnLayout<'a, K> = Box<dyn Fn(&K, Size) + 'a>;
+
 pub struct KeyedColumn<'a, K, M> {
     keys: Vec<K>,
     column: Column<'a, M>,
+    on_layout: Option<OnLayout<'a, K>>,
 }
 
 /// The keys of the children as last shown, in the order of the column's
@@ -35,12 +42,18 @@ struct New;
 
 /// An empty column.
 pub fn keyed_column<'a, K, M: 'a>() -> KeyedColumn<'a, K, M> {
-    KeyedColumn { keys: Vec::new(), column: Column::new() }
+    KeyedColumn { keys: Vec::new(), column: Column::new(), on_layout: None }
 }
 
 impl<'a, K, M: 'a> KeyedColumn<'a, K, M> {
     pub fn width(mut self, width: impl Into<Length>) -> Self {
         self.column = self.column.width(width);
+        self
+    }
+
+    /// Tells `f` the size of each child (by its key) whenever the column is laid out.
+    pub fn on_layout(mut self, f: impl Fn(&K, Size) + 'a) -> Self {
+        self.on_layout = Some(Box::new(f));
         self
     }
 
@@ -102,7 +115,13 @@ where
     }
 
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
-        self.column.layout(&mut tree.children[0], renderer, limits)
+        let node = self.column.layout(&mut tree.children[0], renderer, limits);
+        if let Some(f) = &self.on_layout {
+            for (key, child) in self.keys.iter().zip(node.children()) {
+                f(key, child.size());
+            }
+        }
+        node
     }
 
     fn draw(
@@ -202,7 +221,7 @@ mod tests {
         }
     }
 
-    fn numbered(keys: &[u32], made_as: u32) -> KeyedColumn<'static, u32, ()> {
+    fn numbered<'a>(keys: &[u32], made_as: u32) -> KeyedColumn<'a, u32, ()> {
         keys.iter().fold(keyed_column(), |c, &k| c.push(k, Element::new(Numbered(k + made_as))))
     }
 
@@ -247,13 +266,15 @@ mod tests {
     }
 
     #[test]
-    fn it_is_laid_out_as_a_column() {
-        let mut c = numbered(&[20, 30], 0).width(50);
-        let mut tree = Tree::new(widget(&c));
+    fn it_is_laid_out_as_a_column_and_tells_its_childrens_sizes() {
+        let sizes = std::cell::RefCell::new(Vec::new());
+        let mut c = numbered(&[20, 30], 0).width(50).on_layout(|k, size| sizes.borrow_mut().push((*k, size.height)));
+        let mut tree = Tree::new(&c as &dyn Widget<(), Theme, Renderer>);
         let renderer = crate::app::test_support::headless_renderer();
         let node = c.layout(&mut tree, &renderer, &layout::Limits::new(Size::ZERO, Size::INFINITE));
         assert_eq!(node.size(), Size::new(50.0, 50.0));
         let ys: Vec<f32> = Layout::new(&node).children().map(|l| l.bounds().y).collect();
         assert_eq!(ys, [0.0, 20.0]);
+        assert_eq!(*sizes.borrow(), [(20, 20.0), (30, 30.0)]);
     }
 }
