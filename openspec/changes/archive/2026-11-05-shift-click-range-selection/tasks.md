@@ -7,5 +7,5 @@
 
 ## 2. Integration checks
 
-- [ ] 2.1 Run the app under Xvfb, Shift+click across siblings and look at the selection.
-- [ ] 2.2 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and `openspec validate --all --strict` pass.
+- [x] 2.1 Run the app under Xvfb, Shift+click across siblings and look at the selection.
+- [x] 2.2 `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` and `openspec validate --all --strict` pass.
