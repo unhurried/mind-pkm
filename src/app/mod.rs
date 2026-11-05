@@ -44,7 +44,7 @@ use command::{Clipboard, Command};
 use dialog::Dialog;
 use doc::Doc;
 use drag::NodeDrag;
-use editor::{Editor, EditorMsg, EditorPrefs, RenderCache, RenderKey};
+use editor::{Editor, EditorMsg, EditorPrefs, RenderCache, RenderKey, is_markdown};
 use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
 use iced::widget::{scrollable, text_editor};
@@ -266,6 +266,11 @@ impl MapMsg {
 
 pub struct App {
     main_window: window::Id,
+    /// Started with a Markdown file: there is no map window, and the
+    /// application ends with its last editor window.
+    editors_only: bool,
+    /// The application is ending.
+    exiting: bool,
     /// The page editor windows.
     editors: BTreeMap<window::Id, Editor>,
     editor_prefs: EditorPrefs,
@@ -321,23 +326,48 @@ impl App {
     fn boot(initial: Option<PathBuf>, window: WindowGeometry) -> (Self, Task<Message>) {
         let mut app = App::new();
         app.editor_prefs = EditorPrefs::load();
-        app.window_size = window.size;
-        app.window_position = window.position;
-        app.window = window;
+        let task = app.start(initial, window);
+        (app, task)
+    }
+
+    /// Opens the application's first windows: for a Markdown file `initial`,
+    /// its editor window alone (in the built-in editor, whatever the
+    /// preferences say); else the map window (`window`) with the map
+    /// `initial`, or the last opened one - also when the Markdown file can't
+    /// be opened, which the map window then says.
+    fn start(&mut self, initial: Option<PathBuf>, window: WindowGeometry) -> Task<Message> {
+        self.window_size = window.size;
+        self.window_position = window.position;
+        self.window = window;
+        let initial = match initial {
+            Some(path) if is_markdown(&path) => match self.try_open_in_editor(&path) {
+                Ok(opened) => {
+                    self.editors_only = true;
+                    return opened;
+                }
+                Err(e) => {
+                    self.message(e);
+                    None
+                }
+            },
+            initial => initial,
+        };
         let (id, opened) = window::open(window_settings(window.size, window.position, window.maximized));
-        app.main_window = id;
+        self.main_window = id;
         let explicit = initial.is_some();
         let task = match initial.or_else(settings::last_file) {
-            Some(path) if explicit || path.exists() => app.open_path(path),
+            Some(path) if explicit || path.exists() => self.open_path(path),
             _ => Task::none(),
         };
-        (app, Task::batch([opened.discard(), task]))
+        Task::batch([opened.discard(), task])
     }
 
     /// The application without a map, before anything is opened.
     fn new() -> Self {
         App {
             main_window: window::Id::unique(),
+            editors_only: false,
+            exiting: false,
             editors: BTreeMap::new(),
             editor_prefs: EditorPrefs::default(),
             renders: RenderCache::default(),

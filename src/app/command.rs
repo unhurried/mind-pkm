@@ -342,9 +342,8 @@ impl App {
     }
 
     pub(super) fn open_in_desktop(&mut self, path: &Path) {
-        if let Err(e) = opener::open(path) {
-            self.message(format!("failed to open {}: {e}", path.display()));
-        }
+        let opened = open_with_default(path);
+        self.report(opened);
     }
 
     /// Opens what the node links: a file or directory, a URL, or another node.
@@ -399,6 +398,11 @@ impl App {
             doc.apply_refresh(|map| next_steps::apply(map, update));
         }
     }
+}
+
+/// Opens a file or directory with its default application; the error if that fails.
+pub(super) fn open_with_default(path: &Path) -> Result<(), String> {
+    opener::open(path).map_err(|e| format!("failed to open {}: {e}", path.display()))
 }
 
 /// The subtrees as indented text, one node per line (the format `insert_outline` reads).

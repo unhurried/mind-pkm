@@ -99,11 +99,13 @@ fn exiting_with_unsaved_pages_asks_and_cancel_keeps_them() {
     send(&mut app, MapMsg::DialogCancel);
     assert!(app.dialogs.is_empty());
     assert!(app.editors[&id].page.is_dirty());
-    // Save writes the page (and ends the application).
+    assert!(!app.exiting);
+    // Save writes the page and ends the application.
     send(&mut app, MapMsg::CloseRequested);
     send(&mut app, MapMsg::DialogSave);
     assert_eq!(std::fs::read_to_string(page).unwrap(), "\u{feff}one!\n");
     assert!(app.dialogs.is_empty());
+    assert!(app.exiting);
 }
 
 #[test]
@@ -137,6 +139,129 @@ fn ctrl_click_on_a_link_to_another_page_opens_it() {
     editor(&mut app, id, EditorMsg::Link("Other.md".into(), 5));
     assert_eq!(app.editors.len(), 2);
     assert!(app.editors.values().any(|e| e.page.path() == other));
+}
+
+#[test]
+fn a_link_to_a_missing_page_is_reported_in_its_editor() {
+    let (mut app, _f, _, _) = app_with_page("see [gone](Gone.md)\n");
+    let id = open_with_f1(&mut app);
+    send(&mut app, Message::Window(id, WindowEvent::Key(keyboard::Event::ModifiersChanged(Modifiers::CTRL))));
+    editor(&mut app, id, EditorMsg::Link("Gone.md".into(), 5));
+    assert_eq!(app.editors.len(), 1);
+    assert!(app.dialogs.is_empty(), "no message in the map window");
+    assert!(
+        matches!(app.editors[&id].dialogs.front(), Some(EditorDialog::Message(m)) if m.starts_with("failed to open") && m.contains("Gone.md")),
+        "{:?}",
+        app.editors[&id].dialogs
+    );
+}
+
+#[test]
+fn file_open_opens_the_chosen_file_in_a_window_of_its_own() {
+    let (mut app, f, _, _) = app_with_page("one\n");
+    let other = f.write_page("Other", "x");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::Command(EditorCommand::Open));
+    editor(&mut app, id, EditorMsg::OpenChosen(Some(other.clone())));
+    assert_eq!(app.editors.len(), 2);
+    assert!(app.editors.contains_key(&id));
+    assert!(app.editors.values().any(|e| e.page.path() == other));
+}
+
+#[test]
+fn file_open_brings_an_open_file_to_the_front() {
+    let (mut app, f, _, _) = app_with_page("one\n");
+    let other = f.write_page("Other", "x");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::OpenChosen(Some(other.clone())));
+    editor(&mut app, id, EditorMsg::OpenChosen(Some(other)));
+    assert_eq!(app.editors.len(), 2);
+}
+
+#[test]
+fn file_open_uses_the_built_in_editor_even_when_it_is_turned_off() {
+    let (mut app, f, _, _) = app_with_page("one\n");
+    let other = f.write_page("Other", "x");
+    let id = open_with_f1(&mut app);
+    send(&mut app, MapMsg::Command(Command::ToggleBuiltinEditor));
+    editor(&mut app, id, EditorMsg::OpenChosen(Some(other.clone())));
+    assert!(app.editors.values().any(|e| e.page.path() == other));
+}
+
+#[test]
+fn a_cancelled_file_open_does_nothing() {
+    let (mut app, _f, _, _) = app_with_page("one\n");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::OpenChosen(None));
+    assert_eq!(app.editors.len(), 1);
+    assert!(app.editors[&id].dialogs.is_empty());
+    assert_eq!(page_text(&app, id), "one\n");
+}
+
+#[test]
+fn a_file_open_that_fails_is_reported_in_its_editor() {
+    let (mut app, f, _, _) = app_with_page("one\n");
+    let sjis = f.doc_dir.join("sjis.md");
+    std::fs::write(&sjis, [0x93, 0xfa, 0x96, 0x7b]).unwrap();
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::OpenChosen(Some(sjis)));
+    assert_eq!(app.editors.len(), 1);
+    assert!(app.dialogs.is_empty(), "no message in the map window");
+    assert!(
+        matches!(app.editors[&id].dialogs.front(), Some(EditorDialog::Message(m)) if m.starts_with("failed to open") && m.contains("sjis.md")),
+        "{:?}",
+        app.editors[&id].dialogs
+    );
+}
+
+/// The application started with `Notes.md` (holding `text`) and `Other.md`
+/// in a temporary directory: its one editor window.
+fn started_with_notes(text: &str) -> (App, tempfile::TempDir, window::Id, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let (notes, other) = (dir.path().join("Notes.md"), dir.path().join("Other.md"));
+    std::fs::write(&notes, text).unwrap();
+    std::fs::write(&other, "x").unwrap();
+    let mut app = App::new();
+    let _ = app.start(Some(notes), crate::app::INITIAL_WINDOW);
+    let id = *app.editors.keys().next().expect("an editor window");
+    (app, dir, id, other)
+}
+
+#[test]
+fn without_a_map_window_the_application_ends_with_its_last_editor_window() {
+    let (mut app, _dir, first, other) = started_with_notes("one\n");
+    editor(&mut app, first, EditorMsg::OpenChosen(Some(other.clone())));
+    let second = *app.editors.iter().find(|(_, e)| e.page.path() == other).unwrap().0;
+    send(&mut app, Message::Window(first, WindowEvent::CloseRequested));
+    assert_eq!(app.editors.len(), 1);
+    assert!(!app.exiting);
+    send(&mut app, Message::Window(second, WindowEvent::CloseRequested));
+    assert!(app.editors.is_empty());
+    assert!(app.exiting);
+}
+
+#[test]
+fn without_a_map_window_cancelling_the_unsaved_question_keeps_the_application() {
+    let (mut app, _dir, id, _) = started_with_notes("one\n");
+    click_after(&mut app, id, "one");
+    typing(&mut app, id, "!");
+    send(&mut app, Message::Window(id, WindowEvent::CloseRequested));
+    editor(&mut app, id, EditorMsg::Dialog(DialogAnswer::Cancel));
+    assert!(app.editors.contains_key(&id));
+    assert!(!app.exiting);
+    send(&mut app, Message::Window(id, WindowEvent::CloseRequested));
+    editor(&mut app, id, EditorMsg::Dialog(DialogAnswer::Discard));
+    assert!(app.editors.is_empty());
+    assert!(app.exiting);
+}
+
+#[test]
+fn with_the_map_window_closing_the_last_editor_window_keeps_the_application() {
+    let (mut app, _f, _, _) = app_with_page("one\n");
+    let id = open_with_f1(&mut app);
+    send(&mut app, Message::Window(id, WindowEvent::CloseRequested));
+    assert!(app.editors.is_empty());
+    assert!(!app.exiting);
 }
 
 #[test]
