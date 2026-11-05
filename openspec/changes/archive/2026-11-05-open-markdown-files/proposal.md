@@ -22,7 +22,7 @@ None.
 
 ### Modified Capabilities
 
-- `application-shell`: Opening maps (the first argument may be a Markdown file; File → Open also picks `.md` files), Map window and editor windows (a run without a map window, ended by closing its last editor window); a new requirement for starting with a Markdown file.
+- `application-shell`: Map window and editor windows (a run without a map window, ended by closing its last editor window); new requirements for starting with a Markdown file and for opening Markdown files with File → Open (Opening maps keeps its text: a `.md` argument and a chosen `.md` file are covered by these).
 - `page-editor`: a new requirement for opening files from an editor window (File → Open..., and where its errors are shown).
 
 ## Impact
