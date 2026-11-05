@@ -8,18 +8,37 @@ use super::theme::{
     editor_style,
 };
 use crate::app::editor::assets::{DropTarget, content_end};
-use crate::app::editor::column::{self, Gap, Shown};
+use crate::app::editor::column::{self, Entry, EntryKey, Gap, Shown};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext};
+use crate::app::editor::near;
 use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::{AssetsMsg, Editor, EditorMsg, EditorPrefs, RightClick};
 use crate::app::ime::ime_aligned;
+use crate::app::keyed_column::keyed_column;
 use crate::app::right_press::right_press_in;
+use crate::app::scroll_watch::scroll_watch;
 use crate::app::view::APP_FONT;
 use crate::markdown::parse::ContainerKind;
 use iced::advanced::text::Wrapping;
-use iced::widget::{Column, column, container, mouse_area, row, scrollable, space, stack, text_editor};
+use iced::widget::{column, container, mouse_area, row, scrollable, space, stack, text_editor};
 use iced::{Color, Element, Fill, Padding};
+
+/// A widget of the page column, for it to keep its state (its shaped text)
+/// while blocks come and go before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Part {
+    /// The gap above an entry.
+    Gap(EntryKey),
+    /// An entry: a rendered block, the region being edited.
+    Shown(EntryKey),
+    /// Where a dragged item would go after an entry.
+    Drop(EntryKey),
+    /// Entries without widgets, from this one on: their room.
+    Far(usize),
+    /// The room below the last entry.
+    End,
+}
 
 /// The height of the gap above an entry of the column.
 fn gap_height(gap: Gap, zoom: f32) -> f32 {
@@ -64,14 +83,55 @@ impl Editor {
         (self.window_size.width - outline - assets - 2.0 * PAGE_PADDING[1]).clamp(120.0, PAGE_WIDTH * zoom)
     }
 
+    /// What the column shows of `entries`: the room each takes (its gap and
+    /// its height, as last laid out or guessed) and which get widgets.
+    fn near_plan(&self, entries: &[Entry], width: f32, zoom: f32) -> (Vec<f32>, near::Plan) {
+        let mut heights = self.heights.borrow_mut();
+        heights.at(width, zoom);
+        heights.prune(entries.iter().map(|e| &e.key));
+        let text = self.page.text();
+        let rooms: Vec<(f32, bool)> = entries
+            .iter()
+            .map(|e| {
+                let source = &text[e.covers.clone()];
+                let height = heights.get(e.key, near::may_render(e, source));
+                let guess = || near::estimate(source, width, zoom);
+                (gap_height(e.gap, zoom) + height.unwrap_or_else(guess), height.is_some())
+            })
+            .collect();
+        // The visible part in the column (below the page's padding).
+        let visible = self.visible();
+        let top = visible.top - PAGE_PADDING[0];
+        let margin = visible.height.max(near::MIN_MARGIN);
+        let keep = |i: usize| match entries[i].shown {
+            Shown::Active => true,
+            Shown::Block(b) => Some(b) == self.scroll_target,
+        };
+        let plan = near::plan(&rooms, top..top + visible.height, margin, keep);
+        (rooms.into_iter().map(|r| r.0).collect(), plan)
+    }
+
     pub(super) fn document<'a>(&'a self, ctx: &Ctx<'a>, prefs: &EditorPrefs) -> Element<'a, EditorMsg> {
         let width = self.column_width(ctx.zoom);
         let dragging = self.asset_dragging();
         let p = ctx.p;
-        let content: Element<EditorMsg> = match &self.source {
-            Some(source) => self.source_view(source, ctx, prefs),
+        let unbounded = (f32::NEG_INFINITY, f32::INFINITY);
+        let (content, band): (Element<EditorMsg>, _) = match &self.source {
+            Some(source) => (self.source_view(source, ctx, prefs), unbounded),
             None => {
-                let mut col = Column::new().width(width);
+                // Only the blocks near the visible part get widgets; those
+                // laid out tell their heights, for when they get none.
+                let entries = column::entries(&self.page);
+                let (rooms, plan) = self.near_plan(&entries, width, ctx.zoom);
+                let heights = &self.heights;
+                let mut col = keyed_column().width(width).on_layout(move |part, size| {
+                    if let Part::Shown(key) = part {
+                        heights.borrow_mut().record(*key, size.height);
+                    }
+                });
+                // Entries without widgets in a row: the first one and their room.
+                let mut far: Option<(usize, f32)> = None;
+                let far_view = |room: f32| container(space().width(Fill).height(room)).id(self.id("far"));
                 let page = &self.page;
                 let active = page.active();
                 let selected = page.selected_blocks().map(|(a, b)| a.min(b)..=a.max(b));
@@ -88,11 +148,20 @@ impl Editor {
                 };
                 let mut previous_end = None;
                 let mut previous_block = None;
-                for entry in column::entries(page) {
+                for (n, entry) in entries.into_iter().enumerate() {
                     let block = match entry.shown {
                         Shown::Block(i) => Some(i),
                         Shown::Active => None,
                     };
+                    if !plan.built[n] {
+                        far.get_or_insert((n, 0.0)).1 += rooms[n];
+                        previous_end = Some(entry.covers.end);
+                        previous_block = block;
+                        continue;
+                    }
+                    if let Some((first, room)) = far.take() {
+                        col = col.push(Part::Far(first), far_view(room));
+                    }
                     let space_above = gap_height(entry.gap, ctx.zoom);
                     if space_above > 0.0 {
                         // A click in the gap goes to the nearer block: the upper
@@ -117,7 +186,10 @@ impl Editor {
                         // Between two selected blocks the highlight goes on too.
                         let between_selected =
                             previous_block.zip(block).is_some_and(|(a, b)| is_selected(a) && is_selected(b));
-                        col = col.push(if between_selected { highlighted(gap_view) } else { gap_view });
+                        col = col.push(
+                            Part::Gap(entry.key),
+                            if between_selected { highlighted(gap_view) } else { gap_view },
+                        );
                     }
                     let kinds = entry.kinds();
                     let inner = inner_width(width, &kinds, ctx.zoom);
@@ -146,17 +218,21 @@ impl Editor {
                         }
                         (Shown::Active, None) => continue,
                     };
-                    col = col.push(shown);
+                    col = col.push(Part::Shown(entry.key), shown);
                     // Where a dragged item would go as a paragraph of its own.
                     if let Some(DropTarget::Paragraph { at }) = ctx.editor.drop_target()
                         && content_end(page.text(), entry.covers.clone()) == *at
                     {
                         col = col.push(
+                            Part::Drop(entry.key),
                             container(space().height(2)).width(Fill).style(move |_| container::background(p.link)),
                         );
                     }
                     previous_end = Some(entry.covers.end);
                     previous_block = block;
+                }
+                if let Some((first, room)) = far.take() {
+                    col = col.push(Part::Far(first), far_view(room));
                 }
                 // Room to click below the last block.
                 let last = previous_end.map_or(0, |end| content_end(page.text(), 0..end));
@@ -166,13 +242,20 @@ impl Editor {
                 if dragging {
                     room = room.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(last)));
                 }
-                col = col.push(room);
+                col = col.push(Part::End, room);
+                // Where the visible part may move without other blocks needing
+                // widgets, in the page (below its padding).
+                let band = (plan.band.0 + PAGE_PADDING[0], plan.band.1 + PAGE_PADDING[0]);
                 // Where a press lands, for the editor that takes the block's place.
-                PressRelay::tracking(col, EditorMsg::PressPoint).into()
+                (PressRelay::tracking(col, EditorMsg::PressPoint).into(), band)
             }
         };
         let padded = container(content).padding(PAGE_PADDING).center_x(Fill);
-        let page = scrollable(padded).id(self.id("doc")).on_scroll(EditorMsg::Scrolled).width(Fill).height(Fill);
+        // Scrolling tells where the page is only when the visible part comes
+        // near the end of the blocks built around it: a message for every
+        // step of the wheel would build every window again.
+        let page = scrollable(padded).id(self.id("doc")).width(Fill).height(Fill);
+        let page = scroll_watch(page, self.id("doc"), band, EditorMsg::PageScrolled);
         // While an item of the assets pane is dragged, the page tells where it
         // is. A right click no block took opens the page's menu.
         let mut area = mouse_area(page).on_right_press(EditorMsg::RightClicked(RightClick::Page));

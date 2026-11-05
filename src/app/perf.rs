@@ -13,7 +13,7 @@
 //! Also here: tests of what makes the windows rebuild (pointer moves must not).
 
 use super::command::Command;
-use super::editor::EditorMsg;
+use super::editor::{Bind, EditorMsg};
 use super::profile::{self, Phase};
 use super::test_support::{headless_renderer, key_event};
 use super::viewport::NEAR_MARGIN;
@@ -358,9 +358,19 @@ fn report(fanout: usize, sections: usize) {
     run("editor: typing a character", &mut b, &mut |b, t, _| {
         b.step(t, Message::Editor(editor, EditorMsg::Action(Action::Edit(Edit::Insert('a')))))
     });
+    // A block added and joined again, with most of the page after it.
+    run("editor: Enter / Backspace", &mut b, &mut |b, t, i| {
+        let bind = if i % 2 == 0 { Bind::Enter } else { Bind::Backspace };
+        b.step(t, Message::Editor(editor, EditorMsg::Bind(bind)))
+    });
     run("editor: pointer moves over text", &mut b, &mut |b, t, i| {
         let at = Point::new(260.0 + (i % 5) as f32 * 7.0, 120.0 + i as f32 * 23.0);
         b.event(t, editor, Event::Mouse(mouse::Event::CursorMoved { position: at }), at)
+    });
+    run("editor: wheel scroll", &mut b, &mut |b, t, _| {
+        let at = Point::new(400.0, 400.0);
+        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 };
+        b.event(t, editor, Event::Mouse(mouse::Event::WheelScrolled { delta }), at)
     });
     run("map: wheel scroll", &mut b, &mut |b, t, i| {
         let at = Point::new(640.0, 400.0);
@@ -384,11 +394,21 @@ fn perf_large_map_and_long_page() {
     report(15, 40);
 }
 
+#[test]
+#[ignore = "a benchmark: run in release mode with --ignored --nocapture"]
+fn perf_very_long_page() {
+    report(3, 160);
+}
+
 /// What a window shows, as an operation finds it: where the map's scrollable
-/// is and how far it is scrolled, and the texts of the text widgets.
+/// is and how far it is scrolled, the scrollables and containers with an id
+/// (bounds, the content's bounds and how far it is scrolled; bounds), and the
+/// texts of the text widgets.
 #[derive(Default)]
 struct Shown {
     map: Option<(Rectangle, Vector)>,
+    scrollables: HashMap<widget::Id, (Rectangle, Rectangle, Vector)>,
+    containers: Vec<(widget::Id, Rectangle)>,
     texts: HashSet<String>,
 }
 
@@ -397,14 +417,23 @@ impl Operation for Shown {
         operate(self);
     }
 
+    fn container(&mut self, id: Option<&widget::Id>, bounds: Rectangle) {
+        if let Some(id) = id {
+            self.containers.push((id.clone(), bounds));
+        }
+    }
+
     fn scrollable(
         &mut self,
         id: Option<&widget::Id>,
         bounds: Rectangle,
-        _content_bounds: Rectangle,
+        content_bounds: Rectangle,
         translation: Vector,
         _state: &mut dyn operation::Scrollable,
     ) {
+        if let Some(id) = id {
+            self.scrollables.insert(id.clone(), (bounds, content_bounds, translation));
+        }
         if id == Some(&widget::Id::new(MAP_SCROLL_ID)) {
             self.map = Some((bounds, translation));
         }
@@ -494,6 +523,162 @@ fn pointer_moves_send_no_messages() {
     let pointer = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::PointerOver(..))));
     let text = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed)));
     assert!(pointer.is_some() && pointer < text, "{messages:?}");
+}
+
+/// The visible part of the page (in the coordinates the widgets are laid
+/// out in), the height of its content, and what the window shows.
+fn page_view(b: &mut Bench) -> (Rectangle, f32, Shown) {
+    let doc = b.app.editors[&b.editor].id("doc");
+    let shown = b.shown(b.editor);
+    let (bounds, content, scroll) = shown.scrollables[&doc];
+    (Rectangle::new(bounds.position() + scroll, bounds.size()), content.height, shown)
+}
+
+/// Whether the page's block `block` has widgets.
+fn built(b: &Bench, shown: &Shown, block: usize) -> bool {
+    let id = b.app.editors[&b.editor].id(&format!("block-{block}"));
+    shown.containers.iter().any(|(i, _)| *i == id)
+}
+
+/// The block of the page whose source starts with `start`.
+fn block_of(b: &Bench, start: &str) -> usize {
+    let page = &b.app.editors[&b.editor].page;
+    page.doc().blocks.iter().position(|bl| page.text()[bl.range.clone()].starts_with(start)).unwrap()
+}
+
+/// Nothing of the visible part of the page is left without widgets.
+fn assert_all_in_view_built(b: &mut Bench) {
+    let (visible, _, shown) = page_view(b);
+    let far = b.app.editors[&b.editor].id("far");
+    for (id, bounds) in &shown.containers {
+        assert!(*id != far || !bounds.intersects(&visible), "{bounds:?} has no widgets, in view {visible:?}");
+    }
+}
+
+/// Scrolls the page by `steps` steps of the wheel (down when positive),
+/// handling the messages that sends; how many there were.
+fn scroll_page(b: &mut Bench, steps: i32) -> usize {
+    let at = Point::new(400.0, 400.0);
+    let editor = b.editor;
+    let _ = b.messages(editor, moved(at), at, false);
+    let mut sent = 0;
+    for _ in 0..steps.abs() {
+        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 * steps.signum() as f32 };
+        let (messages, _) = b.messages(editor, Event::Mouse(mouse::Event::WheelScrolled { delta }), at, false);
+        sent += messages.len();
+        if !messages.is_empty() {
+            for m in messages {
+                let _ = b.app.update(m);
+            }
+            b.rebuild();
+        }
+    }
+    sent
+}
+
+/// A page builds widgets for the blocks near the part it shows, wherever it
+/// is scrolled to, and is as tall as with every block built.
+#[test]
+fn the_page_builds_widgets_for_the_blocks_near_what_it_shows() {
+    let mut b = Bench::new(3, 40);
+    let (first, last) = (block_of(&b, "## Section 0"), block_of(&b, "## Section 39"));
+    // At another zoom (as when just opened), every block is built once, to
+    // know their heights.
+    let zoom = EditorMsg::Command(super::editor::EditorCommand::ZoomIn);
+    let _ = b.app.update(Message::Editor(b.editor, zoom));
+    let (_, height, shown) = page_view(&mut b);
+    assert!(built(&b, &shown, first) && built(&b, &shown, last));
+    // From then on, those near the visible part only.
+    let (_, near_top, shown) = page_view(&mut b);
+    assert!(built(&b, &shown, first) && !built(&b, &shown, last));
+    assert!((near_top - height).abs() < 0.5, "{near_top} tall, built whole {height}");
+    assert_all_in_view_built(&mut b);
+    // Down the page: what comes into view is built, what is far behind is not.
+    let sent = scroll_page(&mut b, 150);
+    assert!((3..75).contains(&sent), "{sent} messages");
+    let (visible, further, shown) = page_view(&mut b);
+    assert!(visible.y > 10000.0, "{visible:?}");
+    assert!(!built(&b, &shown, first) && !built(&b, &shown, last));
+    assert!((further - height).abs() < 0.5, "{further} tall, built whole {height}");
+    assert_all_in_view_built(&mut b);
+    // Back up.
+    scroll_page(&mut b, -200);
+    let doc = b.app.editors[&b.editor].id("doc");
+    let shown = b.shown(b.editor);
+    assert_eq!(shown.scrollables[&doc].2.y, 0.0, "at the top");
+    assert!(built(&b, &shown, first));
+    assert_all_in_view_built(&mut b);
+}
+
+/// Scrolling a page tells the application where it is only when the visible
+/// part comes near the end of the blocks built around it (each message
+/// builds every window again).
+#[test]
+fn scrolling_a_page_tells_where_it_is_only_near_the_end_of_what_was_built() {
+    let mut b = Bench::new(3, 40);
+    let editor = b.editor;
+    b.unmeasured(Message::Editor(editor, EditorMsg::CloseContextMenu));
+    let at = Point::new(400.0, 400.0);
+    let _ = b.messages(editor, moved(at), at, false);
+    let wheel = || Event::Mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 } });
+    // The steps of the wheel that send nothing, and the messages of the next.
+    let quiet = |b: &mut Bench| {
+        for steps in 0..100 {
+            let (messages, _) = b.messages(editor, wheel(), at, false);
+            if !messages.is_empty() {
+                return (steps, messages);
+            }
+        }
+        panic!("scrolled without telling where to");
+    };
+    // Some steps send nothing, then one tells where the page is.
+    let (steps, messages) = quiet(&mut b);
+    assert!(steps >= 2, "{steps}");
+    assert!(matches!(messages[..], [Message::Editor(_, EditorMsg::PageScrolled(_))]), "{messages:?}");
+    for m in messages {
+        let _ = b.app.update(m);
+    }
+    b.rebuild();
+    // Built around where it is now: quiet again for a while.
+    assert!(quiet(&mut b).0 >= 2);
+}
+
+/// A heading far from the visible part that the page is scrolled to (from
+/// the outline, a link) gets its widgets, for the scroll to find it.
+#[test]
+fn a_block_scrolled_to_gets_widgets_wherever_it_is() {
+    let mut b = Bench::new(3, 40);
+    let editor = b.editor;
+    b.unmeasured(Message::Editor(editor, EditorMsg::CloseContextMenu));
+    let block = block_of(&b, "## Section 35");
+    let shown = b.shown(editor);
+    assert!(!built(&b, &shown, block));
+    let heading = b.app.editors[&editor].page.doc().headings.iter().position(|h| h.block == block).unwrap();
+    b.unmeasured(Message::Editor(editor, EditorMsg::HeadingClicked(heading)));
+    let shown = b.shown(editor);
+    assert!(built(&b, &shown, block));
+}
+
+/// The block being edited keeps its widgets (its focus, what is being
+/// composed) when the page is scrolled far from it.
+#[test]
+fn the_block_being_edited_keeps_its_widgets_far_from_view() {
+    let mut b = Bench::new(3, 40);
+    let editor = b.editor;
+    let text = b.app.editors[&editor].page.text().to_string();
+    let at = text.find("Paragraph 3 with").unwrap() + "Paragraph 3".len();
+    b.unmeasured(Message::Editor(editor, EditorMsg::PressedAt(at)));
+    b.unmeasured(Message::Editor(editor, EditorMsg::Released));
+    let active = b.app.editors[&editor].id("active-box");
+    let has_active = |b: &mut Bench| b.shown(editor).containers.iter().any(|(id, _)| *id == active);
+    assert!(has_active(&mut b));
+    scroll_page(&mut b, 150);
+    let (visible, _, _) = page_view(&mut b);
+    assert!(visible.y > 10000.0, "{visible:?}");
+    assert!(has_active(&mut b));
+    b.unmeasured(Message::Editor(editor, EditorMsg::Live(super::editor::LiveMsg::Insert("x".into()))));
+    assert!(b.app.editors[&editor].page.text().contains("Paragraph 3x with"));
+    assert!(has_active(&mut b));
 }
 
 /// A quick click on a page's text, its press and release in one batch of

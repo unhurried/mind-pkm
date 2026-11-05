@@ -323,6 +323,31 @@ fn counting_a_selection() {
     assert_eq!((selected.words, selected.characters), (2, 9));
 }
 
+/// The counts are kept between views, and counted again after every change
+/// of the page or of the selection.
+#[test]
+fn the_counts_follow_edits_and_the_selection() {
+    let (mut app, _f, _, _) = app_with_page("one two\n");
+    let id = open_with_f1(&mut app);
+    let words = |app: &App| {
+        let (all, selected) = app.editors[&id].counts();
+        (all.words, selected.map(|s| s.words))
+    };
+    assert_eq!(words(&app), (2, None));
+    click_after(&mut app, id, "two");
+    typing(&mut app, id, " three");
+    assert_eq!(words(&app), (3, None));
+    select(&mut app, id, "one");
+    assert_eq!(words(&app), (3, Some(1)));
+    select(&mut app, id, "two three");
+    assert_eq!(words(&app), (3, Some(2)));
+    // The selection's text changed, the selection did not.
+    typing(&mut app, id, "four");
+    assert_eq!(words(&app), (2, None));
+    press(&mut app, id, "z", Modifiers::CTRL);
+    assert_eq!(words(&app).0, 3);
+}
+
 #[test]
 fn deleting_three_blocks() {
     let (mut app, _f, _, _) = app_with_page("one\n\ntwo\n\nthree\n\nfour\n");
