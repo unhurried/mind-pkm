@@ -19,7 +19,7 @@ None.
 
 ### Modified Capabilities
 
-- `mindmap-editing`: Selection and navigation (Shift+click selects a range).
+- `mindmap-editing`: Selection and navigation (Shift+click no longer adds one node); new requirement Range selection with Shift+click.
 
 ## Impact
 
