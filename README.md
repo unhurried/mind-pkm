@@ -16,13 +16,19 @@ It reads and writes the same files as the add-on: your Freeplane `.mm` map and t
 ## Installation
 
 1. Download `mind-pkm.exe` from the [releases page](../../releases) and put it anywhere.
-2. Run it, and open your map with File → Open. The last opened map is reopened on the next start, with the zoom level, scroll position and selected nodes it was last shown with (remembered per map in `%APPDATA%\mind-pkm\views.txt`), in a window of the size and position it last had (`window=` in `%APPDATA%\mind-pkm\settings.txt`; remove that line if the window ends up off-screen); a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence.
+2. Run it, and open your map with File → Open. The last opened map is reopened on the next start, with the zoom level, scroll position and selected nodes it was last shown with (remembered per map in `%APPDATA%\mind-pkm\views.txt`), in a window of the size and position it last had (`window=` in `%APPDATA%\mind-pkm\settings.txt`; remove that line if the window ends up off-screen); a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence, and a `.md` file opens in the page editor alone (see [Opening Markdown Files](#opening-markdown-files)).
 
 The UI uses the Meiryo UI font; where it is missing, the system's fallback fonts are used.
 
 There is nothing to install and no runtime to set up: the exe embeds everything, including the Japanese dictionary for the search index.
 
 If the application crashes, fails to start, or fails to update the search index, the details are appended to `mind-pkm-error.log` next to the exe (in the temporary folder if that folder cannot be written to; a log past 1 MiB is kept as `mind-pkm-error.log.old`). The file only exists once an error has happened.
+
+### Opening Markdown Files
+
+Mind PKM is also a Markdown editor on its own. Start it with a `.md` file - on the command line, or from Explorer with right-click → Open with → Choose another app → More apps → Look for another app on this PC → `mind-pkm.exe` (tick "Always use this app" to make it the default for `.md` files). The file opens in an editor window (see [Page Editor](#page-editor)) and no map window opens, whatever PKM → Use Built-in Editor says. The last opened map and the map window's size and position stay as they were for the next start with a map.
+
+From there, File → Open... (Ctrl+O) and Ctrl+click on a link to another page open more files, each in a window of its own, and closing the last window ends the application. Each file opened from Explorer starts an application of its own. Without a map there is no document directory, so the assets pane doesn't rename or delete files. A file that can't be opened (missing, or not UTF-8) is reported in the map window of an ordinary start instead.
 
 ### Code Signing Certificate
 
@@ -59,6 +65,8 @@ The conventions are those of the add-on, unchanged:
 - Links are written the way Freeplane writes them (relative to the map file), and anything in the map this application doesn't use itself - styles, attributes, rich text, hooks - is kept as it is when the map is saved.
 
 File → New creates a map skeleton with `config > docDirPath` (edit its child to your document directory) and `ToDo`.
+
+File → Open opens a map (`.mm`) in place of the open one, or a Markdown file (`.md`) in an editor window of its own (see [Page Editor](#page-editor)), leaving the map as it is.
 
 ## PKM Commands
 
@@ -132,7 +140,7 @@ Clicking a node's link marker opens the linked file, directory or URL, or jumps 
 
 ## Page Editor
 
-Open (F1), New Page (F9), search results and link markers open a page in a window of its own, one per page (opening a page that is open brings its window to the front). The page is shown rendered, block by block - paragraphs, headings, lists and task lists, quotes, code with syntax highlighting, tables, images, math, Mermaid diagrams, footnotes, front matter, `[toc]` - and you edit it in that form, as in Typora: only the inline element at the cursor (bold text, a link, an image, a formula...) shows its Markdown, dimmed, until the cursor moves on; headings keep their size, list items their bullet or checkbox, quotes their bar, without `#`, `-` or `>`, also inside quotes and list items (a list or a heading in a quote, a quote or code in a list item are blocks of their own). A code block is edited as its code, in its box and highlighting, without the fences, with a field for its language at the bottom right (Down at the last line of a code block that ends the page starts a new paragraph after it; Backspace in an empty one removes it). Math blocks, diagrams, front matter and HTML blocks show their source while the cursor is in them.
+Open (F1), New Page (F9), search results and link markers open a page in a window of its own, as do File → Open in the map window or an editor and a `.md` file the application is started with (see [Opening Markdown Files](#opening-markdown-files)), one per page (opening a page that is open brings its window to the front). The page is shown rendered, block by block - paragraphs, headings, lists and task lists, quotes, code with syntax highlighting, tables, images, math, Mermaid diagrams, footnotes, front matter, `[toc]` - and you edit it in that form, as in Typora: only the inline element at the cursor (bold text, a link, an image, a formula...) shows its Markdown, dimmed, until the cursor moves on; headings keep their size, list items their bullet or checkbox, quotes their bar, without `#`, `-` or `>`, also inside quotes and list items (a list or a heading in a quote, a quote or code in a list item are blocks of their own). A code block is edited as its code, in its box and highlighting, without the fences, with a field for its language at the bottom right (Down at the last line of a code block that ends the page starts a new paragraph after it; Backspace in an empty one removes it). Math blocks, diagrams, front matter and HTML blocks show their source while the cursor is in them.
 
 Blocks are started by typing their Markdown at the start of a line: `#` shows as you typed it until the space after it makes the line a heading (`# `), and likewise `- `, `* `, `1. `, `- [ ] ` and `> ` make a list item, a task or a quote, which you then keep typing into rendered. ` ``` `, `$$`, `---`, a setext underline or `[toc]` stay text until Enter completes them (Enter after ` ``` ` adds the closing fence; after `---`, a horizontal rule and a new paragraph). Inline Markdown (`**bold**`, `[link](x.md)`, `$x^2$`...) is rendered as soon as it is complete, and shows its Markdown, dimmed around the styled text, while the cursor touches it. Click into a block to edit it; Ctrl+click follows a link (a page opens in the editor, `#anchor` jumps to its heading, anything else opens with its default application); clicking a task box ticks it.
 
@@ -154,10 +162,10 @@ The file stays plain Markdown and only the edited parts change: the UTF-8 BOM an
 | Ctrl+Shift+I | Insert images |
 | Ctrl+/ | Source mode (the whole page as Markdown) |
 | Ctrl+Shift+1, Ctrl+Shift+2, F11, Ctrl+Shift+= / - / 0 | Outline, assets pane, full screen, zoom in / out / reset |
-| Ctrl+S, Ctrl+W | Save, close |
+| Ctrl+O, Ctrl+S, Ctrl+W | Open another Markdown file (in a window of its own), save, close |
 | Right-click | Cut / copy / paste (also as Markdown / plain text), select all and the inline formats; outside the selection it first puts the cursor where it was clicked |
 
-The menus (File, Edit, Paragraph, Format, Table, View) hold every command with its shortcut, among them Export HTML / PDF, Highlight, Inline Math, Horizontal Rule, Auto-Pair Brackets and Dark Theme. On a Japanese keyboard the shortcuts with `=` and `` ` `` also work on the keys printed `;` and `@`. Brackets and quotes are closed as you type them (Edit → Auto-Pair Brackets turns that off); with text selected, `*`, `_`, `~` and `$` enclose it. The status bar counts words and characters of the page (or the selection), each CJK character counting as a word.
+The menus (File, Edit, Paragraph, Format, Table, View) hold every command with its shortcut, among them Open... (any `.md` file, in the built-in editor even when PKM → Use Built-in Editor is unchecked; an error opening it is shown in the window it was opened from), Export HTML / PDF, Highlight, Inline Math, Horizontal Rule, Auto-Pair Brackets and Dark Theme. On a Japanese keyboard the shortcuts with `=` and `` ` `` also work on the keys printed `;` and `@`. Brackets and quotes are closed as you type them (Edit → Auto-Pair Brackets turns that off); with text selected, `*`, `_`, `~` and `$` enclose it. The status bar counts words and characters of the page (or the selection), each CJK character counting as a word.
 
 - **Tables**: each column is as wide as its widest cell, up to a maximum width at which longer text wraps; a table narrower than the page is widened to it, and one wider scrolls sideways (Shift+wheel or its scroll bar). While the cursor is in a table, it is edited as a grid of rendered cells (the cell being edited shows the Markdown at its cursor, like any block): Tab / Shift+Tab / Enter move between cells (adding a row at the end), Shift+Enter breaks a line in a cell (stored as `<br>`), Ctrl+Enter adds a row, Ctrl+Shift+Backspace deletes it, Alt+arrows move the row or column. Drag over cells, Shift+click or Shift+arrows select a range of cells, which Delete empties and Ctrl+C copies as tab-separated text and an HTML table. The columns follow what is typed into them. The toolbar above the table aligns columns, resizes the table and deletes it; the Table menu and the cells' right-click menu (which also cuts, copies, pastes and selects) insert, delete and move rows and columns. A changed table is written with aligned pipes.
 - **Images**: type `![alt](path)`, drop image files on the window, choose Format → Image..., or paste a screenshot or copied image files. Images are copied into the page's `<name>.assets/` folder (a taken name gets a number, pasted image data is saved as `image-<date and time>.png`) and referenced relatively, like `![](My Page.assets/photo 1.png)`, so that renaming the page (F2) keeps them working. Remote images are not downloaded: their alt text is shown with a link.

@@ -9,6 +9,7 @@ use iced::widget::text_editor::{Binding, KeyPress, Status};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorCommand {
     // File
+    Open,
     Save,
     ExportHtml,
     ExportPdf,
@@ -85,6 +86,7 @@ pub const MENUS: &[Menu<EditorCommand>] = &[
     (
         "File",
         &[
+            ("Open...", "Ctrl+O", C::Open),
             ("Save", "Ctrl+S", C::Save),
             ("Export HTML...", "", C::ExportHtml),
             ("Export PDF...", "", C::ExportPdf),
@@ -292,6 +294,7 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
         return None;
     }
     Some(match (c.as_str(), shift) {
+        ("o", false) => C::Open,
         ("s", false) => C::Save,
         ("w", false) => C::Close,
         ("z", false) => C::Undo,
@@ -482,6 +485,15 @@ mod tests {
                 assert_eq!(command_for_key(&key, unidentified(), modifiers), Some(cmd), "{label}: {shortcut}");
             }
         }
+    }
+
+    #[test]
+    fn ctrl_o_opens_a_file() {
+        let o = Key::Character("o".into());
+        assert_eq!(command_for_key(&o, unidentified(), Modifiers::CTRL), Some(C::Open));
+        assert!(
+            MENUS[0].1.iter().any(|&(label, shortcut, cmd)| (label, shortcut, cmd) == ("Open...", "Ctrl+O", C::Open))
+        );
     }
 
     #[test]
