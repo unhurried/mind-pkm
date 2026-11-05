@@ -39,8 +39,8 @@ pub use assets::AssetsMsg;
 use clipboard::ClipboardContent;
 pub use find::FindMsg;
 use iced::keyboard::{self, Key, Modifiers, key::Named};
+use iced::widget::operation;
 use iced::widget::text_editor::{Action, Content, Edit, Motion};
-use iced::widget::{operation, scrollable};
 use iced::{Point, Size, Subscription, Task, window};
 pub use keys::{Bind, EditorCommand};
 pub use live_text::LiveMsg;
@@ -149,7 +149,6 @@ pub enum EditorMsg {
     /// A right click on the page: where it landed.
     RightClicked(RightClick),
     CloseContextMenu,
-    Scrolled(scrollable::Viewport),
     Dialog(DialogAnswer),
     /// The clipboard was read for pasting (as plain text when `true`).
     Pasted(ClipboardContent, bool),
@@ -248,6 +247,14 @@ pub enum Effect {
     DeleteAsset(PathBuf),
 }
 
+/// The status bar's counts, as last counted: the page's for a revision of
+/// it, the selection's for its source.
+#[derive(Default)]
+struct Counted {
+    page: Option<(u64, count::Counts)>,
+    selection: Option<(String, count::Counts)>,
+}
+
 pub struct Editor {
     uid: u64,
     /// The editor's window, once it is open.
@@ -267,8 +274,6 @@ pub struct Editor {
     /// The rendered text under the pointer and the pointer's position in it.
     pointer: Option<(Arc<HitInfo>, Point)>,
     window_size: Size,
-    /// How the document is scrolled, as last reported.
-    viewport: Option<scrollable::Viewport>,
     /// Ctrl+A pressed again selects all blocks.
     select_all_again: bool,
     /// The page revision and theme its math and diagrams were last requested for.
@@ -295,6 +300,8 @@ pub struct Editor {
     /// Whether the image files the page shows exist, as looked up for a
     /// revision of the page (`is_image_file`).
     image_files: RefCell<(u64, HashMap<PathBuf, bool>)>,
+    /// The status bar's counts, as last counted.
+    counted: RefCell<Counted>,
     /// The widths of the lines of table cells, as measured for their columns.
     table_widths: view::WidthCache,
     /// How far the table that was last scrolled sideways is scrolled: where
@@ -323,7 +330,6 @@ impl Editor {
             modifiers: Modifiers::default(),
             pointer: None,
             window_size: DEFAULT_WINDOW,
-            viewport: None,
             select_all_again: false,
             rendered: None,
             copied: None,
@@ -336,6 +342,7 @@ impl Editor {
             right_pressed_at: Point::ORIGIN,
             context_menu: None,
             image_files: RefCell::default(),
+            counted: RefCell::default(),
             table_widths: view::WidthCache::default(),
             table_x: None,
         }
@@ -610,10 +617,6 @@ impl Editor {
             EditorMsg::RightClicked(target) => self.right_clicked(target),
             EditorMsg::CloseContextMenu => {
                 self.context_menu = None;
-                Task::none()
-            }
-            EditorMsg::Scrolled(viewport) => {
-                self.viewport = Some(viewport);
                 Task::none()
             }
             EditorMsg::Dialog(answer) => self.dialog_answered(answer, effects),
@@ -1772,12 +1775,25 @@ impl Editor {
 
     // --- Status bar ---
 
-    /// Words and characters for the status bar.
+    /// Words and characters for the status bar: the page's, and the
+    /// selection's if there is one. Counted again only when the page or the
+    /// selection changed, not in every view.
     pub fn counts(&self) -> (count::Counts, Option<count::Counts>) {
-        let all = count::count(&count::shown_text(self.page.doc()));
+        let mut counted = self.counted.borrow_mut();
+        let revision = self.page.revision();
+        if counted.page.is_none_or(|(r, _)| r != revision) {
+            counted.page = Some((revision, count::count(&count::shown_text(self.page.doc()))));
+        }
+        let all = counted.page.map(|(_, c)| c).unwrap_or_default();
         let selected = self.page.selected_source();
-        let sel = (!selected.is_empty()).then(|| count::count_source(&selected));
-        (all, sel)
+        if selected.is_empty() {
+            return (all, None);
+        }
+        if counted.selection.as_ref().is_none_or(|(s, _)| *s != selected) {
+            let c = count::count_source(&selected);
+            counted.selection = Some((selected, c));
+        }
+        (all, counted.selection.as_ref().map(|(_, c)| *c))
     }
 }
 

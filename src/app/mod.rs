@@ -18,6 +18,7 @@ mod editor;
 mod editors;
 mod file;
 mod ime;
+mod keyed_column;
 mod keys;
 mod layout;
 mod node_edit;

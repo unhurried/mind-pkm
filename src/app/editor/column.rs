@@ -1,11 +1,13 @@
 //! What the page column shows, in order: the page's blocks, with the active
 //! region in place of the blocks it covers (a new paragraph before the block
 //! after it). For each entry: what it is, the containers around it, the
-//! source it covers and the gap above it. The view lays this out.
+//! source it covers, the gap above it and its key. The view lays this out.
 
 use super::page::Page;
 use crate::markdown::BlockKind;
 use crate::markdown::parse::ContainerKind;
+use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 
 /// What an entry of the column shows.
@@ -15,6 +17,20 @@ pub enum Shown {
     Block(usize),
     /// The active region.
     Active,
+}
+
+/// What an entry is, for its widgets to keep their state (its shaped text)
+/// while entries come and go around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EntryKey {
+    /// A rendered block, by its source alone (no offset, which changes with
+    /// every edit above it): the `n`th block (from 0) whose source has this
+    /// hash.
+    Block { source: u64, n: usize },
+    /// The region being edited, by its place among the entries: its widgets
+    /// (the text being edited, its focus) keep their state while it stays
+    /// there, and get a new one when it moves to another block.
+    Active(usize),
 }
 
 /// The room above an entry.
@@ -43,6 +59,7 @@ pub struct Entry {
     /// The containers it shares with the entry above, which go on through the
     /// gap between them (a quote's bar).
     pub shared: Vec<ContainerKind>,
+    pub key: EntryKey,
 }
 
 impl Entry {
@@ -89,6 +106,8 @@ pub fn entries(page: &Page) -> Vec<Entry> {
         (b.kind.clone(), b.outer.iter().map(|&c| (doc.containers[c].kind, Some(c))).collect())
     };
     let mut entries: Vec<Entry> = Vec::new();
+    // How many blocks with a source of each hash came before.
+    let mut sources: HashMap<u64, usize> = HashMap::new();
     for s in shown {
         let (kind, outer) = match (s, &page.pending(), active_block) {
             (Shown::Block(i), _, _) => of_block(i),
@@ -105,7 +124,18 @@ pub fn entries(page: &Page) -> Vec<Entry> {
         let previous = entries.last();
         let gap = gap(previous.map(|p| &p.kind), &kind);
         let shared = previous.map(|p| shared(&p.outer, &outer)).unwrap_or_default();
-        entries.push(Entry { shown: s, kind, outer, covers, gap, shared });
+        let key = match s {
+            Shown::Block(_) => {
+                let mut hasher = DefaultHasher::new();
+                page.text()[covers.clone()].hash(&mut hasher);
+                let source = hasher.finish();
+                let n = sources.entry(source).or_default();
+                *n += 1;
+                EntryKey::Block { source, n: *n - 1 }
+            }
+            Shown::Active => EntryKey::Active(entries.len()),
+        };
+        entries.push(Entry { shown: s, kind, outer, covers, gap, shared, key });
     }
     entries
 }
@@ -195,6 +225,54 @@ mod tests {
         p.perform(Action::Edit(Edit::Backspace));
         assert_eq!(p.text(), "a\n\n\n\nc\n");
         assert_eq!(shown(&p), [Shown::Block(0), Shown::Active, Shown::Block(1)]);
+    }
+
+    /// The rendered blocks' sources with their keys.
+    fn keys(page: &Page) -> Vec<(String, EntryKey)> {
+        entries(page)
+            .iter()
+            .filter(|e| e.shown != Shown::Active)
+            .map(|e| (page.text()[e.covers.clone()].to_string(), e.key))
+            .collect()
+    }
+
+    #[test]
+    fn blocks_keep_their_keys_while_blocks_come_and_go_before_them() {
+        let mut p = page("one\n\ntwo\n\n- a\n- b\n\n> c\n");
+        p.place(Sel::caret(3));
+        let after = |p: &Page| keys(p).into_iter().filter(|(s, _)| s != "one").collect::<Vec<_>>();
+        let before = after(&p);
+        assert_eq!(before.len(), 4);
+        // Typed into: the offsets after it change, the keys do not.
+        p.perform(Action::Edit(Edit::Insert('x')));
+        assert_eq!(p.text(), "onex\n\ntwo\n\n- a\n- b\n\n> c\n");
+        let after = |p: &Page| keys(p).into_iter().filter(|(s, _)| !s.starts_with("one")).collect::<Vec<_>>();
+        assert_eq!(after(&p), before);
+        // A new paragraph, typed into.
+        let e = edit::enter(p.text(), p.doc(), 0..4, Sel::caret(4)).unwrap();
+        p.apply(e);
+        p.perform(Action::Edit(Edit::Insert('y')));
+        assert_eq!(p.text(), "onex\n\ny\n\ntwo\n\n- a\n- b\n\n> c\n");
+        assert_eq!(after(&p), before);
+        // Emptied, then joined with the block before it again.
+        p.perform(Action::Edit(Edit::Backspace));
+        assert_eq!(after(&p), before);
+        let region = p.active().unwrap().region.clone();
+        let e = edit::backspace_nested(p.text(), p.doc(), region, p.sel().head).unwrap();
+        p.apply(e);
+        assert_eq!(p.text(), "onex\n\ntwo\n\n- a\n- b\n\n> c\n");
+        assert_eq!(after(&p), before);
+    }
+
+    #[test]
+    fn keys_are_unique() {
+        let mut p = page("same\n\nsame\n\nother\n\nsame\n");
+        p.place(Sel::caret(0));
+        let entries = entries(&p);
+        let keys: Vec<EntryKey> = entries.iter().map(|e| e.key).collect();
+        assert_eq!(keys.iter().collect::<std::collections::HashSet<_>>().len(), keys.len(), "{keys:?}");
+        // The region being edited by its place.
+        assert_eq!(keys[0], EntryKey::Active(0));
     }
 
     #[test]

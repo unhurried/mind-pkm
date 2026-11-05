@@ -13,7 +13,7 @@
 //! Also here: tests of what makes the windows rebuild (pointer moves must not).
 
 use super::command::Command;
-use super::editor::EditorMsg;
+use super::editor::{Bind, EditorMsg};
 use super::profile::{self, Phase};
 use super::test_support::{headless_renderer, key_event};
 use super::viewport::NEAR_MARGIN;
@@ -358,9 +358,19 @@ fn report(fanout: usize, sections: usize) {
     run("editor: typing a character", &mut b, &mut |b, t, _| {
         b.step(t, Message::Editor(editor, EditorMsg::Action(Action::Edit(Edit::Insert('a')))))
     });
+    // A block added and joined again, with most of the page after it.
+    run("editor: Enter / Backspace", &mut b, &mut |b, t, i| {
+        let bind = if i % 2 == 0 { Bind::Enter } else { Bind::Backspace };
+        b.step(t, Message::Editor(editor, EditorMsg::Bind(bind)))
+    });
     run("editor: pointer moves over text", &mut b, &mut |b, t, i| {
         let at = Point::new(260.0 + (i % 5) as f32 * 7.0, 120.0 + i as f32 * 23.0);
         b.event(t, editor, Event::Mouse(mouse::Event::CursorMoved { position: at }), at)
+    });
+    run("editor: wheel scroll", &mut b, &mut |b, t, _| {
+        let at = Point::new(400.0, 400.0);
+        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 };
+        b.event(t, editor, Event::Mouse(mouse::Event::WheelScrolled { delta }), at)
     });
     run("map: wheel scroll", &mut b, &mut |b, t, i| {
         let at = Point::new(640.0, 400.0);
@@ -385,10 +395,12 @@ fn perf_large_map_and_long_page() {
 }
 
 /// What a window shows, as an operation finds it: where the map's scrollable
-/// is and how far it is scrolled, and the texts of the text widgets.
+/// is and how far it is scrolled, how far the scrollables with an id are
+/// scrolled, and the texts of the text widgets.
 #[derive(Default)]
 struct Shown {
     map: Option<(Rectangle, Vector)>,
+    scrolled: HashMap<widget::Id, Vector>,
     texts: HashSet<String>,
 }
 
@@ -405,6 +417,9 @@ impl Operation for Shown {
         translation: Vector,
         _state: &mut dyn operation::Scrollable,
     ) {
+        if let Some(id) = id {
+            self.scrolled.insert(id.clone(), translation);
+        }
         if id == Some(&widget::Id::new(MAP_SCROLL_ID)) {
             self.map = Some((bounds, translation));
         }
@@ -494,6 +509,24 @@ fn pointer_moves_send_no_messages() {
     let pointer = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::PointerOver(..))));
     let text = messages.iter().position(|m| matches!(m, Message::Editor(_, EditorMsg::TextPressed)));
     assert!(pointer.is_some() && pointer < text, "{messages:?}");
+}
+
+/// Scrolling a page with the wheel sends no message either: the page
+/// scrolls by itself.
+#[test]
+fn scrolling_a_page_sends_no_messages() {
+    let mut b = Bench::new(3, 6);
+    let editor = b.editor;
+    let doc = b.app.editors[&editor].id("doc");
+    let at = Point::new(400.0, 400.0);
+    let _ = b.messages(editor, moved(at), at, false);
+    for _ in 0..10 {
+        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 };
+        let (messages, _) = b.messages(editor, Event::Mouse(mouse::Event::WheelScrolled { delta }), at, false);
+        assert!(messages.is_empty(), "{messages:?}");
+    }
+    let scrolled = b.shown(editor).scrolled[&doc];
+    assert!(scrolled.y > 100.0, "{scrolled:?}");
 }
 
 /// A quick click on a page's text, its press and release in one batch of

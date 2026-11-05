@@ -8,18 +8,33 @@ use super::theme::{
     editor_style,
 };
 use crate::app::editor::assets::{DropTarget, content_end};
-use crate::app::editor::column::{self, Gap, Shown};
+use crate::app::editor::column::{self, EntryKey, Gap, Shown};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext};
 use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::{AssetsMsg, Editor, EditorMsg, EditorPrefs, RightClick};
 use crate::app::ime::ime_aligned;
+use crate::app::keyed_column::keyed_column;
 use crate::app::right_press::right_press_in;
 use crate::app::view::APP_FONT;
 use crate::markdown::parse::ContainerKind;
 use iced::advanced::text::Wrapping;
-use iced::widget::{Column, column, container, mouse_area, row, scrollable, space, stack, text_editor};
+use iced::widget::{column, container, mouse_area, row, scrollable, space, stack, text_editor};
 use iced::{Color, Element, Fill, Padding};
+
+/// A widget of the page column, for it to keep its state (its shaped text)
+/// while blocks come and go before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Part {
+    /// The gap above an entry.
+    Gap(EntryKey),
+    /// An entry: a rendered block, the region being edited.
+    Shown(EntryKey),
+    /// Where a dragged item would go after an entry.
+    Drop(EntryKey),
+    /// The room below the last entry.
+    End,
+}
 
 /// The height of the gap above an entry of the column.
 fn gap_height(gap: Gap, zoom: f32) -> f32 {
@@ -71,7 +86,7 @@ impl Editor {
         let content: Element<EditorMsg> = match &self.source {
             Some(source) => self.source_view(source, ctx, prefs),
             None => {
-                let mut col = Column::new().width(width);
+                let mut col = keyed_column().width(width);
                 let page = &self.page;
                 let active = page.active();
                 let selected = page.selected_blocks().map(|(a, b)| a.min(b)..=a.max(b));
@@ -117,7 +132,10 @@ impl Editor {
                         // Between two selected blocks the highlight goes on too.
                         let between_selected =
                             previous_block.zip(block).is_some_and(|(a, b)| is_selected(a) && is_selected(b));
-                        col = col.push(if between_selected { highlighted(gap_view) } else { gap_view });
+                        col = col.push(
+                            Part::Gap(entry.key),
+                            if between_selected { highlighted(gap_view) } else { gap_view },
+                        );
                     }
                     let kinds = entry.kinds();
                     let inner = inner_width(width, &kinds, ctx.zoom);
@@ -146,12 +164,13 @@ impl Editor {
                         }
                         (Shown::Active, None) => continue,
                     };
-                    col = col.push(shown);
+                    col = col.push(Part::Shown(entry.key), shown);
                     // Where a dragged item would go as a paragraph of its own.
                     if let Some(DropTarget::Paragraph { at }) = ctx.editor.drop_target()
                         && content_end(page.text(), entry.covers.clone()) == *at
                     {
                         col = col.push(
+                            Part::Drop(entry.key),
                             container(space().height(2)).width(Fill).style(move |_| container::background(p.link)),
                         );
                     }
@@ -166,13 +185,14 @@ impl Editor {
                 if dragging {
                     room = room.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(last)));
                 }
-                col = col.push(room);
+                col = col.push(Part::End, room);
                 // Where a press lands, for the editor that takes the block's place.
                 PressRelay::tracking(col, EditorMsg::PressPoint).into()
             }
         };
         let padded = container(content).padding(PAGE_PADDING).center_x(Fill);
-        let page = scrollable(padded).id(self.id("doc")).on_scroll(EditorMsg::Scrolled).width(Fill).height(Fill);
+        // Scrolling sends no message: each would build every window again.
+        let page = scrollable(padded).id(self.id("doc")).width(Fill).height(Fill);
         // While an item of the assets pane is dragged, the page tells where it
         // is. A right click no block took opens the page's menu.
         let mut area = mouse_area(page).on_right_press(EditorMsg::RightClicked(RightClick::Page));

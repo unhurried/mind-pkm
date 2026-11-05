@@ -66,11 +66,6 @@ pub struct Active {
 }
 
 impl Active {
-    /// The region edited as its source.
-    fn new(region: Range<usize>, text: &str) -> Active {
-        Active { region, kind: own_kind(text), mode: Mode::Source(Content::with_text(text)) }
-    }
-
     /// What it shows, when it is edited in its rendered form (a table: its cell).
     pub fn live(&self) -> Option<&Live> {
         match &self.mode {
@@ -464,16 +459,17 @@ impl Page {
         let region = edit::region_at(&self.doc, head).or_else(|| hold_break.then(|| self.with_break(head)).flatten());
         match region {
             Some(region) => {
+                // Each mode makes only what it uses: a text editor shapes its
+                // whole text when it is made.
                 let source = &self.text[region.clone()];
-                let mut active = Active::new(region.clone(), source);
+                let kind = own_kind(source);
                 let block = self.doc.blocks.iter().position(|b| b.range.start == region.start);
                 // A table in a quote is the quote's source on its own.
                 let in_table = block.is_some_and(|b| self.doc.blocks[b].kind == BlockKind::Table);
                 let kinds = block.map(|b| self.doc.outer_kinds(b)).unwrap_or_default();
-                if (in_table || active.kind == BlockKind::Table)
+                if (in_table || kind == BlockKind::Table)
                     && let Some(t) = Table::parse(&without_prefixes(source, &kinds))
                 {
-                    active.kind = BlockKind::Table;
                     let cell = table::cell_at_offset(source, head - region.start);
                     let cell = (cell.0.min(t.rows.len() - 1), cell.1.min(t.columns() - 1));
                     // The cursor (a selection within the cell) where it is in the source.
@@ -485,34 +481,33 @@ impl Page {
                     let h = local(head).unwrap_or(0);
                     let a = if same_cell { local(sel.anchor).unwrap_or(h) } else { h };
                     let state = TableState { table: t, cell, range: None, cell_sel: Sel { anchor: a, head: h } };
-                    active.mode = Mode::Table(state, Live::default());
-                    self.active = Some(active);
+                    let mode = Mode::Table(state, Live::default());
+                    self.active = Some(Active { region, kind: BlockKind::Table, mode });
                     self.sync_cell_sel();
-                    return;
                 } else if let Some(b) = block.filter(|&b| live::editable(&self.doc, b)) {
-                    active.kind = self.doc.blocks[b].kind.clone();
-                    active.mode = Mode::Live(Live::default());
-                    self.active = Some(active);
+                    let kind = self.doc.blocks[b].kind.clone();
+                    self.active = Some(Active { region: region.clone(), kind, mode: Mode::Live(Live::default()) });
                     let within = |o: usize| o.clamp(region.start, region.end);
                     self.sel = Sel { anchor: within(sel.anchor), head: within(sel.head) };
                     self.refresh_live();
                     self.snap_to_shown();
-                    return;
                 } else if let Some((b, code)) = block.and_then(|b| Some((b, CodeBody::of(&self.text, &self.doc, b)?))) {
                     // A code block: its code, without the fences.
                     let local = Sel { anchor: code.to_body(sel.anchor), head: code.to_body(sel.head) };
-                    active.kind = self.doc.blocks[b].kind.clone();
                     let mut content = Content::with_text(code.text());
                     move_content(&mut content, code.text(), local);
                     self.sel = Sel { anchor: code.to_page(local.anchor), head: code.to_page(local.head) };
-                    active.mode = Mode::Code(code, content);
-                } else if let Mode::Source(content) = &mut active.mode {
+                    let kind = self.doc.blocks[b].kind.clone();
+                    self.active = Some(Active { region, kind, mode: Mode::Code(code, content) });
+                } else {
+                    // Another code-like block: its source.
                     let within = |o: usize| o.clamp(region.start, region.end) - region.start;
                     let local = Sel { anchor: within(sel.anchor), head: within(sel.head) };
-                    move_content(content, source, local);
+                    let mut content = Content::with_text(source);
+                    move_content(&mut content, source, local);
                     self.sel = Sel { anchor: local.anchor + region.start, head: local.head + region.start };
+                    self.active = Some(Active { region, kind, mode: Mode::Source(content) });
                 }
-                self.active = Some(active);
             }
             None => self.start_pending(edit::gap_pending(&self.text, &self.doc, head, None)),
         }
