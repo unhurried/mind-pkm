@@ -3,6 +3,7 @@
 //! doing what they ask (`Effect`), the settings they share, and keeping them
 //! in step with what the PKM commands do to their files.
 
+use super::command::open_with_default;
 use super::editor::{AssetsMsg, Editor, EditorDialog, EditorMsg, EditorPrefs, Effect, opens_in_editor};
 use super::file::file_name;
 use super::{App, Message, blocking, settings, window_settings};
@@ -32,7 +33,14 @@ impl App {
 
     fn editor_effect(&mut self, id: window::Id, effect: Effect) -> Task<Message> {
         match effect {
-            Effect::OpenPage(path) => self.open_page(&path),
+            Effect::OpenPage(path) => {
+                let opened = self.try_open_page(&path);
+                self.report_in_editor(id, opened)
+            }
+            Effect::OpenInEditor(path) => {
+                let opened = self.try_open_in_editor(&path);
+                self.report_in_editor(id, opened)
+            }
             Effect::OpenExternal(target) => {
                 if let Err(e) = opener::open(&target)
                     && let Some(editor) = self.editors.get_mut(&id)
@@ -142,40 +150,64 @@ impl App {
         }
     }
 
+    /// Closes the editor window `id`; without a map window, the last one
+    /// ends the application.
     pub(super) fn close_editor(&mut self, id: window::Id) -> Task<Message> {
         self.editors.remove(&id);
-        window::close(id)
+        let closed = window::close(id);
+        if self.editors_only && self.editors.is_empty() {
+            return Task::batch([closed, self.exit()]);
+        }
+        closed
     }
 
     /// Opens a file: a Markdown file in the built-in editor (bringing its
     /// window to the front when it is open already), anything else - and
-    /// everything when the built-in editor is off - with its default application.
+    /// everything when the built-in editor is off - with its default
+    /// application. A failure is shown in the map window.
     pub(super) fn open_page(&mut self, path: &Path) -> Task<Message> {
-        if !opens_in_editor(path, self.editor_prefs.builtin) {
-            self.open_in_desktop(path);
-            return Task::none();
-        }
-        self.open_in_editor(path)
+        let opened = self.try_open_page(path);
+        self.report(opened).unwrap_or_else(Task::none)
     }
 
-    /// Opens a Markdown file in an editor window.
+    /// Opens a file as `open_page` does; the error if it can't be opened.
+    fn try_open_page(&mut self, path: &Path) -> Result<Task<Message>, String> {
+        if !opens_in_editor(path, self.editor_prefs.builtin) {
+            open_with_default(path)?;
+            return Ok(Task::none());
+        }
+        self.try_open_in_editor(path)
+    }
+
+    /// Opens a Markdown file in an editor window; a failure is shown in the map window.
     pub(super) fn open_in_editor(&mut self, path: &Path) -> Task<Message> {
+        let opened = self.try_open_in_editor(path);
+        self.report(opened).unwrap_or_else(Task::none)
+    }
+
+    /// Opens a Markdown file in an editor window (or brings its window to
+    /// the front); the error if it can't be opened.
+    pub(super) fn try_open_in_editor(&mut self, path: &Path) -> Result<Task<Message>, String> {
         let key = crate::paths::key(path);
         if let Some((&id, _)) = self.editors.iter().find(|(_, e)| crate::paths::key(e.page.path()) == key) {
-            return window::gain_focus(id);
+            return Ok(window::gain_focus(id));
         }
-        match Editor::open(path, self.editor_prefs.window) {
-            Ok(mut editor) => {
-                let (id, opened) = window::open(window_settings(self.editor_prefs.window, None, false));
-                editor.window = Some(id);
-                self.editors.insert(id, editor);
-                Task::batch([opened.discard(), self.request_renders()])
+        let mut editor = Editor::open(path, self.editor_prefs.window)?;
+        let (id, opened) = window::open(window_settings(self.editor_prefs.window, None, false));
+        editor.window = Some(id);
+        self.editors.insert(id, editor);
+        Ok(Task::batch([opened.discard(), self.request_renders()]))
+    }
+
+    /// What an open the editor window `id` asked for gives: its task, or
+    /// nothing with the error shown in that window.
+    fn report_in_editor(&mut self, id: window::Id, opened: Result<Task<Message>, String>) -> Task<Message> {
+        opened.unwrap_or_else(|e| {
+            if let Some(editor) = self.editors.get_mut(&id) {
+                editor.dialogs.push_back(EditorDialog::Message(e));
             }
-            Err(e) => {
-                self.message(e);
-                Task::none()
-            }
-        }
+            Task::none()
+        })
     }
 
     /// The page file or directory of a page or directory node.

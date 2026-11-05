@@ -2,6 +2,7 @@
 
 use super::dialog::Dialog;
 use super::doc::Doc;
+use super::editor::is_markdown;
 use super::search_panel::SearchPanel;
 use super::settings::{self, MapView};
 use super::{App, MapMsg, Message};
@@ -93,10 +94,15 @@ impl App {
         Task::none()
     }
 
-    /// Quits the application, remembering how the map and the window are shown.
-    pub(super) fn exit(&self) -> Task<Message> {
-        self.remember_view();
-        settings::set_window(&self.window);
+    /// Quits the application, remembering how the map and the map window
+    /// are shown - unless it ran without a map window, which leaves them as
+    /// they were.
+    pub(super) fn exit(&mut self) -> Task<Message> {
+        self.exiting = true;
+        if !self.editors_only {
+            self.remember_view();
+            settings::set_window(&self.window);
+        }
         iced::exit()
     }
 
@@ -130,13 +136,22 @@ impl App {
         let dir = self.doc.as_ref().and_then(|d| d.map().path()).and_then(|p| p.parent()).map(|p| p.to_path_buf());
         Task::perform(
             async move {
-                let mut dialog = rfd::AsyncFileDialog::new().add_filter("Mind map", &["mm"]);
+                let mut dialog = rfd::AsyncFileDialog::new();
                 if let Some(dir) = dir {
                     dialog = dialog.set_directory(dir);
                 }
                 let handle = match action {
-                    FileAction::Open => dialog.pick_file().await,
-                    FileAction::SaveAs(_) => dialog.set_file_name("map.mm").save_file().await,
+                    FileAction::Open => {
+                        dialog
+                            .add_filter("Mind map or Markdown", &["mm", "md"])
+                            .add_filter("Mind map", &["mm"])
+                            .add_filter("Markdown", &["md"])
+                            .pick_file()
+                            .await
+                    }
+                    FileAction::SaveAs(_) => {
+                        dialog.add_filter("Mind map", &["mm"]).set_file_name("map.mm").save_file().await
+                    }
                 };
                 handle.map(|h| h.path().to_path_buf())
             },
@@ -148,6 +163,8 @@ impl App {
     pub(super) fn file_chosen(&mut self, action: FileAction, path: Option<PathBuf>) -> Task<Message> {
         let Some(path) = path else { return Task::none() };
         match action {
+            // A Markdown file opens in an editor window, next to the map.
+            FileAction::Open if is_markdown(&path) => self.open_in_editor(&path),
             FileAction::Open => self.open_path(path),
             FileAction::SaveAs(then) => {
                 let path = if path.extension().is_none() { path.with_extension("mm") } else { path };

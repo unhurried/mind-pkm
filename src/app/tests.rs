@@ -266,6 +266,87 @@ fn saving_a_new_map_from_the_unsaved_changes_question_goes_on_once_saved() {
     assert_eq!(root_texts(&app), vec!["config", "ToDo"]);
 }
 
+/// A Markdown file `Notes.md` in a temporary directory.
+fn markdown_file() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let notes = dir.path().join("Notes.md");
+    std::fs::write(&notes, "# Notes\n").unwrap();
+    (dir, notes)
+}
+
+#[test]
+fn a_markdown_file_chosen_in_file_open_opens_in_an_editor_and_keeps_the_map() {
+    let mut app = edited_app();
+    let (_dir, notes) = markdown_file();
+    send(&mut app, MapMsg::Command(Command::Open));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Unsaved(AfterUnsaved::Open))));
+    send(&mut app, MapMsg::DialogDiscard);
+    send(&mut app, MapMsg::FileChosen(FileAction::Open, Some(notes.clone())));
+    assert!(app.dialogs.is_empty(), "{:?}", app.dialogs);
+    assert_eq!(app.editors.len(), 1);
+    assert!(app.editors.values().any(|e| e.page.path() == notes));
+    // The map is still there, with its unsaved changes.
+    assert!(app.doc.as_ref().unwrap().dirty());
+    assert_eq!(root_texts(&app), vec!["x"]);
+}
+
+#[test]
+fn a_markdown_file_chosen_in_file_open_uses_the_built_in_editor_even_when_it_is_turned_off() {
+    let mut app = app_with(MindMap::new("root"));
+    let (_dir, notes) = markdown_file();
+    send(&mut app, MapMsg::Command(Command::ToggleBuiltinEditor));
+    send(&mut app, MapMsg::FileChosen(FileAction::Open, Some(notes.clone())));
+    assert!(app.editors.values().any(|e| e.page.path() == notes));
+}
+
+#[test]
+fn started_with_a_markdown_file_only_its_editor_window_opens() {
+    let (_dir, notes) = markdown_file();
+    let mut app = App::new();
+    let _ = app.start(Some(notes.clone()), super::INITIAL_WINDOW);
+    assert!(app.editors_only, "no map window");
+    assert!(app.doc.is_none());
+    assert_eq!(app.editors.len(), 1);
+    assert!(app.editors.values().any(|e| e.page.path() == notes));
+    assert!(app.dialogs.is_empty());
+}
+
+#[test]
+fn started_with_a_markdown_file_it_uses_the_built_in_editor_even_when_it_is_turned_off() {
+    let (_dir, notes) = markdown_file();
+    let mut app = App::new();
+    app.editor_prefs.builtin = false;
+    let _ = app.start(Some(notes.clone()), super::INITIAL_WINDOW);
+    assert!(app.editors_only);
+    assert!(app.editors.values().any(|e| e.page.path() == notes));
+}
+
+#[test]
+fn started_with_a_markdown_file_that_cannot_be_opened_it_starts_as_usual_and_says_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new();
+    let _ = app.start(Some(dir.path().join("Gone.md")), super::INITIAL_WINDOW);
+    assert!(!app.editors_only, "the map window opens");
+    assert!(app.editors.is_empty());
+    assert!(
+        matches!(app.dialogs.front(), Some(Dialog::Message(m)) if m.starts_with("failed to open") && m.contains("Gone.md")),
+        "{:?}",
+        app.dialogs
+    );
+}
+
+#[test]
+fn started_with_a_map_file_it_shows_the_map() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.mm");
+    MindMap::new("root").save(&path).unwrap();
+    let mut app = App::new();
+    let _ = app.start(Some(path.clone()), super::INITIAL_WINDOW);
+    assert!(!app.editors_only);
+    assert!(app.editors.is_empty());
+    assert_eq!(map(&app).path(), Some(path.as_path()));
+}
+
 #[test]
 fn cancelling_save_as_from_the_unsaved_changes_question_keeps_the_changes() {
     let mut app = edited_app();

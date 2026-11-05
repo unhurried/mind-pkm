@@ -164,6 +164,8 @@ pub enum EditorMsg {
     Live(LiveMsg),
     /// Where to export to (as PDF when `true`), as chosen in the save dialog.
     ExportTo(bool, Option<PathBuf>),
+    /// The file dialog of File → Open... closed: the chosen file, unless it was cancelled.
+    OpenChosen(Option<PathBuf>),
     /// The file exported, or why not.
     Exported(Result<PathBuf, String>),
 }
@@ -229,8 +231,12 @@ pub enum RightClick {
 /// What an editor asks of the application.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    /// Open a page (a `.md` file) in the editor.
+    /// Open a page (a `.md` file) in the editor - with the default
+    /// application when the built-in editor is turned off.
     OpenPage(PathBuf),
+    /// Open a Markdown file the user chose in the built-in editor, whether
+    /// or not it is turned off.
+    OpenInEditor(PathBuf),
     /// Open a file, directory or URL with its default application.
     OpenExternal(String),
     Close,
@@ -622,6 +628,10 @@ impl Editor {
             EditorMsg::Table(msg) => self.table_message(msg, effects),
             EditorMsg::Assets(msg) => self.assets_message(msg, effects),
             EditorMsg::ExportTo(pdf, out) => self.export_to(pdf, out),
+            EditorMsg::OpenChosen(path) => {
+                effects.extend(path.map(Effect::OpenInEditor));
+                Task::none()
+            }
             EditorMsg::Exported(result) => {
                 match result {
                     Ok(out) => self.status.set(format!("exported {}", file_name(&out))),
@@ -1136,6 +1146,7 @@ impl Editor {
             return self.focus();
         }
         match cmd {
+            C::Open => self.ask_file_to_open(),
             C::Save => self.save(),
             C::ExportHtml => self.ask_export_file(false),
             C::ExportPdf => {
@@ -1270,6 +1281,21 @@ impl Editor {
             }
             _ => Task::none(),
         }
+    }
+
+    /// The file dialog of File → Open...: a Markdown file, from the page's folder on.
+    fn ask_file_to_open(&self) -> Task<EditorMsg> {
+        let dir = self.page.path().parent().map(Path::to_path_buf);
+        Task::perform(
+            async move {
+                let mut dialog = rfd::AsyncFileDialog::new().add_filter("Markdown", &["md"]);
+                if let Some(dir) = dir {
+                    dialog = dialog.set_directory(dir);
+                }
+                dialog.pick_file().await.map(|f| f.path().to_path_buf())
+            },
+            EditorMsg::OpenChosen,
+        )
     }
 
     /// The save dialog for an export: the page's name with `.html` / `.pdf`, next to it.
@@ -1824,7 +1850,13 @@ pub fn resolve_link(page: &Path, dest: &str) -> LinkTarget {
 
 /// Whether a file opens in the built-in editor (rather than its default application).
 pub fn opens_in_editor(path: &Path, builtin: bool) -> bool {
-    builtin && !path.is_dir() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
+    builtin && is_markdown(path)
+}
+
+/// Whether a file is a Markdown file, which the built-in editor edits: a
+/// `.md` file (in any case) that is not a directory.
+pub fn is_markdown(path: &Path) -> bool {
+    !path.is_dir() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"))
 }
 
 /// The subscription of the editor windows: while cells, blocks or an item of
