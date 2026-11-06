@@ -18,7 +18,7 @@ None.
 
 ### Modified Capabilities
 
-- `markdown-rendering`: Images (`data:` URLs shown).
+- `markdown-rendering`: new requirement Embedded images.
 
 ## Impact
 
