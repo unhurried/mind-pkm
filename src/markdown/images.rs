@@ -273,6 +273,60 @@ pub fn image_path(page: &Path, text: &str, src: &str) -> Option<PathBuf> {
     local_path(page, src, root.as_deref())
 }
 
+/// An image a `data:` URL holds: its bytes, and whether they are SVG
+/// (else a raster image, its format told by the bytes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataImage {
+    pub bytes: Vec<u8>,
+    pub svg: bool,
+}
+
+/// Whether an image `src` is a `data:` URL.
+pub fn is_data_url(src: &str) -> bool {
+    let src = src.trim();
+    let src = src.strip_prefix('<').unwrap_or(src);
+    src.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("data:"))
+}
+
+/// The image a `data:` URL (`data:image/png;base64,...`) holds: None when it
+/// is no `data:` URL, an error when it holds no image or cannot be decoded.
+/// The data is percent-decoded, then base64-decoded leniently (whitespace
+/// dropped, padding optional).
+pub fn data_image(src: &str) -> Option<Result<DataImage, String>> {
+    use base64::Engine;
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+    const LENIENT: GeneralPurpose = GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+    );
+    if !is_data_url(src) {
+        return None;
+    }
+    let src = src.trim();
+    let src = src.strip_prefix('<').and_then(|s| s.strip_suffix('>')).unwrap_or(src);
+    let Some((header, data)) = src[5..].split_once(',') else { return Some(Err("no data".into())) };
+    let mut params = header.split(';').map(str::trim);
+    let media = params.next().unwrap_or("").to_ascii_lowercase();
+    let base64 = params.any(|p| p.eq_ignore_ascii_case("base64"));
+    if !media.starts_with("image/") {
+        return Some(Err(format!("not an image: {}", if media.is_empty() { "text/plain" } else { &media })));
+    }
+    let decoded: Vec<u8> = percent_encoding::percent_decode_str(data).collect();
+    let bytes = if base64 {
+        let compact: Vec<u8> = decoded.into_iter().filter(|b| !b.is_ascii_whitespace()).collect();
+        match LENIENT.decode(&compact) {
+            Ok(bytes) => bytes,
+            Err(e) => return Some(Err(format!("invalid base64: {e}"))),
+        }
+    } else {
+        decoded
+    };
+    if bytes.is_empty() {
+        return Some(Err("no data".into()));
+    }
+    Some(Ok(DataImage { bytes, svg: media == "image/svg+xml" }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +469,30 @@ mod tests {
             rename("![](Trip.assets/map.png)\n", &assets, "Old.assets"),
             ("![](Old.assets/map.png)\n".into(), 1)
         );
+    }
+    #[test]
+    fn data_urls_hold_images() {
+        let png = data_image("data:image/png;base64,iVBORw0KGgo=").unwrap().unwrap();
+        assert_eq!(png, DataImage { bytes: b"\x89PNG\r\n\x1a\n".to_vec(), svg: false });
+        // Case, whitespace, missing padding and `<...>` are allowed.
+        let same = data_image("<DATA:Image/PNG;BASE64,iVBO Rw0K\nGgo>").unwrap().unwrap();
+        assert_eq!(same, png);
+        // SVG, percent-encoded or base64.
+        let svg = data_image("data:image/svg+xml,%3Csvg%3E%3C/svg%3E").unwrap().unwrap();
+        assert_eq!(svg, DataImage { bytes: b"<svg></svg>".to_vec(), svg: true });
+        let svg64 = data_image("data:image/svg+xml;charset=utf-8;base64,PHN2Zz48L3N2Zz4=").unwrap().unwrap();
+        assert_eq!(svg64, svg);
+        // Not images, or broken.
+        assert!(data_image("data:text/plain,hello").unwrap().is_err());
+        assert!(data_image("data:,hello").unwrap().is_err());
+        assert!(data_image("data:image/png;base64,***").unwrap().is_err());
+        assert!(data_image("data:image/png;base64,").unwrap().is_err());
+        assert!(data_image("data:image/png").unwrap().is_err());
+        // Not data URLs.
+        assert_eq!(data_image("a.png"), None);
+        assert_eq!(data_image("https://example.com/data:x"), None);
+        assert!(is_data_url(" data:image/gif;base64,R0lG"));
+        assert!(!is_data_url("data"));
+        assert_eq!(local_path(Path::new("/d/p.md"), "data:image/png;base64,iVBO", None), None);
     }
 }

@@ -12,7 +12,7 @@ use super::theme::{
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::highlight::{self};
 use crate::app::editor::render::{RenderKey, Rendered};
-use crate::app::editor::{Editor, EditorMsg, RightClick};
+use crate::app::editor::{DataHandle, Editor, EditorMsg, RightClick};
 use crate::app::press_point::press_in;
 use crate::app::view::APP_FONT;
 use crate::markdown::content::{self, Inline, Node, TableNode};
@@ -212,29 +212,40 @@ pub(super) fn image_view<'a>(inline: &Inline, ctx: &Ctx<'a>, width: f32, block: 
     let Inline::Image { src, alt, width: w, source, .. } = inline else { return space().into() };
     let editor = ctx.editor;
     let at = source.start;
-    let path = images::image_path(editor.page.path(), editor.page.text(), src);
     let max = w.map_or(width, |w| (w * ctx.zoom).min(width));
-    let shown: Element<EditorMsg> = match path {
-        Some(path) if editor.is_image_file(&path) => {
-            let is_svg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"));
-            if is_svg {
-                svg(svg::Handle::from_path(&path)).width(Length::Shrink).height(Length::Shrink).into()
-            } else {
-                let img = image(image::Handle::from_path(&path));
-                match w {
-                    Some(_) => img.width(max).into(),
-                    None => container(img).max_width(max).into(),
+    let svg_view =
+        |handle: svg::Handle| -> Element<EditorMsg> { svg(handle).width(Length::Shrink).height(Length::Shrink).into() };
+    let image_view = |handle: image::Handle| -> Element<EditorMsg> {
+        let img = image(handle);
+        match w {
+            Some(_) => img.width(max).into(),
+            None => container(img).max_width(max).into(),
+        }
+    };
+    let broken = |why: String| -> Element<EditorMsg> {
+        text(format!("🖼 {alt} ({why})")).size(ctx.size(0.9)).color(p.error).into()
+    };
+    let shown: Element<EditorMsg> = match editor.data_image(src) {
+        Some(DataHandle::Svg(handle)) => svg_view(handle),
+        Some(DataHandle::Raster(handle)) => image_view(handle),
+        Some(DataHandle::Invalid(e)) => broken(format!("invalid data URL: {e}")),
+        None => match images::image_path(editor.page.path(), editor.page.text(), src) {
+            Some(path) if editor.is_image_file(&path) => {
+                if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
+                    svg_view(svg::Handle::from_path(&path))
+                } else {
+                    image_view(image::Handle::from_path(&path))
                 }
             }
-        }
-        Some(_) => text(format!("🖼 {} (missing: {src})", alt)).size(ctx.size(0.9)).color(p.error).into(),
-        None => rich_text(vec![
-            Span::new(format!("🖼 {} ", if alt.is_empty() { "image" } else { alt })).color(p.muted),
-            Span::new(src.clone()).color(p.link).underline(true).link(SpanLink { dest: src.clone(), at }),
-        ])
-        .size(ctx.size(0.9))
-        .on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at))
-        .into(),
+            Some(_) => broken(format!("missing: {src}")),
+            None => rich_text(vec![
+                Span::new(format!("🖼 {} ", if alt.is_empty() { "image" } else { alt })).color(p.muted),
+                Span::new(src.clone()).color(p.link).underline(true).link(SpanLink { dest: src.clone(), at }),
+            ])
+            .size(ctx.size(0.9))
+            .on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at))
+            .into(),
+        },
     };
     let _ = block;
     mouse_area(shown)

@@ -16,7 +16,7 @@ use crate::app::editor::live_text::{LiveText, Run, RunKind, TextLook};
 use crate::app::editor::page::{Active, Live, Mode, TableState};
 use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::render::{RenderKey, Rendered};
-use crate::app::editor::{Editor, EditorMsg, EditorPrefs, RightClick, TableMsg};
+use crate::app::editor::{DataHandle, Editor, EditorMsg, EditorPrefs, RightClick, TableMsg};
 use crate::app::ime::ime_aligned;
 use crate::app::right_press::right_press_in;
 use crate::app::view::APP_FONT;
@@ -144,21 +144,25 @@ fn live_runs(
             Look::Object(o) | Look::Preview(o) => {
                 let kind = match o {
                     Object::Image { src, alt, width: w, link, .. } => {
-                        let path = images::image_path(page.path(), page.text(), src);
                         let max_width = w.map(|w| w * ctx.zoom);
-                        match path {
-                            Some(path) if ctx.editor.is_image_file(&path) => {
+                        let broken = |why: String| RunKind::Label {
+                            text: format!("🖼 {alt} ({why})"),
+                            look: plain(base.size * 0.9, base.font, p.error),
+                        };
+                        let path = || images::image_path(page.path(), page.text(), src);
+                        match ctx.editor.data_image(src).ok_or_else(path) {
+                            Ok(DataHandle::Svg(handle)) => RunKind::SvgFile { handle, max_width },
+                            Ok(DataHandle::Raster(handle)) => RunKind::Image { handle, max_width },
+                            Ok(DataHandle::Invalid(e)) => broken(format!("invalid data URL: {e}")),
+                            Err(Some(path)) if ctx.editor.is_image_file(&path) => {
                                 if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
                                     RunKind::SvgFile { handle: svg::Handle::from_path(&path), max_width }
                                 } else {
                                     RunKind::Image { handle: image::Handle::from_path(&path), max_width }
                                 }
                             }
-                            Some(_) => RunKind::Label {
-                                text: format!("🖼 {alt} (missing: {src})"),
-                                look: plain(base.size * 0.9, base.font, p.error),
-                            },
-                            None => RunKind::Label {
+                            Err(Some(_)) => broken(format!("missing: {src}")),
+                            Err(None) => RunKind::Label {
                                 text: format!("🖼 {} {src}", if alt.is_empty() { "image" } else { alt }),
                                 look: TextLook {
                                     underline: true,
