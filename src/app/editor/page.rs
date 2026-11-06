@@ -354,6 +354,13 @@ impl Page {
         self.revision += 1;
     }
 
+    /// `reparse`, with `doc` the parse of the text (no marker left out).
+    fn parsed(&mut self, doc: Document) {
+        debug_assert!(doc.text == self.text && self.tentative.is_none());
+        self.doc = doc;
+        self.revision += 1;
+    }
+
     /// Parses the text after an edit of the live region (the cursor at
     /// `cursor`, `typed` inserted where the block's text or a line of it
     /// starts at `segment`, the block `before` it was), leaving out a marker
@@ -905,11 +912,11 @@ impl Page {
     /// Writes the lists overlapping or touching `at` in their form.
     fn tidy_lists(&mut self, at: Range<usize>) -> Shift {
         let len = self.text.len();
-        let (text, shift) = lists::tidy(&self.text, at.start.min(len)..at.end.min(len));
+        let (doc, shift) = lists::tidy_parsed(&self.text, at.start.min(len)..at.end.min(len));
         if !shift.is_empty() {
             self.sel = Sel { anchor: shift.map(self.sel.anchor), head: shift.map(self.sel.head) };
-            self.text = text;
-            self.reparse();
+            self.text = doc.text.clone();
+            if self.tentative.is_none() { self.parsed(doc) } else { self.reparse() }
         }
         shift
     }
@@ -1111,6 +1118,8 @@ impl Page {
     fn apply_edit(&mut self, mut edited: Edited, tidy: bool) {
         let before = self.snapshot();
         let changed = edited.text != self.text;
+        // The parse of the text, when tidying it gave one.
+        let mut parsed = None;
         if !changed {
             // A block typed in that the rule leaves as it is: tidied by the `place` below.
             if std::mem::take(&mut self.untidy) {
@@ -1120,9 +1129,10 @@ impl Page {
         } else if !tidy {
             (self.untidy, self.deferred) = (false, None);
         } else if edited.pending.is_none() {
-            let (text, shift) = lists::tidy(&edited.text, lists::changed(&self.text, &edited.text));
+            let (doc, shift) = lists::tidy_parsed(&edited.text, lists::changed(&self.text, &edited.text));
             edited.sel = Sel { anchor: shift.map(edited.sel.anchor), head: shift.map(edited.sel.head) };
-            edited.text = text;
+            edited.text = doc.text.clone();
+            parsed = Some(doc);
             (self.untidy, self.deferred) = (false, None);
         } else {
             // Tidied when the new paragraph is left.
@@ -1132,7 +1142,10 @@ impl Page {
         self.pending = None;
         self.tentative = None;
         self.text = edited.text;
-        self.reparse();
+        match parsed {
+            Some(doc) => self.parsed(doc),
+            None => self.reparse(),
+        }
         match edited.pending {
             Some(p) => self.start_pending(p),
             None => {

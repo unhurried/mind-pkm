@@ -48,7 +48,7 @@ pub use keys::{Bind, EditorCommand};
 pub use live_text::LiveMsg;
 use page::{Page, content_sel, move_content};
 pub use render::{RenderCache, RenderKey};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -154,6 +154,8 @@ pub enum EditorMsg {
     /// The visible part of the page came near the end of the blocks built
     /// around it (or left them): where it is now.
     PageScrolled(Visible),
+    /// The page measures more of its blocks: nothing to do but show it again.
+    Measure,
     Dialog(DialogAnswer),
     /// The clipboard was read for pasting (as plain text when `true`).
     Pasted(ClipboardContent, bool),
@@ -259,10 +261,12 @@ pub enum Effect {
 }
 
 /// The status bar's counts, as last counted: the page's for a revision of
-/// it, the selection's for its source.
+/// it (and its blocks', so that an edit counts only the blocks it changed),
+/// the selection's for its source.
 #[derive(Default)]
 struct Counted {
     page: Option<(u64, count::Counts)>,
+    blocks: count::BlockCounts,
     selection: Option<(String, count::Counts)>,
 }
 
@@ -308,9 +312,9 @@ pub struct Editor {
     right_pressed_at: Point,
     /// Where the page's right-click menu is open.
     context_menu: Option<Point>,
-    /// Whether the image files the page shows exist, as looked up for a
-    /// revision of the page (`is_image_file`).
-    image_files: RefCell<(u64, HashMap<PathBuf, bool>)>,
+    /// Whether the image files the page shows exist, as looked up since the
+    /// window last got the focus (`is_image_file`).
+    image_files: RefCell<HashMap<PathBuf, bool>>,
     /// The images the page holds in `data:` URLs, decoded (`data_image`).
     data_images: RefCell<DataImages>,
     /// The status bar's counts, as last counted.
@@ -318,6 +322,19 @@ pub struct Editor {
     /// The heights of the page's blocks as last laid out, for those that
     /// get no widgets.
     heights: RefCell<near::Heights>,
+    /// Some blocks whose height is not known are left to be measured with
+    /// the next messages (as the page last showed), and the page asks for
+    /// one when it is drawn.
+    unmeasured: Cell<bool>,
+    /// How many of the page's blocks had a known height when it was last
+    /// shown (none yet: `usize::MAX`): no more since, no further batch is
+    /// asked for.
+    known: Cell<usize>,
+    /// Where the page's blocks were last laid out.
+    placement: RefCell<view::Placement>,
+    /// The block at the top of the visible part as last laid out or told,
+    /// and how far below its top the visible part starts.
+    top_entry: Cell<Option<(column::EntryKey, f32)>>,
     /// The visible part of the page, as last told: the blocks near it get
     /// widgets (none told yet: the top of the page).
     visible: Option<Visible>,
@@ -385,6 +402,10 @@ impl Editor {
             data_images: RefCell::default(),
             counted: RefCell::default(),
             heights: RefCell::default(),
+            unmeasured: Cell::new(false),
+            known: Cell::new(usize::MAX),
+            placement: RefCell::default(),
+            top_entry: Cell::new(None),
             visible: None,
             scroll_target: None,
             table_widths: view::WidthCache::default(),
@@ -393,16 +414,11 @@ impl Editor {
     }
 
     /// Whether `path`, an image the page shows, is an existing file: looked
-    /// up once for every revision of the page rather than in every view, and
-    /// again after the window got the focus or the assets pane was read
-    /// (files may have changed meanwhile).
+    /// up once rather than in every view or with every edit, and again after
+    /// the window got the focus, with the tick, after files were inserted or
+    /// the assets pane was read (files may have changed meanwhile).
     fn is_image_file(&self, path: &Path) -> bool {
-        let mut files = self.image_files.borrow_mut();
-        let revision = self.page.revision();
-        if files.0 != revision {
-            *files = (revision, HashMap::new());
-        }
-        *files.1.entry(path.to_path_buf()).or_insert_with(|| path.is_file())
+        *self.image_files.borrow_mut().entry(path.to_path_buf()).or_insert_with(|| path.is_file())
     }
 
     /// The image a `data:` URL `src` of the page holds (None when `src` is
@@ -437,7 +453,7 @@ impl Editor {
 
     /// Looks the images up again when they are next shown.
     pub(super) fn forget_image_files(&mut self) {
-        self.image_files.get_mut().1.clear();
+        self.image_files.get_mut().clear();
     }
 
     pub fn title(&self) -> String {
@@ -598,6 +614,7 @@ impl Editor {
             EditorMsg::Pasted(content, plain) => self.pasted(content, plain, prefs),
             EditorMsg::ImagesChosen(files) => self.insert_files(files.unwrap_or_default(), prefs),
             EditorMsg::Inserted(result) => {
+                self.forget_image_files();
                 match result {
                     Ok(pieces) if !pieces.is_empty() => {
                         let recent = self
@@ -693,8 +710,10 @@ impl Editor {
                 self.context_menu = None;
                 Task::none()
             }
+            EditorMsg::Measure => Task::none(),
             EditorMsg::PageScrolled(visible) => {
                 (self.visible, self.scroll_target) = (Some(visible), None);
+                self.note_top(visible);
                 Task::none()
             }
             EditorMsg::Dialog(answer) => self.dialog_answered(answer, effects),
@@ -1891,7 +1910,17 @@ impl Editor {
 
     /// The visible part of the page, as last told.
     fn visible(&self) -> Visible {
-        self.visible.unwrap_or(Visible { top: 0.0, height: self.window_size.height })
+        let (height, width) = (self.window_size.height, self.window_size.width);
+        self.visible.unwrap_or(Visible { top: 0.0, height, left: 0.0, width })
+    }
+
+    /// Whether some blocks whose height is not known are left to be
+    /// measured: a block's widgets measure it, and those away from the visible
+    /// part get them a few at a time, with every view (which asks for the
+    /// next message when it is drawn).
+    #[cfg(test)]
+    pub fn measuring(&self) -> bool {
+        self.unmeasured.get()
     }
 
     /// Math or diagrams were rendered: the blocks that may show them are
@@ -1904,12 +1933,14 @@ impl Editor {
 
     /// Words and characters for the status bar: the page's, and the
     /// selection's if there is one. Counted again only when the page or the
-    /// selection changed, not in every view.
+    /// selection changed, not in every view - and then only the blocks that
+    /// changed.
     pub fn counts(&self) -> (count::Counts, Option<count::Counts>) {
         let mut counted = self.counted.borrow_mut();
         let revision = self.page.revision();
         if counted.page.is_none_or(|(r, _)| r != revision) {
-            counted.page = Some((revision, count::count(&count::shown_text(self.page.doc()))));
+            let page = counted.blocks.count(self.page.doc());
+            counted.page = Some((revision, page));
         }
         let all = counted.page.map(|(_, c)| c).unwrap_or_default();
         let selected = self.page.selected_source();

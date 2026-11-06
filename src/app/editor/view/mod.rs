@@ -20,6 +20,7 @@ mod inline;
 mod table_widths;
 mod theme;
 
+pub use document::Placement;
 #[cfg(test)]
 pub use hit::HitRun;
 pub use hit::{HitInfo, caret_in, hit_test, piece_key};

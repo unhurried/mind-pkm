@@ -4,6 +4,7 @@
 use super::command::Command;
 use super::dialog::Dialog;
 use super::file::{AfterUnsaved, FileAction};
+use super::scroll_watch::Visible;
 use super::test_support::{key_event, remove_in_temp, send, type_node_text};
 use super::{App, MapMsg, settings};
 use crate::mindmap::MindMap;
@@ -541,7 +542,7 @@ fn a_map_opens_as_it_was_last_shown() {
     send(&mut app, MapMsg::Command(Command::ZoomIn));
     send(&mut app, MapMsg::Command(Command::ZoomIn));
     app.doc.as_mut().unwrap().select(vec![c, b]);
-    app.viewport.scroll = iced::Vector::new(30.0, 40.0);
+    app.viewport.set_scroll(iced::Vector::new(30.0, 40.0));
     let (path, view) = app.current_view().unwrap();
     assert_eq!(path, f.dir.path().join("map.mm"));
     assert_eq!(view.zoom, 1.25);
@@ -551,7 +552,7 @@ fn a_map_opens_as_it_was_last_shown() {
     let doc = reopened.doc.as_ref().unwrap();
     assert_eq!((doc.selection().to_vec(), doc.focus()), (vec![c, b], b));
     assert_eq!(reopened.viewport.zoom(), 1.25);
-    assert_eq!(reopened.viewport.scroll, iced::Vector::new(30.0, 40.0));
+    assert_eq!(reopened.viewport.scroll(), iced::Vector::new(30.0, 40.0));
 
     // A node gone since leaves the root selected; a folded one, its shown ancestor.
     let mut gone = f.map.clone();
@@ -623,31 +624,32 @@ fn moving_a_node_among_its_siblings_scrolls_only_to_keep_it_in_view() {
     let root = m.root();
     let kids: Vec<_> = (0..40).map(|i| m.add_child(root, &format!("node {i}"))).collect();
     let mut app = app_with(m);
-    app.viewport.size = Some(iced::Size::new(800.0, 400.0));
+    let seen = |scroll: iced::Vector| Visible { top: scroll.y, height: 400.0, left: scroll.x, width: 800.0 };
+    app.viewport.follow(seen(iced::Vector::ZERO));
     let rect = |app: &App, n| app.doc.as_ref().unwrap().layout().get(n).unwrap().rect;
 
     // Well inside the view: the map stays where it is and the node moves.
     let n = kids[20];
     app.doc.as_mut().unwrap().select(vec![n]);
     let start = iced::Vector::new(0.0, rect(&app, n).center_y() - 200.0);
-    app.viewport.scroll = start;
+    app.viewport.follow(seen(start));
     let before = rect(&app, n);
     press_ctrl(&mut app, Named::ArrowDown);
     assert_eq!(map(&app).index_in_parent(n), Some(21));
-    assert_eq!(app.viewport.scroll, start);
+    assert_eq!(app.viewport.scroll(), start);
     assert!(rect(&app, n).y > before.y);
     press_ctrl(&mut app, Named::ArrowUp);
     press_ctrl(&mut app, Named::ArrowUp);
     assert_eq!(map(&app).index_in_parent(n), Some(19));
-    assert_eq!(app.viewport.scroll, start);
+    assert_eq!(app.viewport.scroll(), start);
 
     // At the bottom edge: scrolled just enough to keep the node in view.
     let bottom = rect(&app, n).y + rect(&app, n).height;
-    app.viewport.scroll = iced::Vector::new(0.0, bottom - 400.0 + 24.0);
+    app.viewport.follow(seen(iced::Vector::new(0.0, bottom - 400.0 + 24.0)));
     press_ctrl(&mut app, Named::ArrowDown);
     let r = rect(&app, n);
     assert!(r.y + r.height > bottom);
-    assert_eq!(app.viewport.scroll, iced::Vector::new(0.0, r.y + r.height + 24.0 - 400.0));
+    assert_eq!(app.viewport.scroll(), iced::Vector::new(0.0, r.y + r.height + 24.0 - 400.0));
 }
 
 #[test]

@@ -65,10 +65,20 @@ pub fn keys_of(doc: &Document, dark: bool) -> HashSet<RenderKey> {
                 keys.insert(RenderKey::Mermaid(mermaid_source(doc, i)));
             }
             BlockKind::Code { .. } | BlockKind::FrontMatter | BlockKind::Other => {}
+            // Math only where the parse has some (no content built for the
+            // others: this runs for every revision of the page).
+            _ if !has_math(doc, i) => {}
             _ => collect_math(&content::nodes(doc, doc.block_events(i)), dark, &mut keys),
         }
     }
     keys
+}
+
+/// Whether the parse of the block `i` of `doc` has math in it.
+fn has_math(doc: &Document, i: usize) -> bool {
+    doc.block_events(i)
+        .iter()
+        .any(|(e, _)| matches!(e, pulldown_cmark::Event::InlineMath(_) | pulldown_cmark::Event::DisplayMath(_)))
 }
 
 /// The diagram source of a Mermaid block, as its render is keyed.
@@ -145,5 +155,29 @@ impl App {
             let k = key.clone();
             Task::perform(blocking(move || render_key(&k)), move |r| Message::Rendered(key.clone(), r))
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_math_and_diagrams_of_a_page() {
+        let text = "# A $h$ heading\n\nPlain text, `code $x$`.\n\n$$\ny^2\n$$\n\n- item with $i$\n\n> quote $q$\n\n\
+                    | a | b |\n| --- | --- |\n| $t$ | 1 |\n\n```mermaid\ngraph TD; A-->B\n```\n\n```\n$not$\n```\n";
+        let keys = keys_of(&Document::parse(text), false);
+        let math = |tex: &str, display| RenderKey::Math { tex: tex.into(), display, dark: false };
+        let expected: HashSet<RenderKey> = [
+            math("h", false),
+            math("y^2", true),
+            math("i", false),
+            math("q", false),
+            math("t", false),
+            RenderKey::Mermaid("graph TD; A-->B\n".into()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(keys, expected);
     }
 }

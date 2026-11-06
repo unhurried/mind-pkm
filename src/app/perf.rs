@@ -13,8 +13,9 @@
 //! Also here: tests of what makes the windows rebuild (pointer moves must not).
 
 use super::command::Command;
-use super::editor::{Bind, EditorMsg};
+use super::editor::{Bind, EditorCommand, EditorMsg};
 use super::profile::{self, Phase};
+use super::scroll_watch::Visible;
 use super::test_support::{headless_renderer, key_event, remove_in_temp};
 use super::viewport::NEAR_MARGIN;
 use super::{App, MAP_SCROLL_ID, MapMsg, Message, WindowEvent};
@@ -178,7 +179,22 @@ impl Bench {
         let renderer = headless_renderer();
         let mut bench = Bench { app, renderer, caches: BTreeMap::new(), editor, nodes, _fixture: f };
         bench.rebuild();
+        // As after a while: every block of the page measured.
+        bench.measure();
         bench
+    }
+
+    /// What the running application does while the page has blocks left to
+    /// measure: the page asks for a message when it is drawn, which builds
+    /// the windows again. Returns how many it took.
+    fn measure(&mut self) -> usize {
+        let mut messages = 0;
+        while self.app.editors[&self.editor].measuring() {
+            assert!(messages < 10_000, "the page never got measured");
+            self.unmeasured(Message::Editor(self.editor, EditorMsg::Measure));
+            messages += 1;
+        }
+        messages
     }
 
     fn windows(&self) -> Vec<window::Id> {
@@ -196,7 +212,7 @@ impl Bench {
             let theme = self.app.theme(id);
             let mut ui = UserInterface::build(self.app.view(id), WINDOW, cache, &mut self.renderer);
             if id == self.app.main_window {
-                let Vector { x, y } = self.app.viewport.scroll;
+                let Vector { x, y } = self.app.viewport.scroll();
                 let to = AbsoluteOffset { x, y }.into();
                 ui.operate(&self.renderer, &mut operation::scrollable::scroll_to(widget::Id::new(MAP_SCROLL_ID), to));
             }
@@ -372,6 +388,20 @@ fn report(fanout: usize, sections: usize) {
         let delta = mouse::ScrollDelta::Lines { x: 0.0, y: -2.0 };
         b.event(t, editor, Event::Mouse(mouse::Event::WheelScrolled { delta }), at)
     });
+    // Every block measured again: those near the visible part at once, the
+    // others with the messages after (not timed).
+    run("editor: zoom in/out", &mut b, &mut |b, t, i| {
+        let cmd = if i % 2 == 0 { EditorCommand::ZoomIn } else { EditorCommand::ZoomOut };
+        b.step(t, Message::Editor(editor, EditorMsg::Command(cmd)));
+        b.measure();
+    });
+    run("editor: resize (narrower page)", &mut b, &mut |b, t, i| {
+        let size = Size::new(700.0 + (i % 2) as f32 * 40.0, WINDOW.height);
+        b.step(t, Message::Window(editor, WindowEvent::Resized(size)));
+        b.measure();
+    });
+    b.unmeasured(Message::Window(editor, WindowEvent::Resized(WINDOW)));
+    b.measure();
     run("map: wheel scroll", &mut b, &mut |b, t, i| {
         let at = Point::new(640.0, 400.0);
         let main = b.app.main_window;
@@ -454,7 +484,9 @@ fn the_map_builds_widgets_for_the_nodes_near_what_it_shows() {
         let shown = b.shown(main);
         let (bounds, scroll) = shown.map.expect("the map");
         let visible = Rectangle::new(Point::ORIGIN + scroll, bounds.size());
-        let near = visible.expand(NEAR_MARGIN + 1.0);
+        // Built: the nodes within the margin of where the map was last told
+        // to be, which the visible part is within half a margin of.
+        let near = visible.expand(1.5 * NEAR_MARGIN + 1.0);
         let doc = b.app.doc.as_ref().unwrap();
         let (mut built, mut left_out) = (0, 0);
         for node in &doc.layout().boxes {
@@ -487,6 +519,72 @@ fn the_map_builds_widgets_for_the_nodes_near_what_it_shows() {
         b.deliver(main, Event::Mouse(mouse::Event::WheelScrolled { delta }), at);
     }
     assert!(check(&mut b).y < start.y - 1000.0);
+}
+
+/// Scrolling the map with the wheel tells the application where it is only
+/// now and then - when the visible part comes near the edge of the nodes
+/// built (each message builds every window again) - and the application
+/// follows every step all the same (zooming and panning start from there).
+#[test]
+fn scrolling_the_map_tells_where_it_is_only_now_and_then() {
+    let mut b = Bench::new(10, 1);
+    let main = b.app.main_window;
+    let at = Point::new(640.0, 400.0);
+    let _ = b.messages(main, moved(at), at, false);
+    let start = b.app.viewport.scroll();
+    let mut sent = 0;
+    for step in 0..40 {
+        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 };
+        let (messages, _) = b.messages(main, Event::Mouse(mouse::Event::WheelScrolled { delta }), at, false);
+        assert!(messages.iter().all(|m| matches!(m, Message::Map(MapMsg::MapScrolled(_)))), "{messages:?}");
+        sent += messages.len();
+        if !messages.is_empty() {
+            for m in messages {
+                let _ = b.app.update(m);
+            }
+            b.rebuild();
+        }
+        // Followed at every step.
+        if step % 8 == 7 {
+            let (_, scroll) = b.shown(main).map.expect("the map");
+            assert_eq!(b.app.viewport.scroll(), scroll);
+        }
+    }
+    assert!(b.app.viewport.scroll().y < start.y - 1000.0, "{:?} from {start:?}", b.app.viewport.scroll());
+    assert!((3..=20).contains(&sent), "{sent} messages in 40 steps");
+}
+
+/// After the map was scrolled by the wheel (followed without a message),
+/// Ctrl+wheel zooms keeping the point under the pointer where it is.
+#[test]
+fn ctrl_wheel_zooms_at_the_pointer_after_scrolling() {
+    let mut b = Bench::new(10, 1);
+    let main = b.app.main_window;
+    let at = Point::new(700.0, 400.0);
+    let _ = b.messages(main, moved(at), at, false);
+    for _ in 0..7 {
+        let delta = mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 };
+        b.deliver(main, Event::Mouse(mouse::Event::WheelScrolled { delta }), at);
+    }
+    // The map point under the pointer, from where the map is shown.
+    let point = |b: &mut Bench| {
+        let (bounds, scroll) = b.shown(main).map.expect("the map");
+        (Vector::new(at.x - bounds.x, at.y - bounds.y) + scroll, b.app.viewport.zoom())
+    };
+    let (before, zoom) = point(&mut b);
+    let ctrl = Event::Keyboard(keyboard::Event::ModifiersChanged(Modifiers::CTRL));
+    let _ = b.messages(main, ctrl, at, false);
+    let wheel = Event::Mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 } });
+    b.deliver(main, wheel, at);
+    let (after, zoomed) = point(&mut b);
+    assert!(zoomed > zoom, "{zoom} to {zoomed}");
+    // The same point of the map, at the zoom (beside the margin around it) -
+    // but for the node sizes, rounded up to whole pixels at every zoom, which
+    // add up along the nodes to the left (scrolled from where it was before
+    // the wheel, it would be hundreds of pixels away).
+    let margin = Vector::new(40.0, 40.0);
+    let expected = margin + (before - margin) * (zoomed / zoom);
+    assert!((after.x - expected.x).abs() < 8.0 && (after.y - expected.y).abs() < 8.0, "{after:?}, not {expected:?}");
 }
 
 fn n_center(r: Rectangle) -> Vector {
@@ -576,19 +674,30 @@ fn scroll_page(b: &mut Bench, steps: i32) -> usize {
     sent
 }
 
+/// The height of the page's content with every block built (as when the
+/// visible part were taller than the page), leaving the page as it was.
+fn height_built_whole(b: &mut Bench) -> f32 {
+    let editor = b.editor;
+    let (visible, _, _) = page_view(b);
+    let told = |height: f32| {
+        let visible = Visible { top: visible.y, height, left: 0.0, width: visible.width };
+        Message::Editor(editor, EditorMsg::PageScrolled(visible))
+    };
+    b.unmeasured(told(1.0e7));
+    let (_, height, shown) = page_view(b);
+    assert!(!shown.containers.iter().any(|(id, _)| *id == b.app.editors[&editor].id("far")));
+    b.unmeasured(told(visible.height));
+    height
+}
+
 /// A page builds widgets for the blocks near the part it shows, wherever it
 /// is scrolled to, and is as tall as with every block built.
 #[test]
 fn the_page_builds_widgets_for_the_blocks_near_what_it_shows() {
     let mut b = Bench::new(3, 40);
     let (first, last) = (block_of(&b, "## Section 0"), block_of(&b, "## Section 39"));
-    // At another zoom (as when just opened), every block is built once, to
-    // know their heights.
-    let zoom = EditorMsg::Command(super::editor::EditorCommand::ZoomIn);
-    let _ = b.app.update(Message::Editor(b.editor, zoom));
-    let (_, height, shown) = page_view(&mut b);
-    assert!(built(&b, &shown, first) && built(&b, &shown, last));
-    // From then on, those near the visible part only.
+    let height = height_built_whole(&mut b);
+    // Those near the visible part only.
     let (_, near_top, shown) = page_view(&mut b);
     assert!(built(&b, &shown, first) && !built(&b, &shown, last));
     assert!((near_top - height).abs() < 0.5, "{near_top} tall, built whole {height}");
@@ -608,6 +717,79 @@ fn the_page_builds_widgets_for_the_blocks_near_what_it_shows() {
     assert_eq!(shown.scrollables[&doc].2.y, 0.0, "at the top");
     assert!(built(&b, &shown, first));
     assert_all_in_view_built(&mut b);
+}
+
+/// At another zoom (or width, or when just opened) the blocks' heights are
+/// not known: those near the visible part are built at once, the others
+/// take a guess and are measured a few at a time, with the messages after -
+/// and the page ends up as tall as with every block built.
+#[test]
+fn blocks_of_unknown_height_are_measured_a_few_at_a_time() {
+    let mut b = Bench::new(3, 40);
+    let editor = b.editor;
+    let (first, last) = (block_of(&b, "## Section 0"), block_of(&b, "## Section 39"));
+    b.unmeasured(Message::Editor(editor, EditorMsg::Command(EditorCommand::ZoomIn)));
+    let (_, _, shown) = page_view(&mut b);
+    assert!(built(&b, &shown, first) && !built(&b, &shown, last));
+    assert!(b.app.editors[&editor].measuring());
+    assert_all_in_view_built(&mut b);
+    let messages = b.measure();
+    assert!((5..200).contains(&messages), "{messages} messages");
+    let (_, measured, shown) = page_view(&mut b);
+    assert!(built(&b, &shown, first) && !built(&b, &shown, last));
+    let height = height_built_whole(&mut b);
+    assert!((measured - height).abs() < 0.5, "{measured} tall, built whole {height}");
+}
+
+/// Scrolls the page to `y` (from the top of its content) as an operation
+/// does, and lets the page tell where it is.
+fn scroll_page_to(b: &mut Bench, y: f32) {
+    let editor = b.editor;
+    let doc = b.app.editors[&editor].id("doc");
+    let cache = b.caches.remove(&editor).unwrap_or_default();
+    let mut ui = UserInterface::build(b.app.view(editor), WINDOW, cache, &mut b.renderer);
+    ui.operate(&b.renderer, &mut operation::scrollable::scroll_to(doc, AbsoluteOffset { x: 0.0, y }.into()));
+    b.caches.insert(editor, ui.into_cache());
+    let redraw = Event::Window(window::Event::RedrawRequested(iced::time::Instant::now()));
+    b.deliver(editor, redraw, Point::new(400.0, 400.0));
+}
+
+/// Where the top of the page's block `block` is below the top of the
+/// visible part (None: it has no widgets).
+fn below_top(b: &mut Bench, block: usize) -> Option<f32> {
+    let (visible, _, shown) = page_view(b);
+    let id = b.app.editors[&b.editor].id(&format!("block-{block}"));
+    shown.containers.iter().find(|(i, _)| *i == id).map(|(_, bounds)| bounds.y - visible.y)
+}
+
+/// As blocks above the visible part are measured (and grow or shrink from
+/// their guesses), and when the page is zoomed, the block at the top of the
+/// visible part stays where it is.
+#[test]
+fn the_block_at_the_top_stays_in_place() {
+    let mut b = Bench::new(3, 40);
+    let editor = b.editor;
+    // Scrolled to put a heading far down the page at the top.
+    let block = block_of(&b, "## Section 30");
+    let heading = b.app.editors[&editor].page.doc().headings.iter().position(|h| h.block == block).unwrap();
+    b.unmeasured(Message::Editor(editor, EditorMsg::HeadingClicked(heading)));
+    let at = below_top(&mut b, block).expect("the heading scrolled to has widgets");
+    let (visible, _, _) = page_view(&mut b);
+    let doc = b.app.editors[&editor].id("doc");
+    let top = visible.y - b.shown(editor).scrollables[&doc].0.y;
+    scroll_page_to(&mut b, top + at);
+    let at = below_top(&mut b, block).expect("the heading in view");
+    assert!(at.abs() < 1.0, "the heading at the top: {at}");
+    // Zoomed: the heights above are guesses, then measured.
+    for cmd in [EditorCommand::ZoomIn, EditorCommand::ZoomOut] {
+        b.unmeasured(Message::Editor(editor, EditorMsg::Command(cmd)));
+        let at = below_top(&mut b, block).expect("the heading in view");
+        assert!(at.abs() < 1.0, "zoomed: the heading at {at}");
+        assert!(b.app.editors[&editor].measuring());
+        b.measure();
+        let at = below_top(&mut b, block).expect("the heading in view");
+        assert!(at.abs() < 1.0, "measured: the heading at {at}");
+    }
 }
 
 /// Scrolling a page tells the application where it is only when the visible

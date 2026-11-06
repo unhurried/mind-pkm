@@ -1,26 +1,38 @@
 //! Where a scrollable is scrolled to, told only when it matters. Wrapped
 //! around a scrollable, it tells the visible part of its content when that
-//! leaves a band - once for each band, after any event, a redraw included,
-//! so that a scroll by the wheel, the scroll bar or an operation (keeping the
-//! cursor in view) is told before the window is drawn. A message for every
-//! scroll would build every window again for every step of the wheel.
+//! leaves a band (above and below it, and left and right of it) - once for
+//! each band, after any event, a redraw included, so that a scroll by the
+//! wheel, the scroll bar or an operation (keeping the cursor in view) is told
+//! before the window is drawn. A message for every scroll would build every
+//! window again for every step of the wheel. Where it is after every event
+//! can be followed too, without a message (`tracking`).
 //!
 //! The page editor builds the blocks near the visible part of the page, and
-//! is told when the visible part comes near the end of what it built.
+//! is told when the visible part comes near the end of what it built; so
+//! does the map with its nodes, which follows the scroll position as well
+//! (zooming and panning start from it).
+//!
+//! It can also keep what is at the top of the visible part in place when the
+//! content is laid out anew (`anchor`): asked how far, it scrolls the content
+//! right after laying it out, before it is drawn - the page editor's blocks
+//! above the visible part change height as they are measured.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Operation, Tree, operation, tree};
 use iced::advanced::{Clipboard, Shell, Widget};
+use iced::widget::scrollable::AbsoluteOffset;
 use iced::{Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector, mouse};
 
-/// The visible part of a scrollable's content: how far it is scrolled and
-/// how tall the scrollable is.
+/// The visible part of a scrollable's content: how far it is scrolled down
+/// and right, and how tall and wide the scrollable is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Visible {
     pub top: f32,
     pub height: f32,
+    pub left: f32,
+    pub width: f32,
 }
 
 pub struct ScrollWatch<'a, M> {
@@ -29,11 +41,15 @@ pub struct ScrollWatch<'a, M> {
     id: widget::Id,
     /// Where the visible part may be (top, bottom) without being told.
     band: (f32, f32),
+    /// Where it may be (left, right).
+    band_x: (f32, f32),
     on_leave: Box<dyn Fn(Visible) -> M + 'a>,
+    tracking: Option<Box<dyn Fn(Visible) + 'a>>,
+    anchor: Option<Box<dyn Fn(Visible) -> f32 + 'a>>,
 }
 
-/// The band the visible part was last told for leaving.
-struct Told(Option<(f32, f32)>);
+/// The bands the visible part was last told for leaving.
+struct Told(Option<((f32, f32), (f32, f32))>);
 
 /// Watches the scrollable `id` in `content`: `on_leave` is told the visible
 /// part when it is not within `band` (top, bottom).
@@ -43,7 +59,38 @@ pub fn scroll_watch<'a, M>(
     band: (f32, f32),
     on_leave: impl Fn(Visible) -> M + 'a,
 ) -> ScrollWatch<'a, M> {
-    ScrollWatch { content: content.into(), id, band, on_leave: Box::new(on_leave) }
+    ScrollWatch {
+        content: content.into(),
+        id,
+        band,
+        band_x: (f32::NEG_INFINITY, f32::INFINITY),
+        on_leave: Box::new(on_leave),
+        tracking: None,
+        anchor: None,
+    }
+}
+
+impl<'a, M> ScrollWatch<'a, M> {
+    /// Where the visible part may be (left, right) without being told; any
+    /// where when not given.
+    pub fn band_x(mut self, band: (f32, f32)) -> Self {
+        self.band_x = band;
+        self
+    }
+
+    /// Tells `f` the visible part after every event, without a message.
+    pub fn tracking(mut self, f: impl Fn(Visible) + 'a) -> Self {
+        self.tracking = Some(Box::new(f));
+        self
+    }
+
+    /// Keeps what is at the top of the visible part in place: whenever the
+    /// content was laid out, `f` is told the visible part (as scrolled
+    /// before) and says how far to scroll the content (down when positive).
+    pub fn anchor(mut self, f: impl Fn(Visible) -> f32 + 'a) -> Self {
+        self.anchor = Some(Box::new(f));
+        self
+    }
 }
 
 /// Finds where the scrollable `id` is scrolled, without looking into it.
@@ -68,7 +115,38 @@ impl Operation for Find {
         _state: &mut dyn operation::Scrollable,
     ) {
         if id == Some(&self.id) {
-            self.found = Some(Visible { top: translation.y, height: bounds.height });
+            let (top, left) = (translation.y, translation.x);
+            self.found = Some(Visible { top, height: bounds.height, left, width: bounds.width });
+        }
+    }
+}
+
+/// Scrolls the scrollable `id` by `by` (down when positive), without looking
+/// into it.
+struct ScrollBy {
+    id: widget::Id,
+    by: f32,
+    done: bool,
+}
+
+impl Operation for ScrollBy {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+        if !self.done {
+            operate(self);
+        }
+    }
+
+    fn scrollable(
+        &mut self,
+        id: Option<&widget::Id>,
+        bounds: Rectangle,
+        content_bounds: Rectangle,
+        _translation: Vector,
+        state: &mut dyn operation::Scrollable,
+    ) {
+        if id == Some(&self.id) {
+            state.scroll_by(AbsoluteOffset { x: 0.0, y: self.by }, bounds, content_bounds);
+            self.done = true;
         }
     }
 }
@@ -99,7 +177,21 @@ impl<M> Widget<M, Theme, Renderer> for ScrollWatch<'_, M> {
     }
 
     fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
-        self.content.as_widget_mut().layout(&mut tree.children[0], renderer, limits)
+        let content = &mut tree.children[0];
+        let node = self.content.as_widget_mut().layout(content, renderer, limits);
+        if let Some(anchor) = &self.anchor {
+            let layout = Layout::new(&node);
+            let mut find = Find { id: self.id.clone(), found: None };
+            self.content.as_widget_mut().operate(content, layout, renderer, &mut find);
+            if let Some(visible) = find.found {
+                let by = anchor(visible);
+                if by != 0.0 {
+                    let mut scroll = ScrollBy { id: self.id.clone(), by, done: false };
+                    self.content.as_widget_mut().operate(content, layout, renderer, &mut scroll);
+                }
+            }
+        }
+        node
     }
 
     fn draw(
@@ -135,10 +227,15 @@ impl<M> Widget<M, Theme, Renderer> for ScrollWatch<'_, M> {
         let mut find = Find { id: self.id.clone(), found: None };
         self.content.as_widget_mut().operate(content, layout, renderer, &mut find);
         let Some(visible) = find.found else { return };
+        if let Some(tracking) = &self.tracking {
+            tracking(visible);
+        }
         let Told(told) = tree.state.downcast_mut::<Told>();
-        let within = self.band.0 <= visible.top && visible.top + visible.height <= self.band.1;
-        if !within && *told != Some(self.band) {
-            *told = Some(self.band);
+        let within = |(start, end): (f32, f32), at: f32, len: f32| start <= at && at + len <= end;
+        let within = within(self.band, visible.top, visible.height) && within(self.band_x, visible.left, visible.width);
+        let bands = (self.band, self.band_x);
+        if !within && *told != Some(bands) {
+            *told = Some(bands);
             shell.publish((self.on_leave)(visible));
         }
     }
@@ -201,6 +298,11 @@ mod tests {
         messages
     }
 
+    /// The page scrolled down to `top`.
+    fn visible(top: f32) -> Visible {
+        Visible { top, height: 300.0, left: 0.0, width: 400.0 }
+    }
+
     fn wheel(lines: f32) -> Event {
         Event::Mouse(mouse::Event::WheelScrolled { delta: mouse::ScrollDelta::Pixels { x: 0.0, y: -lines * 100.0 } })
     }
@@ -212,13 +314,13 @@ mod tests {
         // Down to 500..800: within.
         assert_eq!(told(&mut cache, band, &[wheel(5.0)]), []);
         // To 800..1100: out, told once.
-        assert_eq!(told(&mut cache, band, &[wheel(3.0)]), [Visible { top: 800.0, height: 300.0 }]);
+        assert_eq!(told(&mut cache, band, &[wheel(3.0)]), [visible(800.0)]);
         assert_eq!(told(&mut cache, band, &[wheel(1.0)]), []);
         // The band moved with it (900..1200 is in view): told again only
         // when it leaves that one.
         let band = (600.0, 1400.0);
         assert_eq!(told(&mut cache, band, &[wheel(1.0), wheel(-4.0)]), []);
-        assert_eq!(told(&mut cache, band, &[wheel(-1.0)]), [Visible { top: 500.0, height: 300.0 }]);
+        assert_eq!(told(&mut cache, band, &[wheel(-1.0)]), [visible(500.0)]);
     }
 
     #[test]
@@ -232,6 +334,44 @@ mod tests {
         ui.operate(&renderer, &mut operation::scrollable::scroll_to(widget::Id::new("page"), to));
         cache = Some(ui.into_cache());
         let redraw = Event::Window(window::Event::RedrawRequested(iced::time::Instant::now()));
-        assert_eq!(told(&mut cache, band, &[redraw]), [Visible { top: 2000.0, height: 300.0 }]);
+        assert_eq!(told(&mut cache, band, &[redraw]), [visible(2000.0)]);
+    }
+
+    /// A scrollable 300 tall over a first child `first` tall and 29 of 100,
+    /// kept in place by `anchor`.
+    fn anchored<'a>(first: f32, anchor: impl Fn(Visible) -> f32 + 'a) -> Element<'a, Visible> {
+        let children = std::iter::once(space().height(first).into()).chain((0..29).map(|_| space().height(100).into()));
+        let s = scrollable(column(children)).id(widget::Id::new("page")).width(400).height(300);
+        scroll_watch(s, widget::Id::new("page"), (f32::NEG_INFINITY, f32::INFINITY), |v| v).anchor(anchor).into()
+    }
+
+    /// Where the scrollable of `ui` is scrolled to.
+    fn scrolled(ui: &mut UserInterface<'_, Visible, Theme, Renderer>, renderer: &Renderer) -> f32 {
+        let mut find = Find { id: widget::Id::new("page"), found: None };
+        ui.operate(renderer, &mut find);
+        find.found.expect("the scrollable").top
+    }
+
+    #[test]
+    fn the_content_is_scrolled_as_the_anchor_says_when_laid_out_anew() {
+        let mut renderer = headless_renderer();
+        let size = Size::new(400.0, 300.0);
+        let mut ui = UserInterface::build(anchored(100.0, |_| 0.0), size, Cache::default(), &mut renderer);
+        let to = AbsoluteOffset { x: 0.0, y: 500.0 }.into();
+        ui.operate(&renderer, &mut operation::scrollable::scroll_to(widget::Id::new("page"), to));
+        assert_eq!(scrolled(&mut ui, &renderer), 500.0);
+        // The first child grew by 200: scrolled with it as it is laid out,
+        // the anchor told where the page was.
+        let told = std::cell::Cell::new(None);
+        let anchor = |v: Visible| {
+            told.set(Some(v));
+            200.0
+        };
+        let mut ui = UserInterface::build(anchored(300.0, anchor), size, ui.into_cache(), &mut renderer);
+        assert_eq!(told.get(), Some(visible(500.0)));
+        assert_eq!(scrolled(&mut ui, &renderer), 700.0);
+        // Nothing moved: it stays.
+        let mut ui = UserInterface::build(anchored(300.0, |_| 0.0), size, ui.into_cache(), &mut renderer);
+        assert_eq!(scrolled(&mut ui, &renderer), 700.0);
     }
 }

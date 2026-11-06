@@ -174,6 +174,13 @@ fn tidy_list(doc: &Document, list: &List) -> Option<(String, Vec<Splice>, Docume
 /// `text` with every list that overlaps or touches `changed` (and the lists
 /// around it) written in its form, and where its offsets go.
 pub fn tidy(text: &str, changed: Range<usize>) -> (String, Shift) {
+    let (doc, shift) = tidy_parsed(text, changed);
+    (doc.text, shift)
+}
+
+/// `tidy`, with the parse of the text it gives (so that it need not be
+/// parsed again).
+pub fn tidy_parsed(text: &str, changed: Range<usize>) -> (Document, Shift) {
     let mut doc = Document::parse(text);
     let targets: Vec<(usize, usize)> = doc
         .lists
@@ -190,7 +197,7 @@ pub fn tidy(text: &str, changed: Range<usize>) -> (String, Shift) {
             doc = parsed;
         }
     }
-    (doc.text, shift)
+    (doc, shift)
 }
 
 #[cfg(test)]
@@ -272,6 +279,16 @@ mod tests {
         assert_eq!(shift.map(7), 6);
         assert_eq!(shift.map(text.len()), new.len());
         assert!(tidy("x\n", 0..0).1.is_empty());
+    }
+
+    #[test]
+    fn the_parse_of_the_tidied_text_comes_with_it() {
+        for (text, changed) in [("* a\n\n* b\n\npara\n", 0..0), ("x\n", 0..0), ("> * a\n>\n> * b\n", 3..3)] {
+            let (doc, _) = tidy_parsed(text, changed);
+            let again = Document::parse(&doc.text);
+            assert_eq!(doc.events, again.events, "{text:?}");
+            assert_eq!(doc.blocks.len(), again.blocks.len());
+        }
     }
 
     #[test]
