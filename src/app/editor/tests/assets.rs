@@ -1,6 +1,7 @@
 //! The assets pane.
 
 use super::*;
+use crate::app::editor::DataHandle;
 
 fn assets(app: &mut App, id: window::Id, msg: AssetsMsg) {
     editor(app, id, EditorMsg::Assets(msg));
@@ -390,4 +391,33 @@ fn an_image_is_looked_up_again_after_a_change_the_focus_or_a_read_of_the_pane() 
     std::fs::write(&image, "png").unwrap();
     finish_read(&mut app, id);
     assert!(app.editors[&id].is_image_file(&image));
+}
+
+#[test]
+fn a_data_url_image_is_decoded_once_and_kept_while_the_page_has_it() {
+    const DOT: &str = "data:image/png;base64,iVBORw0KGgo=";
+    const SVG: &str = "data:image/svg+xml,%3Csvg%3E%3C/svg%3E";
+    let text = format!("![dot]({DOT})\n\n![s]({SVG})\n\n![bad](data:text/plain,hi)\n");
+    let (mut app, _f, id) = app_with_assets(&text, &[]);
+    let raster_id = |app: &App| match app.editors[&id].data_image(DOT) {
+        Some(DataHandle::Raster(h)) => h.id(),
+        other => panic!("{other:?}"),
+    };
+    let first = raster_id(&app);
+    // Every view gets the same handle, so the image is not decoded again.
+    assert_eq!(raster_id(&app), first);
+    assert!(matches!(app.editors[&id].data_image(SVG), Some(DataHandle::Svg(_))));
+    assert!(matches!(app.editors[&id].data_image("data:text/plain,hi"), Some(DataHandle::Invalid(_))));
+    assert!(app.editors[&id].data_image("Plan.assets/a.png").is_none());
+    // A change of the page keeps the images shown since the last change...
+    click_after(&mut app, id, "hi)");
+    typing(&mut app, id, "x");
+    assert_eq!(raster_id(&app), first);
+    // ...and drops those that were not.
+    typing(&mut app, id, "y");
+    assert!(matches!(app.editors[&id].data_image(SVG), Some(DataHandle::Svg(_))));
+    typing(&mut app, id, "z");
+    assert!(matches!(app.editors[&id].data_image(SVG), Some(DataHandle::Svg(_))));
+    assert_eq!(app.editors[&id].data_images.borrow().handles.len(), 1);
+    assert_ne!(raster_id(&app), first);
 }

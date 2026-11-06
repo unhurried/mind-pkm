@@ -2830,6 +2830,7 @@ name = "mind-pkm"
 version = "0.17.0"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "chrono",
  "dirs",
  "emojis",

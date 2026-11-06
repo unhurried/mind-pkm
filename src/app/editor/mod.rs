@@ -311,6 +311,8 @@ pub struct Editor {
     /// Whether the image files the page shows exist, as looked up for a
     /// revision of the page (`is_image_file`).
     image_files: RefCell<(u64, HashMap<PathBuf, bool>)>,
+    /// The images the page holds in `data:` URLs, decoded (`data_image`).
+    data_images: RefCell<DataImages>,
     /// The status bar's counts, as last counted.
     counted: RefCell<Counted>,
     /// The heights of the page's blocks as last laid out, for those that
@@ -327,6 +329,24 @@ pub struct Editor {
     /// How far the table that was last scrolled sideways is scrolled: where
     /// it starts in the source and its offset (kept when it is clicked).
     table_x: Option<(usize, f32)>,
+}
+
+/// An image a page holds in a `data:` URL, made into a handle once.
+#[derive(Debug, Clone)]
+pub(super) enum DataHandle {
+    Raster(iced::widget::image::Handle),
+    Svg(iced::widget::svg::Handle),
+    /// It holds no image, or cannot be decoded: why.
+    Invalid(String),
+}
+
+/// The handles of the `data:` URL images, by a hash of the URL, and those
+/// shown since the page's last change.
+#[derive(Default)]
+struct DataImages {
+    revision: u64,
+    used: std::collections::HashSet<u64>,
+    handles: HashMap<u64, DataHandle>,
 }
 
 impl Editor {
@@ -362,6 +382,7 @@ impl Editor {
             right_pressed_at: Point::ORIGIN,
             context_menu: None,
             image_files: RefCell::default(),
+            data_images: RefCell::default(),
             counted: RefCell::default(),
             heights: RefCell::default(),
             visible: None,
@@ -382,6 +403,36 @@ impl Editor {
             *files = (revision, HashMap::new());
         }
         *files.1.entry(path.to_path_buf()).or_insert_with(|| path.is_file())
+    }
+
+    /// The image a `data:` URL `src` of the page holds (None when `src` is
+    /// no `data:` URL). The handle is made once and kept, as iced decodes an
+    /// image again for every new handle: kept while the page has the image -
+    /// when the page changes, the handles not shown since the last change go.
+    fn data_image(&self, src: &str) -> Option<DataHandle> {
+        use std::hash::{Hash, Hasher};
+        if !images::is_data_url(src) {
+            return None;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        src.hash(&mut hasher);
+        let key = hasher.finish();
+        let mut cache = self.data_images.borrow_mut();
+        let revision = self.page.revision();
+        if cache.revision != revision {
+            let used = std::mem::take(&mut cache.used);
+            cache.handles.retain(|k, _| used.contains(k));
+            cache.revision = revision;
+        }
+        cache.used.insert(key);
+        let handle = cache.handles.entry(key).or_insert_with(|| {
+            match images::data_image(src).unwrap_or_else(|| Err(String::new())) {
+                Ok(data) if data.svg => DataHandle::Svg(iced::widget::svg::Handle::from_memory(data.bytes)),
+                Ok(data) => DataHandle::Raster(iced::widget::image::Handle::from_bytes(data.bytes)),
+                Err(e) => DataHandle::Invalid(e),
+            }
+        });
+        Some(handle.clone())
     }
 
     /// Looks the images up again when they are next shown.
