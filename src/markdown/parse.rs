@@ -15,6 +15,9 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use std::collections::HashMap;
 use std::ops::Range;
 
+/// A text's events, each with its range in the text.
+pub type Events = [(Event<'static>, Range<usize>)];
+
 /// The Markdown dialect of the editor: CommonMark with GitHub's tables,
 /// footnotes, strikethrough and task lists, front matter, math and
 /// Typora's sub/superscript.
@@ -299,7 +302,7 @@ impl Document {
         &self.text[self.blocks[block].range.clone()]
     }
 
-    pub fn block_events(&self, block: usize) -> &[(Event<'static>, Range<usize>)] {
+    pub fn block_events(&self, block: usize) -> &Events {
         &self.events[self.blocks[block].events.clone()]
     }
 
@@ -548,8 +551,9 @@ fn trim_end(text: &str, range: Range<usize>, kinds: &[ContainerKind]) -> Range<u
     range.start..end
 }
 
-/// The index of the event ending the element started at `start`.
-fn matching_end(events: &[(Event<'static>, Range<usize>)], start: usize) -> usize {
+/// The index of the event ending the element started at `start` (the last
+/// event when nothing ends it).
+pub fn matching_end(events: &Events, start: usize) -> usize {
     let mut depth = 0;
     for (i, (event, _)) in events.iter().enumerate().skip(start) {
         match event {
@@ -563,10 +567,10 @@ fn matching_end(events: &[(Event<'static>, Range<usize>)], start: usize) -> usiz
             _ => {}
         }
     }
-    events.len() - 1
+    events.len().saturating_sub(1)
 }
 
-fn segment(text: &str, events: &[(Event<'static>, Range<usize>)]) -> (Vec<Block>, Vec<Container>, Vec<List>) {
+fn segment(text: &str, events: &Events) -> (Vec<Block>, Vec<Container>, Vec<List>) {
     let mut s = Segmenter { text, events, blocks: Vec::new(), containers: Vec::new(), lists: Vec::new() };
     s.children(0, events.len(), &[]);
     let mut blocks = s.blocks;
@@ -579,7 +583,7 @@ fn segment(text: &str, events: &[(Event<'static>, Range<usize>)]) -> (Vec<Block>
 /// Turns the parser's events into blocks and containers.
 struct Segmenter<'a> {
     text: &'a str,
-    events: &'a [(Event<'static>, Range<usize>)],
+    events: &'a Events,
     blocks: Vec<Block>,
     containers: Vec<Container>,
     lists: Vec<List>,
@@ -769,7 +773,7 @@ impl Segmenter<'_> {
     }
 }
 
-fn block_kind(tag: &Tag, inner: &[(Event<'static>, Range<usize>)], text: &str, range: &Range<usize>) -> BlockKind {
+fn block_kind(tag: &Tag, inner: &Events, text: &str, range: &Range<usize>) -> BlockKind {
     match tag {
         Tag::Paragraph => {
             let content: Vec<&Event> =
@@ -853,7 +857,7 @@ fn fill_gaps(text: &str, blocks: Vec<Block>) -> Vec<Block> {
 }
 
 /// Footnote numbers in the order of their first reference.
-fn number_footnotes(events: &[(Event<'static>, Range<usize>)]) -> HashMap<String, usize> {
+fn number_footnotes(events: &Events) -> HashMap<String, usize> {
     let mut numbers = HashMap::new();
     for (event, _) in events {
         if let Event::FootnoteReference(label) = event {
@@ -881,7 +885,7 @@ fn headings(doc: &Document) -> Vec<HeadingInfo> {
 }
 
 /// The text of inline events, without markup.
-pub fn plain_text(events: &[(Event<'static>, Range<usize>)]) -> String {
+pub fn plain_text(events: &Events) -> String {
     let mut out = String::new();
     for (event, _) in events {
         match event {
@@ -911,6 +915,20 @@ pub fn anchor(heading: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_matching_end_of_an_element() {
+        let doc = Document::parse("a *b* c\n");
+        let events = &doc.events;
+        let start = |tag: fn(&Tag) -> bool| events.iter().position(|(e, _)| matches!(e, Event::Start(t) if tag(t)));
+        let (para, em) =
+            (start(|t| matches!(t, Tag::Paragraph)).unwrap(), start(|t| matches!(t, Tag::Emphasis)).unwrap());
+        assert!(matches!(events[matching_end(events, para)].0, Event::End(TagEnd::Paragraph)));
+        assert!(matches!(events[matching_end(events, em)].0, Event::End(TagEnd::Emphasis)));
+        // Nothing ends an element cut off: the last event; no events: 0.
+        assert_eq!(matching_end(&events[..em + 2], em), em + 1);
+        assert_eq!(matching_end(&[], 0), 0);
+    }
 
     fn kinds(text: &str) -> Vec<(String, BlockKind)> {
         let doc = Document::parse(text);

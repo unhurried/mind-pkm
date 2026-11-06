@@ -4,7 +4,7 @@
 //! selection to new text and selection.
 
 use super::edit::{Edited, MarkerKind, Sel, line_marker, line_range, splice};
-use super::parse::{BlockKind, Document};
+use super::parse::{BlockKind, Document, matching_end};
 use pulldown_cmark::{Event, Tag, TagEnd};
 use std::ops::Range;
 
@@ -368,11 +368,11 @@ pub fn clear_formatting(text: &str, doc: &Document, range: Range<usize>) -> Edit
             Event::Start(Tag::Image { .. }) => {
                 out.push_str(&text[r.clone()]);
                 pos = r.end;
-                i = end_of(events, i);
+                i = matching_end(events, i);
             }
             Event::Start(Tag::Link { .. }) => {
                 // Keep the link: its text cleared, its destination as written.
-                let end = end_of(events, i);
+                let end = matching_end(events, i);
                 let inner: Vec<_> = events[i + 1..end].iter().map(|(_, r)| r.clone()).collect();
                 let text_end = inner.iter().map(|r| r.end).max().unwrap_or(r.start + 1);
                 let inner_range = r.start + 1..text_end;
@@ -394,23 +394,6 @@ pub fn clear_formatting(text: &str, doc: &Document, range: Range<usize>) -> Edit
     }
     let t = splice(text, span.clone(), &out);
     Edited { text: t, sel: Sel { anchor: span.start, head: span.start + out.len() }, pending: None }
-}
-
-fn end_of(events: &[(Event<'static>, Range<usize>)], start: usize) -> usize {
-    let mut depth = 0;
-    for (i, (e, _)) in events.iter().enumerate().skip(start) {
-        match e {
-            Event::Start(_) => depth += 1,
-            Event::End(_) => {
-                depth -= 1;
-                if depth == 0 {
-                    return i;
-                }
-            }
-            _ => {}
-        }
-    }
-    events.len() - 1
 }
 
 fn remove_highlight_marks(t: &str) -> String {
@@ -504,7 +487,7 @@ pub fn styled_span_at(text: &str, doc: &Document, at: usize) -> Option<Range<usi
             Event::Start(
                 Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Subscript | Tag::Superscript | Tag::Link { .. },
             ) => {
-                let end = end_of(events, i);
+                let end = matching_end(events, i);
                 let rs: Vec<&Range<usize>> = events[i + 1..end].iter().map(|(_, r)| r).collect();
                 match (rs.first(), rs.iter().map(|r| r.end).max()) {
                     (Some(f), Some(e)) => f.start..e,

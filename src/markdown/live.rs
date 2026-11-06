@@ -13,7 +13,7 @@
 //! that keep the markup of elements partly deleted.
 
 use super::content::{self, Inline, Link, Style};
-use super::parse::{BlockKind, ContainerKind, Document, prefix_len};
+use super::parse::{BlockKind, ContainerKind, Document, Events, prefix_len};
 use pulldown_cmark::Event;
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -73,8 +73,6 @@ pub struct Display {
     /// Hidden source runs and the element each belongs to (None: block syntax).
     hidden: Vec<(Range<usize>, Option<usize>)>,
 }
-
-type Events = [(Event<'static>, Range<usize>)];
 
 /// Whether a block is edited in its rendered form: paragraphs, headings, list
 /// items, (empty) quotes and footnote definitions holding only text
