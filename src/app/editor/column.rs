@@ -73,16 +73,17 @@ impl Entry {
 pub fn entries(page: &Page) -> Vec<Entry> {
     let doc = &page.doc();
     let active = page.active();
-    let mut shown = Vec::new();
+    let mut shown = Vec::with_capacity(doc.blocks.len() + 1);
     let mut active_block = None;
+    // Whether the active region is among them yet.
+    let mut placed = false;
     for (i, block) in doc.blocks.iter().enumerate() {
         if let Some(a) = active {
             let overlaps = block.range.end >= a.region.start && block.range.start <= a.region.end;
-            let placed = shown.contains(&Shown::Active);
             if page.pending().is_none() && overlaps {
                 if !placed {
                     shown.push(Shown::Active);
-                    active_block = Some(i);
+                    (placed, active_block) = (true, Some(i));
                 }
                 continue;
             }
@@ -94,11 +95,12 @@ pub fn entries(page: &Page) -> Vec<Entry> {
             };
             if !placed && before {
                 shown.push(Shown::Active);
+                placed = true;
             }
         }
         shown.push(Shown::Block(i));
     }
-    if active.is_some() && !shown.contains(&Shown::Active) {
+    if active.is_some() && !placed {
         shown.push(Shown::Active);
     }
     let of_block = |i: usize| -> (BlockKind, Vec<(ContainerKind, Option<usize>)>) {

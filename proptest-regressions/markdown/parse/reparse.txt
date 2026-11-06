@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d1eb4204854dc8ee624e67760bed42541a09753c75c9d2a4677fa2962e1f91df # shrinks to lines = ["\ttab", "text with **bold** and *em*", "---", "text with **bold** and *em*", "", "", "- item", "---"], at = 0.0, len = 5, insert = "    ", masked = false
+cc 08426503e5cddaff082a0b7bc208e976673a1b18ce57a169a7744825d77c00fa # shrinks to lines = ["---", "  ```", "---", "", "![img](a b.png)", "   continued", "   continued", "", "text with **bold** and *em*", ""], at = 0.4018192292648544, len = 0, insert = "x", masked = false
+cc 97ce2c11300d67fceba0a37217e0c22d12375416a78ea21a4bf59b39b27a7772 # shrinks to lines = ["---", "text with **bold** and *em*", "  ```", "---", "", "[assets](My Page.assets)", "[assets](My Page.assets)"], at = 0.8744063115789469, len = 0, insert = "x", masked = false
+cc 0767143f0e5e67d9ad8ac70fe4af96a5894af0944be6ad26f75116b5ed10aeae # shrinks to lines = ["---", "text with **bold** and *em*", "", "> > nested quote", "text with **bold** and *em*", "1. one", "Setext", "", "- item", "text with **bold** and *em*", "", "more text", "- item", "text with **bold** and *em*", "```", "$$", "", "", "", "", "", "```rust", "text with **bold** and *em*", "", "", "[toc]", "| a | b |"], at = 0.929269088784138, len = 0, insert = "---", masked = false
+cc fbee289eb577e4c74aad2409dee09933044e82bbcdfab134e7793f1b0837f918 # shrinks to lines = ["", "fn main() {}", "日本語のテキスト", "[toc]", "Setext", "[assets](My Page.assets)", "Setext", "[assets](My Page.assets)", "    indented code", "<div>", "more text", "", "  ```", "---", "Setext", "> > nested quote", "> > nested quote", "$$", "  - nested", "[toc]", "    indented code", "> quote", "   continued", "  ```", "", "===", "text with **bold** and *em*", "| a | b |", "- item", "[assets](My Page.assets)", "", "---", "---", "![img](a b.png)"], at = 0.3967544431623565, len = 8, insert = "\n\n", masked = false

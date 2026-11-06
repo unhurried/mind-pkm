@@ -12,7 +12,8 @@ use super::view;
 use crate::mindmap::{MindMap, NodeId};
 use crate::pkm::{self, commands, filter::Filter};
 use iced::{Rectangle, Size};
-use std::collections::{HashMap, VecDeque};
+use std::borrow::Cow;
+use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -42,6 +43,8 @@ pub struct Doc {
     shown: MindMap,
     /// What the layout was computed from.
     laid_out: Option<LayoutInputs>,
+    /// The nodes the filter shows, for a version of the map and the filter.
+    visible: Option<(u64, Filter, HashSet<NodeId>)>,
     /// The anchor of the last Shift+click range, with the selection it made:
     /// the next Shift+click starts from it while the selection is unchanged.
     range: Option<(NodeId, Vec<NodeId>)>,
@@ -100,6 +103,7 @@ impl Doc {
             redo: Vec::new(),
             serial: 0,
             laid_out: None,
+            visible: None,
             range: None,
         }
     }
@@ -499,13 +503,17 @@ impl Doc {
     /// it, unless nothing the layout depends on changed since the last time
     /// (the map, the filter, the margin, the zoom); text sizes are measured
     /// once and kept in `measure_cache`, at 100% (`view::text_at_zoom`).
+    /// What the filter shows is kept for the map's version, and when the map
+    /// and the zoom are the same as last time (only the text being edited,
+    /// the filter or the margin changed), the nodes' sizes are those they
+    /// were laid out with but for the node being edited.
     /// Either way the selection is kept to existing, shown nodes. Returns
     /// whether the map was laid out anew.
     pub(super) fn relayout(
         &mut self,
         margin: Size,
         zoom: f32,
-        measure_cache: &mut HashMap<view::MeasureKey, Size>,
+        measure_cache: &mut view::MeasureCache,
         draft: Option<Draft>,
     ) -> bool {
         self.fix_selection();
@@ -513,17 +521,32 @@ impl Doc {
         let anew = self.laid_out.as_ref() != Some(&inputs);
         if anew {
             self.shown = self.map.clone();
-            let mut visible = self.filter.visible(&self.map);
+            if !self.visible.as_ref().is_some_and(|(v, f, _)| *v == inputs.map && *f == inputs.filter) {
+                self.visible = Some((inputs.map, inputs.filter.clone(), self.filter.visible(&self.map)));
+            }
             let map = &self.map;
+            let mut visible = Cow::Borrowed(&self.visible.as_ref().expect("just made").2);
             let draft = inputs.draft.as_ref().filter(|d| map.exists(d.id));
             if let Some(d) = draft {
                 // The node being edited is shown, under its ancestors.
-                visible.insert(d.id);
-                visible.extend(map.ancestors(d.id));
+                for n in std::iter::once(d.id).chain(map.ancestors(d.id)) {
+                    if !visible.contains(&n) {
+                        visible.to_mut().insert(n);
+                    }
+                }
             }
-            self.layout = layout::layout(map, &visible, margin, zoom, &mut |id| {
-                view::node_size(measure_cache, map, id, zoom, draft)
+            // The sizes the last layout gave, if they still hold.
+            let previous = self.laid_out.as_ref().filter(|p| p.map == inputs.map && p.zoom == zoom);
+            let edited = [previous.and_then(|p| p.draft.as_ref()).map(|d| d.id), draft.map(|d| d.id)];
+            let last = &self.layout;
+            let layout = layout::layout(map, &visible, margin, zoom, &mut |id| {
+                let kept = previous.filter(|_| !edited.contains(&Some(id))).and_then(|_| last.get(id));
+                match kept {
+                    Some(b) => b.rect.size(),
+                    None => view::node_size(measure_cache, map, id, zoom, draft),
+                }
             });
+            self.layout = layout;
             self.laid_out = Some(inputs);
         }
         self.select_shown();
@@ -651,6 +674,38 @@ mod tests {
         Doc::new(MindMap::new("root"), 1)
     }
 
+    /// While a node's text is edited, only that node is measured again: the
+    /// others keep the sizes they were laid out with, until the map or the
+    /// zoom changes.
+    #[test]
+    fn only_the_node_being_edited_is_measured_again_while_typing() {
+        let mut doc = doc();
+        let root = doc.map.root();
+        let a = doc.map.add_child(root, "a");
+        let b = doc.map.add_child(root, "bb");
+        let mut cache = view::MeasureCache::default();
+        let draft = |text: &str| Some(Draft { id: a, text: text.into() });
+        let width = |doc: &Doc, id| doc.layout.get(id).unwrap().rect.width;
+        assert!(doc.relayout(Size::ZERO, 1.0, &mut cache, None));
+        let (a_width, b_width) = (width(&doc, a), width(&doc, b));
+        assert!(doc.relayout(Size::ZERO, 1.0, &mut cache, draft("a")));
+        let typed = width(&doc, a);
+        assert!(doc.relayout(Size::ZERO, 1.0, &mut cache, draft("a much longer text")));
+        assert!(width(&doc, a) > typed);
+        assert_eq!(width(&doc, b), b_width);
+        // Cancelled: the node's own text again.
+        assert!(doc.relayout(Size::ZERO, 1.0, &mut cache, None));
+        assert_eq!((width(&doc, a), width(&doc, b)), (a_width, b_width));
+        // Another node's text changed meanwhile (a new version of the map): measured again.
+        doc.map.set_text(b, "b with a longer text");
+        assert!(doc.relayout(Size::ZERO, 1.0, &mut cache, draft("a")));
+        assert_eq!(width(&doc, b), box_width(&doc.map, b));
+        // Another zoom: every node at it.
+        assert!(doc.relayout(Size::ZERO, 2.0, &mut cache, draft("a")));
+        let at_2 = view::node_size(&mut cache, &doc.map, b, 2.0, None).width;
+        assert_eq!(width(&doc, b), at_2);
+    }
+
     #[test]
     fn node_numbers_are_not_reused_after_undo() {
         let mut doc = doc();
@@ -718,7 +773,7 @@ mod tests {
         let root = doc.map.root();
         let a = doc.map.add_child(root, "a");
         let a1 = doc.map.add_child(a, "a1");
-        let mut cache = HashMap::new();
+        let mut cache = view::MeasureCache::default();
         let mut relayout = |doc: &mut Doc, zoom: f32| doc.relayout(Size::ZERO, zoom, &mut cache, None);
         assert!(relayout(&mut doc, 1.0));
         assert!(!relayout(&mut doc, 1.0));
@@ -744,7 +799,7 @@ mod tests {
 
     /// The width of a node's box at 100%, as laid out.
     fn box_width(map: &MindMap, id: NodeId) -> f32 {
-        view::node_size(&mut HashMap::new(), map, id, 1.0, None).width
+        view::node_size(&mut view::MeasureCache::default(), map, id, 1.0, None).width
     }
 
     #[test]
@@ -755,7 +810,7 @@ mod tests {
         let b = doc.map.add_child(root, "b");
         let b1 = doc.map.add_child(b, "b1");
         let c = doc.map.add_child(root, "c");
-        let relayout = |doc: &mut Doc| doc.relayout(Size::ZERO, 1.0, &mut HashMap::new(), None);
+        let relayout = |doc: &mut Doc| doc.relayout(Size::ZERO, 1.0, &mut view::MeasureCache::default(), None);
         doc.select(vec![b]);
         relayout(&mut doc);
         doc.map.delete(b);

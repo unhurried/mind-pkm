@@ -6,7 +6,7 @@
 
 use crate::mindmap::{MindMap, NodeId};
 use iced::{Point, Rectangle, Size};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Horizontal gap between a node and its children (at 100% zoom).
 pub const H_GAP: f32 = 36.0;
@@ -28,23 +28,27 @@ pub struct NodeBox {
 #[derive(Debug, Clone, Default)]
 pub struct MapLayout {
     pub boxes: Vec<NodeBox>,
-    index: HashMap<NodeId, usize>,
-    /// The visible children of every laid out node, in display order.
-    pub children: HashMap<NodeId, Vec<NodeId>>,
+    /// Where each node's box is in `boxes`, by node (`NONE`: not laid out).
+    index: Vec<usize>,
+    /// The visible children of every laid out node, in display order, by node.
+    children: Vec<Vec<NodeId>>,
     pub size: Size,
 }
 
+/// In `MapLayout::index`, a node that is not laid out.
+const NONE: usize = usize::MAX;
+
 impl MapLayout {
     pub fn get(&self, id: NodeId) -> Option<&NodeBox> {
-        self.index.get(&id).map(|&i| &self.boxes[i])
+        self.index.get(id).copied().filter(|&i| i != NONE).map(|i| &self.boxes[i])
     }
 
     pub fn contains(&self, id: NodeId) -> bool {
-        self.index.contains_key(&id)
+        self.get(id).is_some()
     }
 
     pub fn visible_children(&self, id: NodeId) -> &[NodeId] {
-        self.children.get(&id).map(Vec::as_slice).unwrap_or(&[])
+        self.children.get(id).map(Vec::as_slice).unwrap_or(&[])
     }
 
     fn depth(&self, id: NodeId) -> usize {
@@ -63,44 +67,44 @@ impl MapLayout {
     }
 }
 
+/// What laying out works with, by node (the map's nodes are numbered from 0).
 struct Ctx<'a> {
     map: &'a MindMap,
     visible: &'a HashSet<NodeId>,
-    sizes: HashMap<NodeId, Size>,
-    children: HashMap<NodeId, Vec<NodeId>>,
-    heights: HashMap<NodeId, f32>,
+    sizes: Vec<Size>,
+    children: Vec<Vec<NodeId>>,
+    heights: Vec<f32>,
     /// The distance from the top of a subtree's block to the node's center.
-    centers: HashMap<NodeId, f32>,
+    centers: Vec<f32>,
     /// The distance from a node's center up to the top of its children's block.
-    kids_above: HashMap<NodeId, f32>,
+    kids_above: Vec<f32>,
     h_gap: f32,
     v_gap: f32,
     rise: f32,
 }
 
-/// The children shown under `id`: visible children, and in place of a hidden
-/// child its own shown children (a filter hides a node, not its visible
-/// descendants). Nothing under a folded node.
-fn shown_children(map: &MindMap, visible: &HashSet<NodeId>, id: NodeId) -> Vec<NodeId> {
-    let mut out = Vec::new();
+/// The children shown under `id`, added to `out`: visible children, and in
+/// place of a hidden child its own shown children (a filter hides a node, not
+/// its visible descendants). Nothing under a folded node.
+fn shown_children(map: &MindMap, visible: &HashSet<NodeId>, id: NodeId, out: &mut Vec<NodeId>) {
     if map.is_folded(id) && id != map.root() {
-        return out;
+        return;
     }
-    for c in map.children(id) {
+    for c in map.node(id).children() {
         if visible.contains(&c) {
             out.push(c);
         } else {
-            out.extend(shown_children(map, visible, c));
+            shown_children(map, visible, c, out);
         }
     }
-    out
 }
 
 impl Ctx<'_> {
     fn prepare(&mut self, id: NodeId, measure: &mut dyn FnMut(NodeId) -> Size) -> f32 {
         let size = measure(id);
-        self.sizes.insert(id, size);
-        let kids = shown_children(self.map, self.visible, id);
+        self.sizes[id] = size;
+        let mut kids = Vec::new();
+        shown_children(self.map, self.visible, id, &mut kids);
         let mut total = 0.0;
         for (i, &c) in kids.iter().enumerate() {
             if i > 0 {
@@ -112,22 +116,22 @@ impl Ctx<'_> {
         // placed a little higher than the node itself.
         let kids_above = match kids[..] {
             [] => 0.0,
-            [c] => self.centers[&c] + self.rise,
+            [c] => self.centers[c] + self.rise,
             _ => total / 2.0,
         };
-        self.children.insert(id, kids);
+        self.children[id] = kids;
         let half = size.height / 2.0;
         let (above, below) = (half.max(kids_above), half.max(total - kids_above));
-        self.centers.insert(id, above);
-        self.kids_above.insert(id, kids_above);
-        self.heights.insert(id, above + below);
+        self.centers[id] = above;
+        self.kids_above[id] = kids_above;
+        self.heights[id] = above + below;
         above + below
     }
 
     /// Places the subtree of `id` whose block starts at `top`, the node's left edge at `x`.
     fn place(&self, id: NodeId, x: f32, top: f32, parent: Option<NodeId>, out: &mut Vec<NodeBox>) {
-        let size = self.sizes[&id];
-        let center = top + self.centers[&id];
+        let size = self.sizes[id];
+        let center = top + self.centers[id];
         let y = center - size.height / 2.0;
         out.push(NodeBox {
             id,
@@ -135,12 +139,11 @@ impl Ctx<'_> {
             parent,
             folded: self.map.is_folded(id) && self.map.has_children(id),
         });
-        let kids = &self.children[&id];
-        let mut cy = center - self.kids_above[&id];
+        let mut cy = center - self.kids_above[id];
         let cx = x + size.width + self.h_gap;
-        for &c in kids {
+        for &c in &self.children[id] {
             self.place(c, cx, cy, Some(id), out);
-            cy += self.heights[&c] + self.v_gap;
+            cy += self.heights[c] + self.v_gap;
         }
     }
 }
@@ -155,14 +158,15 @@ pub fn layout(
     zoom: f32,
     measure: &mut dyn FnMut(NodeId) -> Size,
 ) -> MapLayout {
+    let n = map.id_bound();
     let mut ctx = Ctx {
         map,
         visible,
-        sizes: HashMap::new(),
-        children: HashMap::new(),
-        heights: HashMap::new(),
-        centers: HashMap::new(),
-        kids_above: HashMap::new(),
+        sizes: vec![Size::ZERO; n],
+        children: vec![Vec::new(); n],
+        heights: vec![0.0; n],
+        centers: vec![0.0; n],
+        kids_above: vec![0.0; n],
         h_gap: H_GAP * zoom,
         v_gap: V_GAP * zoom,
         rise: SINGLE_CHILD_RISE * zoom,
@@ -179,11 +183,12 @@ pub fn layout(
         max_x = max_x.max(b.rect.x + b.rect.width);
         max_y = max_y.max(b.rect.y + b.rect.height);
     }
-    for b in &mut boxes {
+    let mut index = vec![NONE; n];
+    for (i, b) in boxes.iter_mut().enumerate() {
         b.rect.x += margin.width - min_x;
         b.rect.y += margin.height - min_y;
+        index[b.id] = i;
     }
-    let index = boxes.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
     MapLayout {
         boxes,
         index,

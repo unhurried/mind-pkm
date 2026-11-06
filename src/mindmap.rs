@@ -7,6 +7,7 @@
 
 use crate::paths;
 use crate::xml::{self, Element, XNode};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -474,14 +475,20 @@ impl MindMap {
 
     /// The node's plain text: its TEXT attribute, or the text of its HTML rich content.
     pub fn text(&self, id: NodeId) -> String {
+        self.text_ref(id).into_owned()
+    }
+
+    /// `text`, borrowed from the node when it is an attribute (as it mostly
+    /// is), so that looking at the text of every node allocates nothing.
+    pub fn text_ref(&self, id: NodeId) -> Cow<'_, str> {
         let node = self.node(id);
         if let Some(t) = node.attr("TEXT") {
-            return t.to_string();
+            return Cow::Borrowed(t);
         }
         if let Some(rich) = node.elements().find(|e| e.name == "richcontent" && e.attr("TYPE") == Some("NODE")) {
-            return html_to_plain(rich);
+            return Cow::Owned(html_to_plain(rich));
         }
-        node.attr("LOCALIZED_TEXT").unwrap_or("").to_string()
+        Cow::Borrowed(node.attr("LOCALIZED_TEXT").unwrap_or(""))
     }
 
     pub fn set_text(&mut self, id: NodeId, text: &str) {
@@ -550,8 +557,13 @@ impl MindMap {
             .collect()
     }
 
+    /// How many icons the node shows (`icons`, without making them).
+    pub fn icon_count(&self, id: NodeId) -> usize {
+        self.node(id).elements().filter(|e| e.name == "icon" && e.attr("BUILTIN").is_some()).count()
+    }
+
     pub fn has_icon(&self, id: NodeId, icon: &str) -> bool {
-        self.icons(id).iter().any(|i| i == icon)
+        self.node(id).elements().any(|e| e.name == "icon" && e.attr("BUILTIN") == Some(icon))
     }
 
     pub fn add_icon(&mut self, id: NodeId, icon: &str) {

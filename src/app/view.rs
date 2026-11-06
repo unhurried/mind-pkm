@@ -7,6 +7,7 @@ use super::drag::DropPlace;
 use super::layout::{MapLayout, NodeBox};
 use super::node_edit::{self, NODE_EDIT_ID};
 use super::placed;
+use super::scroll_watch::scroll_watch;
 use super::search_panel::{RESULTS_SCROLL_ID, ROW_HEIGHT, SCOPES, SEARCH_INPUT_ID, SORTS, SearchMsg};
 use super::ui::{self, DialogStyle, Menu, MenuStyle};
 use super::{App, DIALOG_INPUT_ID, MAP_SCROLL_ID, MapMsg, Message};
@@ -232,7 +233,7 @@ fn is_below_todo(map: &MindMap, id: NodeId) -> bool {
     let mut node = id;
     while let Some(parent) = map.parent(node) {
         if parent == root {
-            return node != id && map.text(node) == pkm::TODO_NODE_NAME;
+            return node != id && map.text_ref(node) == pkm::TODO_NODE_NAME;
         }
         node = parent;
     }
@@ -244,9 +245,30 @@ fn max_text_width(map: &MindMap, id: NodeId) -> f32 {
     if is_below_todo(map, id) { TODO_ITEM_MAX_TEXT_WIDTH } else { NODE_MAX_TEXT_WIDTH }
 }
 
-/// The key of a measured text size: the text, and whether it wraps at the
-/// wider width.
-pub type MeasureKey = (String, bool);
+/// The sizes of the node texts measured, at 100% zoom: by text, for the
+/// narrower width and the wider one they wrap at (looked up by the text as
+/// it is, without making a key).
+#[derive(Debug, Default)]
+pub struct MeasureCache {
+    sizes: [HashMap<String, Size>; 2],
+}
+
+impl MeasureCache {
+    /// The size of `text` at 100%, if it was measured; `wide`: wrapped at
+    /// the wider width.
+    pub fn get(&self, text: &str, wide: bool) -> Option<Size> {
+        self.sizes[usize::from(wide)].get(text).copied()
+    }
+
+    fn insert(&mut self, text: &str, wide: bool, size: Size) {
+        self.sizes[usize::from(wide)].insert(text.to_string(), size);
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.sizes.iter().map(HashMap::len).sum()
+    }
+}
 
 /// The size of a node's text at the zoom, from its size at 100%: the text
 /// layout is not hinted, so at any zoom the text breaks into the same lines
@@ -257,13 +279,14 @@ pub fn text_at_zoom(at_100: Size, zoom: f32) -> Size {
 
 /// The size of a text at the zoom; `cache` holds the sizes at 100%, so that
 /// a text is measured once, whatever the zoom.
-fn text_size(cache: &mut HashMap<MeasureKey, Size>, text: &str, wide: bool, zoom: f32) -> Size {
-    let key = (text.to_string(), wide);
-    let at_100 = match cache.get(&key) {
-        Some(&size) => size,
+fn text_size(cache: &mut MeasureCache, text: &str, wide: bool, zoom: f32) -> Size {
+    let at_100 = match cache.get(text, wide) {
+        Some(size) => size,
         None => {
             let max_width = if wide { TODO_ITEM_MAX_TEXT_WIDTH } else { NODE_MAX_TEXT_WIDTH };
-            *cache.entry(key).or_insert(measure_text(text, max_width, 1.0))
+            let size = measure_text(text, max_width, 1.0);
+            cache.insert(text, wide, size);
+            size
         }
     };
     text_at_zoom(at_100, zoom)
@@ -280,19 +303,13 @@ fn edited_text_size(text: &str, wide: bool, zoom: f32) -> Size {
 
 /// The size of a node's box at the zoom: its text, icons and link marker,
 /// with padding and the border.
-pub fn node_size(
-    cache: &mut HashMap<MeasureKey, Size>,
-    map: &MindMap,
-    id: NodeId,
-    zoom: f32,
-    draft: Option<&Draft>,
-) -> Size {
+pub fn node_size(cache: &mut MeasureCache, map: &MindMap, id: NodeId, zoom: f32, draft: Option<&Draft>) -> Size {
     let wide = is_below_todo(map, id);
     let t = match draft.filter(|d| d.id == id) {
         Some(d) => edited_text_size(&d.text, wide, zoom),
-        None => text_size(cache, &map.text(id), wide, zoom),
+        None => text_size(cache, &map.text_ref(id), wide, zoom),
     };
-    let extras = map.icons(id).len() + usize::from(map.link(id).is_some());
+    let extras = map.icon_count(id) + usize::from(map.link(id).is_some());
     let pad = NODE_PADDING;
     Size::new(
         t.width + extras as f32 * (ICON_WIDTH + ROW_SPACING) * zoom + 2.0 * pad[1] * zoom + 2.0,
@@ -479,9 +496,17 @@ impl App {
                 vertical: scrollable::Scrollbar::default(),
                 horizontal: scrollable::Scrollbar::default(),
             })
-            .on_scroll(MapMsg::MapScrolled)
             .width(Fill)
             .height(Fill);
+        // Where the map is scrolled is followed without a message, and told
+        // (building the view again) only when the visible part comes near the
+        // edge of the nodes built: a message for every step of the wheel
+        // would build every window again.
+        let (band_x, band) = App::near_band(near);
+        let viewport = &self.viewport;
+        let map = scroll_watch(map, iced::widget::Id::new(MAP_SCROLL_ID), band, MapMsg::MapScrolled)
+            .band_x(band_x)
+            .tracking(move |visible| viewport.follow(visible));
         // Nodes, markers and scrollbars capture their own presses, so only a
         // press on empty map space reaches this area and starts a pan (a right
         // press: opens its menu; a node takes its own right press).
@@ -1042,7 +1067,7 @@ mod tests {
 
     /// The width of a node's box at 100% zoom.
     fn width(map: &MindMap, id: NodeId) -> f32 {
-        node_size(&mut HashMap::new(), map, id, 1.0, None).width
+        node_size(&mut MeasureCache::default(), map, id, 1.0, None).width
     }
 
     #[test]
@@ -1075,7 +1100,7 @@ mod tests {
     #[test]
     fn a_text_is_measured_at_each_width() {
         let long = "word ".repeat(200);
-        let mut cache = HashMap::new();
+        let mut cache = MeasureCache::default();
         let narrow = text_size(&mut cache, &long, false, 1.0);
         let wide = text_size(&mut cache, &long, true, 1.0);
         assert!(wide.width > narrow.width);

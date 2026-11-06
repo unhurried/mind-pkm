@@ -73,7 +73,7 @@ impl App {
         // The focused node last.
         let nodes = doc.selection().iter().copied().filter(|&n| n != doc.focus()).chain([doc.focus()]);
         let selection = nodes.map(|n| doc.map().freeplane_id(n).to_string()).collect();
-        let scroll = (self.viewport.scroll.x, self.viewport.scroll.y);
+        let scroll = (self.viewport.scroll().x, self.viewport.scroll().y);
         Some((path, MapView { zoom: self.viewport.zoom(), scroll, selection }))
     }
 

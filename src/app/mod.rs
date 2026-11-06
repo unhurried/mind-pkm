@@ -8,6 +8,7 @@
 //! scrolling and zooming (`viewport`), the search panel (`search_panel`) and
 //! the editor windows (`editors`); `doc` holds an open map and its edits.
 
+mod after_draw;
 mod arrow_cursor;
 mod command;
 mod ctrl_wheel;
@@ -49,7 +50,7 @@ use drag::NodeDrag;
 use editor::{Editor, EditorMsg, EditorPrefs, RenderCache, RenderKey, is_markdown};
 use file::{AfterUnsaved, FileAction};
 use iced::keyboard::{self, Key, Modifiers, key::Named};
-use iced::widget::{scrollable, text_editor};
+use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, window};
 use node_edit::NodeEdit;
 use search_panel::{PanelFocus, SearchMsg, SearchPanel};
@@ -185,7 +186,8 @@ pub enum MapMsg {
     /// A right click on empty map space: its menu.
     MapRightClicked,
     CloseContextMenu,
-    MapScrolled(scrollable::Viewport),
+    /// The visible part of the map left the nodes built around it.
+    MapScrolled(scroll_watch::Visible),
     /// The wheel was turned with Ctrl held over the map, at this point of the viewport.
     ZoomWheel(iced::mouse::ScrollDelta, iced::Point),
     /// The left button went down on empty map space: start panning.
@@ -602,8 +604,8 @@ impl App {
                 self.drag = None;
                 Task::none()
             }
-            MapMsg::MapScrolled(viewport) => {
-                self.map_scrolled(viewport);
+            MapMsg::MapScrolled(visible) => {
+                self.map_scrolled(visible);
                 Task::none()
             }
             MapMsg::ZoomWheel(delta, at) => self.zoom_wheel(delta, at),

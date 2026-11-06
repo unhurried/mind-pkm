@@ -1,5 +1,6 @@
 //! The visible part of the map: relayout, scrolling, panning, zooming.
 
+use super::scroll_watch::Visible;
 use super::search_panel::ROW_HEIGHT;
 use super::ui::zoom_step;
 use super::view;
@@ -8,7 +9,7 @@ use crate::mindmap::NodeId;
 use iced::mouse::ScrollDelta;
 use iced::widget::{canvas, operation, scrollable};
 use iced::{Point, Rectangle, Size, Task, Vector, window};
-use std::collections::HashMap;
+use std::cell::Cell;
 
 /// Room kept around the focused node when it is scrolled into view.
 const REVEAL_PADDING: f32 = 24.0;
@@ -17,9 +18,10 @@ const MAP_MARGIN: f32 = 40.0;
 /// The height of the menu and status bars, for a viewport not measured yet.
 const BARS_HEIGHT: f32 = 64.0;
 /// The room around the visible part of the map whose nodes are built as
-/// widgets too (`near_view`), in screen pixels. The map's view is built for
-/// the scroll position it is drawn at, so a little room is enough.
-pub(super) const NEAR_MARGIN: f32 = 200.0;
+/// widgets too (`near_view`), in screen pixels. The map is told where it is
+/// scrolled when the visible part comes within half of it of the edge of the
+/// nodes built (`near_band`).
+pub(super) const NEAR_MARGIN: f32 = 400.0;
 
 /// The zoom levels, 100% among them.
 pub const ZOOM_STEPS: &[f32] = &[0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
@@ -35,13 +37,22 @@ pub struct MapViewport {
     /// Ctrl+wheel movement not yet turned into a zoom step, in notches.
     wheel_zoom: f32,
     /// Node text sizes at 100%, by text and width.
-    measure_cache: HashMap<view::MeasureKey, Size>,
+    measure_cache: view::MeasureCache,
     /// The drawn edges, cleared on every relayout.
     pub(super) edges: canvas::Cache,
-    /// The scroll position, as last scrolled to or reported.
-    pub(super) scroll: Vector,
-    /// The size of the map's scrollable as last reported; None when it may have changed.
-    pub(super) size: Option<Size>,
+    /// The scroll position, as last scrolled to or as the scrollable is
+    /// after the last event (followed without a message).
+    scroll: Cell<Vector>,
+    /// The scroll position the nodes near the visible part are built for:
+    /// as last scrolled to or told (`MapMsg::MapScrolled`).
+    built_for: Vector,
+    /// Where the scrollable was after the last event: it is followed only
+    /// when it moved (a scroll by the application is done after the windows
+    /// are built again, and the scrollable is where it was until then).
+    seen: Cell<Option<Vector>>,
+    /// The size of the map's scrollable as after the last event; None when
+    /// it may have changed.
+    size: Cell<Option<Size>>,
     /// Set by a move among siblings: the parent stays in place on screen
     /// after the message, not the moved node.
     pub(super) keep_parent_in_place: bool,
@@ -53,10 +64,12 @@ impl Default for MapViewport {
         MapViewport {
             zoom: 1.0,
             wheel_zoom: 0.0,
-            measure_cache: HashMap::new(),
+            measure_cache: view::MeasureCache::default(),
             edges: canvas::Cache::default(),
-            scroll: Vector::ZERO,
-            size: None,
+            scroll: Cell::new(Vector::ZERO),
+            built_for: Vector::ZERO,
+            seen: Cell::new(None),
+            size: Cell::new(None),
             keep_parent_in_place: false,
             pan: None,
         }
@@ -77,10 +90,44 @@ impl MapViewport {
         true
     }
 
+    /// The scroll position: as last scrolled to, or as the scrollable is
+    /// after the last event.
+    pub(super) fn scroll(&self) -> Vector {
+        self.scroll.get()
+    }
+
+    pub(super) fn set_scroll(&mut self, scroll: Vector) {
+        self.scroll.set(scroll);
+        self.built_for = scroll;
+    }
+
+    /// The size of the map's scrollable, as after the last event.
+    pub(super) fn size(&self) -> Option<Size> {
+        self.size.get()
+    }
+
+    /// The scrollable may change size (the window was resized, the search
+    /// panel opened or closed): its size is not known until the next event.
+    pub(super) fn forget_size(&self) {
+        self.size.set(None);
+    }
+
+    /// Follows the map's scrollable: where it is after an event, if it moved
+    /// since the last one (until a scroll the application asked for is done,
+    /// the scroll position is that one), and its size. The nodes built stay
+    /// those near where it was last told or scrolled to.
+    pub(super) fn follow(&self, visible: Visible) {
+        let at = Vector::new(visible.left, visible.top);
+        if self.seen.replace(Some(at)) != Some(at) {
+            self.scroll.set(at);
+        }
+        self.size.set(Some(Size::new(visible.width, visible.height)));
+    }
+
     /// The size of a node's text at the current zoom, as measured; `wide`: for
     /// a node below ToDo, which wraps at a larger width.
     pub(super) fn measured(&self, text: &str, wide: bool) -> Option<Size> {
-        self.measure_cache.get(&(text.to_string(), wide)).map(|&size| view::text_at_zoom(size, self.zoom))
+        self.measure_cache.get(text, wide).map(|size| view::text_at_zoom(size, self.zoom))
     }
 }
 
@@ -104,22 +151,30 @@ impl App {
     /// The size of the map's scrollable: as last measured, else estimated
     /// from the window size.
     pub(super) fn viewport_size(&self) -> Size {
-        self.viewport.size.unwrap_or_else(|| {
+        self.viewport.size().unwrap_or_else(|| {
             let search = if self.search.open { self.search_panel_height() } else { 0.0 };
             Size::new(self.window_size.width, (self.window_size.height - BARS_HEIGHT - search).max(100.0))
         })
     }
 
     /// The part of the map whose nodes are shown as widgets, in the map's
-    /// coordinates: the visible part, at the scroll position as the
-    /// scrollable keeps it (inside the map of `map_size`), with
-    /// `NEAR_MARGIN` around it.
+    /// coordinates: the visible part at the scroll position last told or
+    /// scrolled to (inside the map of `map_size`), with `NEAR_MARGIN` around
+    /// it - the visible part is within half of that of it.
     pub(super) fn near_view(&self, map_size: Size) -> Rectangle {
         let view = self.viewport_size();
         let max = Vector::new((map_size.width - view.width).max(0.0), (map_size.height - view.height).max(0.0));
-        let scroll = self.viewport.scroll;
+        let scroll = self.viewport.built_for;
         let at = Point::new(scroll.x.clamp(0.0, max.x) - NEAR_MARGIN, scroll.y.clamp(0.0, max.y) - NEAR_MARGIN);
         Rectangle::new(at, Size::new(view.width + 2.0 * NEAR_MARGIN, view.height + 2.0 * NEAR_MARGIN))
+    }
+
+    /// Where the visible part of the map may move without other nodes
+    /// needing widgets, the nodes `near` it built (left, right; top, bottom):
+    /// half the margin short of those.
+    pub(super) fn near_band(near: Rectangle) -> ((f32, f32), (f32, f32)) {
+        let inset = NEAR_MARGIN / 2.0;
+        ((near.x + inset, near.x + near.width - inset), (near.y + inset, near.y + near.height - inset))
     }
 
     /// Recomputes the layout if anything it depends on changed; the edges
@@ -153,7 +208,7 @@ impl App {
         // The layout is the margin plus the map scaled by the zoom.
         let margin = Vector::new(MAP_MARGIN, MAP_MARGIN);
         self.relayout();
-        let point = self.viewport.scroll + Vector::new(at.x, at.y) - margin;
+        let point = self.viewport.scroll() + Vector::new(at.x, at.y) - margin;
         let moved = margin + point * (self.viewport.zoom / old) - Vector::new(at.x, at.y);
         self.scroll_to(Vector::new(moved.x.max(0.0), moved.y.max(0.0)))
     }
@@ -183,12 +238,12 @@ impl App {
         if delta == Vector::ZERO {
             return Task::none();
         }
-        self.viewport.scroll += delta;
+        self.viewport.set_scroll(self.viewport.scroll() + delta);
         operation::scroll_by(MAP_SCROLL_ID, scrollable::AbsoluteOffset { x: delta.x, y: delta.y })
     }
 
     pub(super) fn scroll_to(&mut self, offset: Vector) -> Task<Message> {
-        self.viewport.scroll = offset;
+        self.viewport.set_scroll(offset);
         operation::scroll_to(MAP_SCROLL_ID, scrollable::AbsoluteOffset { x: offset.x, y: offset.y })
     }
 
@@ -202,7 +257,7 @@ impl App {
     pub(super) fn reveal_focus(&mut self) -> Task<Message> {
         let Some(r) = self.focus_rect() else { return Task::none() };
         let vp = self.viewport_size();
-        let o = self.viewport.scroll;
+        let o = self.viewport.scroll();
         let axis = |start: f32, len: f32, off: f32, view: f32| {
             if start - REVEAL_PADDING < off {
                 (start - REVEAL_PADDING).max(0.0)
@@ -216,19 +271,16 @@ impl App {
         if new == o { Task::none() } else { self.scroll_to(new) }
     }
 
-    pub(super) fn map_scrolled(&mut self, viewport: scrollable::Viewport) {
-        let o = viewport.absolute_offset();
-        self.viewport.scroll = Vector::new(o.x, o.y);
-        let size = viewport.bounds().size();
-        if self.viewport.size != Some(size) {
-            self.viewport.size = Some(size);
-            self.relayout();
-        }
+    /// The visible part of the map left the nodes built around it: the view
+    /// is built again (for where it is now).
+    pub(super) fn map_scrolled(&mut self, visible: Visible) {
+        self.viewport.follow(visible);
+        self.viewport.built_for = self.viewport.scroll();
     }
 
     pub(super) fn window_resized(&mut self, size: Size) -> Task<Message> {
         self.window_size = size;
-        self.viewport.size = None;
+        self.viewport.forget_size();
         ask_window_state(self.main_window)
     }
 
@@ -259,7 +311,7 @@ impl App {
         match self.viewport.pan {
             None => Task::none(),
             Some(Pan::Pressed) => {
-                self.viewport.pan = Some(Pan::Dragging { anchor: position, start: self.viewport.scroll });
+                self.viewport.pan = Some(Pan::Dragging { anchor: position, start: self.viewport.scroll() });
                 Task::none()
             }
             // The map moves with the pointer; the scrollable clamps the far edges.
@@ -286,6 +338,28 @@ fn ask_window_state(id: window::Id) -> Task<Message> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn visible(left: f32, top: f32) -> Visible {
+        Visible { top, height: 600.0, left, width: 800.0 }
+    }
+
+    #[test]
+    fn the_scroll_position_follows_the_scrollable_when_it_moves() {
+        let mut v = MapViewport::default();
+        v.follow(visible(0.0, 100.0));
+        assert_eq!((v.scroll(), v.size()), (Vector::new(0.0, 100.0), Some(Size::new(800.0, 600.0))));
+        // Scrolled by the application: the scrollable, not there yet (the
+        // scroll is done after the windows are built again), leaves it so.
+        v.set_scroll(Vector::new(50.0, 500.0));
+        v.follow(visible(0.0, 100.0));
+        assert_eq!(v.scroll(), Vector::new(50.0, 500.0));
+        // There (as far as it goes): followed.
+        v.follow(visible(40.0, 500.0));
+        assert_eq!(v.scroll(), Vector::new(40.0, 500.0));
+        // Scrolled by the wheel.
+        v.follow(visible(40.0, 560.0));
+        assert_eq!(v.scroll(), Vector::new(40.0, 560.0));
+    }
 
     #[test]
     fn zoom_steps_stop_at_the_limits() {

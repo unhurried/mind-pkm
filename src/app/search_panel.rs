@@ -112,7 +112,7 @@ impl App {
         self.search.open = true;
         self.search.focus = PanelFocus::Input;
         self.search.doc_dir = Some(doc_dir.clone());
-        self.viewport.size = None;
+        self.viewport.forget_size();
         let focus = Task::batch([operation::focus(SEARCH_INPUT_ID), operation::select_all(SEARCH_INPUT_ID)]);
         // Brings the index up to date in the background; searching meanwhile
         // works against what is on disk. Also loads the dictionary early.
@@ -231,7 +231,7 @@ impl App {
             SearchMsg::Close => {
                 self.search.open = false;
                 self.search.focus = PanelFocus::Map;
-                self.viewport.size = None;
+                self.viewport.forget_size();
                 Task::none()
             }
         }

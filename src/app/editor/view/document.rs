@@ -7,6 +7,7 @@ use super::theme::{
     BLOCK_GAP, LINE_HEIGHT, LIST_INDENT, OUTLINE_WIDTH, PAGE_PADDING, PAGE_WIDTH, Palette, QUOTE_BAR, QUOTE_PADDING,
     editor_style,
 };
+use crate::app::after_draw::after_draw;
 use crate::app::editor::assets::{DropTarget, content_end};
 use crate::app::editor::column::{self, Entry, EntryKey, Gap, Shown};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
@@ -17,17 +18,17 @@ use crate::app::editor::{AssetsMsg, Editor, EditorMsg, EditorPrefs, RightClick};
 use crate::app::ime::ime_aligned;
 use crate::app::keyed_column::keyed_column;
 use crate::app::right_press::right_press_in;
-use crate::app::scroll_watch::scroll_watch;
+use crate::app::scroll_watch::{Visible, scroll_watch};
 use crate::app::view::APP_FONT;
 use crate::markdown::parse::ContainerKind;
 use iced::advanced::text::Wrapping;
 use iced::widget::{column, container, mouse_area, row, scrollable, space, stack, text_editor};
-use iced::{Color, Element, Fill, Padding};
+use iced::{Color, Element, Fill, Padding, Rectangle};
 
 /// A widget of the page column, for it to keep its state (its shaped text)
 /// while blocks come and go before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Part {
+pub enum Part {
     /// The gap above an entry.
     Gap(EntryKey),
     /// An entry: a rendered block, the region being edited.
@@ -38,6 +39,35 @@ enum Part {
     Far(usize),
     /// The room below the last entry.
     End,
+}
+
+impl Part {
+    /// Whether it stays with its entry, so that the page can keep it in place.
+    fn anchors(&self) -> bool {
+        matches!(self, Part::Shown(_) | Part::Gap(_))
+    }
+
+    /// The entry it shows.
+    fn shows(&self) -> Option<EntryKey> {
+        match self {
+            Part::Shown(key) => Some(*key),
+            _ => None,
+        }
+    }
+}
+
+/// Where the widgets of the page column were laid out (each part, its top
+/// and height in the column), for the entry at the top of the visible part
+/// to stay where it is when they are laid out anew.
+#[derive(Debug, Default)]
+pub struct Placement {
+    /// As last laid out and scrolled for.
+    last: Vec<(Part, f32, f32)>,
+    /// As just laid out, before the page is scrolled for it.
+    laid_out: Vec<(Part, f32, f32)>,
+    /// The width and zoom of the column of each.
+    last_at: (f32, f32),
+    laid_out_at: (f32, f32),
 }
 
 /// The height of the gap above an entry of the column.
@@ -90,25 +120,55 @@ impl Editor {
         heights.at(width, zoom);
         heights.prune(entries.iter().map(|e| &e.key));
         let text = self.page.text();
-        let rooms: Vec<(f32, bool)> = entries
+        let rooms: Vec<near::Room> = entries
             .iter()
             .map(|e| {
                 let source = &text[e.covers.clone()];
                 let height = heights.get(e.key, near::may_render(e, source));
-                let guess = || near::estimate(source, width, zoom);
-                (gap_height(e.gap, zoom) + height.unwrap_or_else(guess), height.is_some())
+                let room = height.unwrap_or_else(|| heights.guess(e.key, source));
+                near::Room { height: gap_height(e.gap, zoom) + room, known: height.is_some(), cost: source.len() }
             })
             .collect();
-        // The visible part in the column (below the page's padding).
+        // The visible part in the column (below the page's padding): where
+        // the entry at its top is now, if it is still there.
         let visible = self.visible();
-        let top = visible.top - PAGE_PADDING[0];
+        let at_top = self.top_entry.get().and_then(|(key, into)| {
+            let n = entries.iter().position(|e| e.key == key)?;
+            let above: f32 = rooms[..n].iter().map(|r| r.height).sum();
+            Some(above + gap_height(entries[n].gap, zoom) + into)
+        });
+        let top = at_top.unwrap_or(visible.top - PAGE_PADDING[0]);
         let margin = visible.height.max(near::MIN_MARGIN);
         let keep = |i: usize| match entries[i].shown {
             Shown::Active => true,
             Shown::Block(b) => Some(b) == self.scroll_target,
         };
-        let plan = near::plan(&rooms, top..top + visible.height, margin, keep);
-        (rooms.into_iter().map(|r| r.0).collect(), plan)
+        let plan = near::plan(&rooms, top..top + visible.height, margin, keep, near::MEASURE_BUDGET);
+        // Another batch while blocks are left - as long as the last one
+        // measured some (a block that never tells its height stops it).
+        let known = rooms.iter().filter(|r| r.known).count();
+        self.unmeasured.set(plan.unmeasured && known != self.known.replace(known));
+        (rooms.into_iter().map(|r| r.height).collect(), plan)
+    }
+
+    /// How far to scroll the page, just laid out anew, for the entry at the
+    /// top of the visible part (as scrolled before) to stay where it is.
+    fn keep_top(&self, visible: Visible) -> f32 {
+        let mut placement = self.placement.borrow_mut();
+        let laid_out = std::mem::take(&mut placement.laid_out);
+        let scaled = placement.last_at != placement.laid_out_at;
+        let by = near::shift(&placement.last, &laid_out, visible.top - PAGE_PADDING[0], scaled, Part::anchors);
+        placement.last = laid_out;
+        placement.last_at = placement.laid_out_at;
+        by
+    }
+
+    /// The visible part of the page was told: notes the entry at its top,
+    /// whose place the blocks near the visible part are then found from
+    /// (the page kept it in place since, however the blocks above changed).
+    pub(in crate::app::editor) fn note_top(&self, visible: Visible) {
+        let placement = self.placement.borrow();
+        self.top_entry.set(near::at_top(&placement.last, visible.top - PAGE_PADDING[0], Part::shows));
     }
 
     pub(super) fn document<'a>(&'a self, ctx: &Ctx<'a>, prefs: &EditorPrefs) -> Element<'a, EditorMsg> {
@@ -117,17 +177,29 @@ impl Editor {
         let p = ctx.p;
         let unbounded = (f32::NEG_INFINITY, f32::INFINITY);
         let (content, band): (Element<EditorMsg>, _) = match &self.source {
-            Some(source) => (self.source_view(source, ctx, prefs), unbounded),
+            Some(source) => {
+                // Nothing of the column to keep in place.
+                *self.placement.borrow_mut() = Placement::default();
+                self.top_entry.set(None);
+                self.unmeasured.set(false);
+                (self.source_view(source, ctx, prefs), unbounded)
+            }
             None => {
                 // Only the blocks near the visible part get widgets; those
                 // laid out tell their heights, for when they get none.
                 let entries = column::entries(&self.page);
                 let (rooms, plan) = self.near_plan(&entries, width, ctx.zoom);
-                let heights = &self.heights;
-                let mut col = keyed_column().width(width).on_layout(move |part, size| {
-                    if let Part::Shown(key) = part {
-                        heights.borrow_mut().record(*key, size.height);
+                let (heights, placement, zoom) = (&self.heights, &self.placement, ctx.zoom);
+                let mut col = keyed_column().width(width).on_layout(move |parts: &[(Part, Rectangle)]| {
+                    let mut heights = heights.borrow_mut();
+                    for (part, bounds) in parts {
+                        if let Part::Shown(key) = part {
+                            heights.record(*key, bounds.height);
+                        }
                     }
+                    let mut placement = placement.borrow_mut();
+                    placement.laid_out = parts.iter().map(|(p, b)| (*p, b.y, b.height)).collect();
+                    placement.laid_out_at = (width, zoom);
                 });
                 // Entries without widgets in a row: the first one and their room.
                 let mut far: Option<(usize, f32)> = None;
@@ -255,7 +327,12 @@ impl Editor {
         // near the end of the blocks built around it: a message for every
         // step of the wheel would build every window again.
         let page = scrollable(padded).id(self.id("doc")).width(Fill).height(Fill);
-        let page = scroll_watch(page, self.id("doc"), band, EditorMsg::PageScrolled);
+        let mut page = scroll_watch(page, self.id("doc"), band, EditorMsg::PageScrolled);
+        if self.source.is_none() {
+            // The blocks above the visible part change height as they are
+            // measured: the one at the top stays where it is.
+            page = page.anchor(|visible| self.keep_top(visible));
+        }
         // While an item of the assets pane is dragged, the page tells where it
         // is. A right click no block took opens the page's menu.
         let mut area = mouse_area(page).on_right_press(EditorMsg::RightClicked(RightClick::Page));
@@ -264,7 +341,8 @@ impl Editor {
                 .on_move(|_| EditorMsg::Assets(AssetsMsg::PageHovered))
                 .on_exit(EditorMsg::Assets(AssetsMsg::LeftPage));
         }
-        area.into()
+        // Blocks left to measure: the next batch once this one is drawn.
+        after_draw(area, self.unmeasured.get().then_some(EditorMsg::Measure)).into()
     }
 
     fn source_view<'a>(

@@ -281,6 +281,7 @@ impl App {
     pub(super) fn editors_tick(&mut self) -> Task<Message> {
         for editor in self.editors.values_mut() {
             editor.check_disk();
+            editor.forget_image_files();
         }
         Task::none()
     }

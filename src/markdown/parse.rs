@@ -2,7 +2,8 @@
 //! source while the cursor is in it.
 //!
 //! The whole text is parsed at once (pulldown-cmark, with byte offsets), so
-//! that reference links and footnotes resolve across blocks. Top-level
+//! that reference links and footnotes resolve across blocks - and parsed
+//! again after an edit only around it, where that gives the same (`reparse`). Top-level
 //! elements become blocks; lists are flattened so that every list item is a
 //! block of its own (without its nested lists). Quotes are containers: each
 //! block in a quote is a block of its own, and so is each block of a list
@@ -10,6 +11,8 @@
 //! Text that no element covers (link reference definitions) becomes an
 //! `Other` block, so that every non-blank byte of the page outside container
 //! syntax belongs to exactly one block.
+
+mod reparse;
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::collections::HashMap;
@@ -19,17 +22,81 @@ use std::ops::Range;
 pub type Events = [(Event<'static>, Range<usize>)];
 
 /// The Markdown dialect of the editor: CommonMark with GitHub's tables,
-/// footnotes, strikethrough and task lists, front matter, math and
-/// Typora's sub/superscript.
+/// footnotes, strikethrough and task lists, math and Typora's
+/// sub/superscript - and front matter at the start of a page
+/// (`parse_events`).
 pub fn options() -> Options {
     Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_MATH
-        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
         | Options::ENABLE_SUPERSCRIPT
         | Options::ENABLE_SUBSCRIPT
+}
+
+/// The parser's events of `text`, with front matter at its start only:
+/// pulldown-cmark takes `---` lines as the start of a metadata block wherever
+/// a block may start (when a closing line follows, anywhere further down).
+fn parse_events(text: &str) -> Vec<(Event<'_>, Range<usize>)> {
+    let rest = front_matter_end(text).unwrap_or(0);
+    let front = Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
+    let mut events: Vec<(Event, Range<usize>)> = if rest > 0 {
+        Parser::new_ext(&text[..rest], options() | front).into_offset_iter().collect()
+    } else {
+        Vec::new()
+    };
+    let after = Parser::new_ext(&text[rest..], options()).into_offset_iter();
+    events.extend(after.map(|(e, r)| (e, r.start + rest..r.end + rest)));
+    events
+}
+
+/// Where front matter at the start of `text` ends, with the line break after
+/// its closing line, if the text starts with it - as pulldown-cmark takes it:
+/// `---` alone on the first line, a first line after it that is neither
+/// blank nor a closing line, and a closing `---` or `...` line.
+fn front_matter_end(text: &str) -> Option<usize> {
+    let b = text.as_bytes();
+    let next_line = |at: usize| b[at..].iter().position(|&c| c == b'\n').map_or(b.len(), |i| at + i + 1);
+    let eol = |at: usize| match &b[at..] {
+        [] => Some(0),
+        [b'\n', ..] => Some(1),
+        [b'\r', b'\n', ..] => Some(2),
+        [b'\r', ..] => Some(1),
+        _ => None,
+    };
+    let repeat = |at: usize, c: u8| b[at..].iter().take_while(|&&x| x == c).count();
+    let closing = |at: usize| {
+        if repeat(at, b'-') != 3 && repeat(at, b'.') != 3 {
+            return None;
+        }
+        let end = at + 3 + repeat(at + 3, b' ');
+        eol(end).map(|_| end)
+    };
+    let blank = |at: usize| eol(at + b[at..].iter().take_while(|&&c| matches!(c, b'\t' | 0x0b | 0x0c | b' ')).count());
+    if repeat(0, b'-') != 3 {
+        return None;
+    }
+    let first = next_line(0);
+    if !b[3..first].iter().all(u8::is_ascii_whitespace) {
+        return None;
+    }
+    let mut at = first;
+    let mut first_line = true;
+    while at < b.len() {
+        let closed = closing(at);
+        if first_line {
+            if closed.is_some() || blank(at).is_some() {
+                return None;
+            }
+            first_line = false;
+        }
+        if let Some(end) = closed {
+            return Some(end + blank(end).unwrap_or(0));
+        }
+        at = next_line(at);
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -192,7 +259,7 @@ pub struct HeadingInfo {
 }
 
 /// A parsed page.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Document {
     pub text: String,
     /// The events with their byte ranges in `text`.
@@ -204,6 +271,19 @@ pub struct Document {
     /// Footnote labels by the number they are shown with (order of first reference).
     pub footnotes: HashMap<String, usize>,
     pub headings: Vec<HeadingInfo>,
+    /// The byte parsed as a letter (`parse_masked`).
+    mask: Option<usize>,
+    /// What makes the page parse only as a whole (`reparse`): some line may
+    /// be a link reference or footnote definition, which apply to the whole
+    /// page, or some line is an empty nested item's marker, which are taken
+    /// as items for the whole page or not at all.
+    whole: bool,
+}
+
+/// Whether a text may hold a link reference or footnote definition (or a
+/// footnote reference): those apply across blocks.
+fn may_define(text: &str) -> bool {
+    text.contains("]:") || text.contains("[^")
 }
 
 impl Document {
@@ -215,15 +295,15 @@ impl Document {
     /// a line break) were a letter, so that a marker being typed there is
     /// not taken as syntax; the text the parse shows there is the real one.
     pub fn parse_masked(text: &str, mask: Option<usize>) -> Document {
-        let mask = mask.filter(|&m| text.as_bytes().get(m).is_some_and(|b| b.is_ascii() && *b != b'\n'));
-        let doc = Document::build(text, mask, &[]);
+        let mask = usable_mask(text, mask);
+        let mut doc = Document::build(text, mask, &[]);
         // An empty item starting a nested list (just indented with Tab) is
         // not an item to CommonMark: it cannot interrupt the paragraph above.
         let empty = empty_nested_items(&doc);
         if empty.is_empty() {
             return doc;
         }
-        let items = Document::build(text, mask, &empty);
+        let mut items = Document::build(text, mask, &empty);
         let all_items = empty.iter().all(|&at| {
             let line = line_start(text, at);
             items
@@ -231,7 +311,9 @@ impl Document {
                 .iter()
                 .any(|b| matches!(b.kind, BlockKind::ListItem(_)) && line_start(text, b.range.start) == line)
         });
-        if all_items { items } else { doc }
+        let chosen = if all_items { &mut items } else { &mut doc };
+        chosen.whole = true;
+        std::mem::take(chosen)
     }
 
     /// Parses `text` with a letter after each of the `fills` (the ends of
@@ -256,7 +338,7 @@ impl Document {
             (0..fills.len()).any(|i| start == fill_at(i) && end == start + 1)
         };
         let mut events: Vec<(Event<'static>, Range<usize>)> = Vec::new();
-        for (event, range) in Parser::new_ext(&prepared.text, options()).into_offset_iter() {
+        for (event, range) in parse_events(&prepared.text) {
             let letter = matches!(event, Event::Text(_) | Event::Start(Tag::Paragraph) | Event::End(TagEnd::Paragraph));
             if !(letter && is_fill(range.start, range.end)) {
                 events.push((event.into_static(), in_text(range.start)..in_text(range.end)));
@@ -280,6 +362,8 @@ impl Document {
             lists: Vec::new(),
             footnotes: HashMap::new(),
             headings: Vec::new(),
+            mask,
+            whole: may_define(text),
         };
         (doc.blocks, doc.containers, doc.lists) = segment(&doc.text, &doc.events);
         doc.footnotes = number_footnotes(&doc.events);
@@ -315,6 +399,12 @@ impl Document {
             .find(|h| h.anchor == wanted)
             .or_else(|| self.headings.iter().find(|h| h.text.to_lowercase() == wanted))
     }
+}
+
+/// The byte of `text` at `mask`, if it can be parsed as a letter: an ASCII
+/// character other than a line break.
+fn usable_mask(text: &str, mask: Option<usize>) -> Option<usize> {
+    mask.filter(|&m| text.as_bytes().get(m).is_some_and(|b| b.is_ascii() && *b != b'\n'))
 }
 
 /// The start of the line of `text` holding byte `at`.
@@ -398,69 +488,103 @@ fn lenient_links(text: &str) -> Prepared {
 /// The destinations with spaces of `[...](...)` that CommonMark doesn't take
 /// as links, outside code.
 fn spaced_destinations(text: &str) -> Vec<Range<usize>> {
-    if !text.contains("](") {
+    // Where code is takes a parse of its own: looked for only when a link may
+    // have a destination with spaces - most pages have none.
+    if !may_have_spaced_destinations(text) {
         return Vec::new();
     }
+    let spaced = |d: &Destination| is_spaced(&text[d.range.clone()]);
     let code = code_ranges(text);
     let in_code = |i: usize| code.iter().any(|r| r.contains(&i));
-    let bytes = text.as_bytes();
     let mut found = Vec::new();
     let mut search = 0;
     while let Some(i) = text[search..].find("](").map(|i| i + search) {
         search = i + 2;
-        if in_code(i) || !has_opening_bracket(text, i) {
+        if in_code(i) {
             continue;
         }
-        let line_end = text[i..].find('\n').map_or(text.len(), |e| i + e);
-        // The parenthesized part, parentheses balanced, on the same line.
-        let start = i + 2;
-        let mut depth = 0;
-        let mut close = None;
-        let mut j = start;
-        while j < line_end {
-            match bytes[j] {
-                b'\\' => j += 1,
-                b'(' => depth += 1,
-                b')' if depth == 0 => {
-                    close = Some(j);
-                    break;
-                }
-                b')' => depth -= 1,
-                _ => {}
-            }
-            j += 1;
+        let Some(d) = destination(text, i) else { continue };
+        if spaced(&d) {
+            found.push(d.range);
         }
-        let Some(close) = close else { continue };
-        let inner = &text[start..close];
-        let lead = inner.len() - inner.trim_start().len();
-        let dest_start = start + lead;
-        let mut dest_end = start + inner.trim_end().len();
-        if dest_start >= dest_end || bytes[dest_start] == b'<' {
-            continue;
-        }
-        // A title at the end: ` "..."`, ` '...'` or ` (...)`.
-        let body = &text[dest_start..dest_end];
-        let last = body.as_bytes()[body.len() - 1];
-        let opener = match last {
-            b'"' => Some('"'),
-            b'\'' => Some('\''),
-            b')' => Some('('),
-            _ => None,
-        };
-        if let Some(opener) = opener
-            && let Some(o) = body[..body.len() - 1].rfind(opener)
-            && o > 0
-            && body.as_bytes()[o - 1].is_ascii_whitespace()
-        {
-            dest_end = dest_start + body[..o].trim_end().len();
-        }
-        let dest = &text[dest_start..dest_end];
-        if dest.contains(' ') && !dest.contains(['<', '>']) {
-            found.push(dest_start..dest_end);
-        }
-        search = close;
+        search = d.close;
     }
     found
+}
+
+/// Whether a link, taken on its own (in code or not, wherever the links
+/// before it end), has a destination with spaces: `spaced_destinations`
+/// finds some only then.
+fn may_have_spaced_destinations(text: &str) -> bool {
+    text.match_indices("](").any(|(i, _)| destination(text, i).is_some_and(|d| is_spaced(&text[d.range])))
+}
+
+/// The destination of a link whose `](` is at `i`.
+struct Destination {
+    /// The destination, without the title.
+    range: Range<usize>,
+    /// Where the `)` closing the link is.
+    close: usize,
+}
+
+/// The destination of the link whose `](` is at `i`: the parenthesized part,
+/// parentheses balanced, on the same line, without a title at its end. None
+/// when the `]` has no `[` before it, nothing closes the parentheses, or the
+/// destination is empty or in angle brackets.
+fn destination(text: &str, i: usize) -> Option<Destination> {
+    if !has_opening_bracket(text, i) {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let line_end = text[i..].find('\n').map_or(text.len(), |e| i + e);
+    let start = i + 2;
+    let mut depth = 0;
+    let mut close = None;
+    let mut j = start;
+    while j < line_end {
+        match bytes[j] {
+            b'\\' => j += 1,
+            b'(' => depth += 1,
+            b')' if depth == 0 => {
+                close = Some(j);
+                break;
+            }
+            b')' => depth -= 1,
+            _ => {}
+        }
+        j += 1;
+    }
+    let close = close?;
+    let inner = &text[start..close];
+    let lead = inner.len() - inner.trim_start().len();
+    let dest_start = start + lead;
+    let mut dest_end = start + inner.trim_end().len();
+    if dest_start >= dest_end || bytes[dest_start] == b'<' {
+        return None;
+    }
+    // A title at the end: ` "..."`, ` '...'` or ` (...)`.
+    let body = &text[dest_start..dest_end];
+    let last = body.as_bytes()[body.len() - 1];
+    let opener = match last {
+        b'"' => Some('"'),
+        b'\'' => Some('\''),
+        b')' => Some('('),
+        _ => None,
+    };
+    if let Some(opener) = opener
+        && let Some(o) = body[..body.len() - 1].rfind(opener)
+        && o > 0
+        && body.as_bytes()[o - 1].is_ascii_whitespace()
+    {
+        dest_end = dest_start + body[..o].trim_end().len();
+    }
+    Some(Destination { range: dest_start..dest_end, close })
+}
+
+/// Whether a destination has spaces that CommonMark doesn't take (and no
+/// angle brackets the wrapping would clash with).
+fn is_spaced(dest: &str) -> bool {
+    dest.contains(' ') && !dest.contains(['<', '>'])
 }
 
 /// Whether `]` at `close` has an unescaped `[` before it on its line.
@@ -487,7 +611,7 @@ fn has_opening_bracket(text: &str, close: usize) -> bool {
 fn code_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut code_block: Option<usize> = None;
-    for (event, range) in Parser::new_ext(text, options()).into_offset_iter() {
+    for (event, range) in parse_events(text) {
         match event {
             Event::Start(Tag::CodeBlock(_)) => code_block = Some(range.start),
             Event::End(TagEnd::CodeBlock) => {
@@ -1212,6 +1336,41 @@ mod tests {
         assert_eq!(sources(text), vec!["[assets](My Page.assets)", "![x](My Page.assets/a b.png \"t\") `[c](d e)`"]);
         let code = doc.events.iter().find_map(|(e, r)| matches!(e, Event::Code(_)).then(|| r.clone())).unwrap();
         assert_eq!(&text[code], "`[c](d e)`");
+    }
+
+    #[test]
+    fn code_is_looked_for_only_when_a_destination_may_have_spaces() {
+        let plain = "[a](http://x.y/z) and `[c](d)` and ![i](p.png \"a title\")\n";
+        assert!(!may_have_spaced_destinations(plain));
+        assert!(spaced_destinations(plain).is_empty());
+        // In code only: looked for, and none found.
+        let in_code = "x `[c](d e)` y\n\n```\n[a](b c)\n```\n";
+        assert!(may_have_spaced_destinations(in_code));
+        assert!(spaced_destinations(in_code).is_empty());
+        let spaced = "[a](http://x.y) then [b](My Page.md)\n";
+        assert!(may_have_spaced_destinations(spaced));
+        assert_eq!(spaced_destinations(spaced).iter().map(|r| &spaced[r.clone()]).collect::<Vec<_>>(), ["My Page.md"]);
+    }
+
+    #[test]
+    fn front_matter_is_taken_at_the_start_of_a_page_only() {
+        let kinds = |text: &str| Document::parse(text).blocks.into_iter().map(|b| b.kind).collect::<Vec<_>>();
+        assert_eq!(kinds("---\ntitle: x\n---\n\n# H\n")[0], BlockKind::FrontMatter);
+        // Further down, `---` lines are rules and setext underlines.
+        let below = kinds("Intro\n\n---\ntitle\n---\n");
+        assert!(!below.contains(&BlockKind::FrontMatter), "{below:?}");
+        assert_eq!(below, [BlockKind::Paragraph, BlockKind::ThematicBreak, BlockKind::Heading(2)]);
+        // At the start, the events are pulldown-cmark's own.
+        for text in ["---\na: b\r\nc: d\n---\n\n# H\n", "---\na\n...  \npara\n", "---  \nx\n---"] {
+            let theirs: Vec<_> = Parser::new_ext(text, options() | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS)
+                .into_offset_iter()
+                .map(|(e, r)| (e.into_static(), r))
+                .collect();
+            assert_eq!(Document::parse(text).events, theirs, "{text:?}");
+        }
+        // Not front matter: a blank first line, nothing closing it.
+        assert!(!kinds("---\n\nx\n---\n").contains(&BlockKind::FrontMatter));
+        assert!(!kinds("---\nx\ny\n").contains(&BlockKind::FrontMatter));
     }
 
     #[test]
