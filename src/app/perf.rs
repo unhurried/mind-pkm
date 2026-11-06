@@ -560,6 +560,19 @@ fn scrolling_the_map_tells_where_it_is_only_now_and_then() {
 fn ctrl_wheel_zooms_at_the_pointer_after_scrolling() {
     let mut b = Bench::new(10, 1);
     let main = b.app.main_window;
+    // The point stays in place only as far as the map can scroll, and how wide
+    // the generated map is depends on the widths of the system's fonts: with
+    // Windows' fonts it is still narrower than the window one step zoomed in,
+    // so it cannot scroll sideways at all. A chain of nodes under the root,
+    // whose gaps alone are wider than the window, makes it wide everywhere.
+    b.app.doc.as_mut().expect("the map").change(|map| {
+        let mut parent = map.root();
+        for _ in 0..40 {
+            parent = map.add_child(parent, "w");
+        }
+    });
+    b.app.relayout();
+    b.rebuild();
     let at = Point::new(700.0, 400.0);
     let _ = b.messages(main, moved(at), at, false);
     for _ in 0..7 {
@@ -584,6 +597,10 @@ fn ctrl_wheel_zooms_at_the_pointer_after_scrolling() {
     // the wheel, it would be hundreds of pixels away).
     let margin = Vector::new(40.0, 40.0);
     let expected = margin + (before - margin) * (zoomed / zoom);
+    // The map can be scrolled as far to the right as that takes.
+    let (bounds, content, _) = b.shown(main).scrollables[&widget::Id::new(MAP_SCROLL_ID)];
+    let needed = expected.x - (at.x - bounds.x);
+    assert!(content.width - bounds.width > needed, "{content:?} in {bounds:?} cannot scroll {needed} sideways");
     assert!((after.x - expected.x).abs() < 8.0 && (after.y - expected.y).abs() < 8.0, "{after:?}, not {expected:?}");
 }
 

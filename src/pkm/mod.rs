@@ -182,14 +182,19 @@ pub fn todo_item_text(item: &str, page: &str) -> String {
     format!("{item}{}", todo_item_suffix(page))
 }
 
-/// Points the root > ToDo items copied from the page `old_name` (linking
-/// `<docDir>/<old_name>.md`) at its new name; the next refresh would otherwise
-/// drop them as items of a page that no longer exists.
+/// Points the ToDo items copied from the page `old_name` (linking
+/// `<docDir>/<old_name>.md`) at its new name: the children of root > ToDo,
+/// which the next refresh would otherwise drop as items of a page that no
+/// longer exists, and those of ToDo > Due Today and Past Due, which would
+/// otherwise link the old file until the refresh fills them again.
 pub fn rename_todo_items(map: &mut MindMap, doc_dir: &Path, old_name: &str, new_name: &str) {
     let Some(todo) = map.find_child_by_text(map.root(), TODO_NODE_NAME) else { return };
     let old_file = page_file(doc_dir, old_name);
     let old_suffix = todo_item_suffix(old_name);
-    for item in map.children(todo) {
+    let collections = [DUE_TODAY_NODE_NAME, PAST_DUE_NODE_NAME].map(|name| map.find_child_by_text(todo, name));
+    let items: Vec<NodeId> =
+        std::iter::once(todo).chain(collections.into_iter().flatten()).flat_map(|n| map.children(n)).collect();
+    for item in items {
         if !map.link_file(item).is_some_and(|f| paths::same_file(&f, &old_file)) {
             continue;
         }
@@ -449,6 +454,40 @@ mod tests {
         rename_todo_items(&mut f.map, &f.doc_dir.clone(), "Old", "New");
         assert_eq!(f.map.text(item), "do it (New)");
         assert!(paths::same_file(&f.map.link_file(item).unwrap(), &page_file(&f.doc_dir, "New")));
+    }
+
+    #[test]
+    fn renames_due_today_and_past_due_items() {
+        let mut f = Fixture::new();
+        let todo = f.todo;
+        let due_today = f.add_child(todo, DUE_TODAY_NODE_NAME);
+        let past_due = f.add_child(todo, PAST_DUE_NODE_NAME);
+        let today = f.add_page_node(due_today, "Old");
+        f.map.set_text(today, "26/11/06 send it (Old)");
+        let past = f.add_page_node(past_due, "Old");
+        f.map.set_text(past, "26/11/01 share it (Old)");
+        let other = f.add_page_node(past_due, "Other");
+        f.map.set_text(other, "26/11/02 keep it (Other)");
+        rename_todo_items(&mut f.map, &f.doc_dir.clone(), "Old", "New");
+        let new_page = page_file(&f.doc_dir, "New");
+        assert_eq!(f.map.text(today), "26/11/06 send it (New)");
+        assert!(paths::same_file(&f.map.link_file(today).unwrap(), &new_page));
+        assert_eq!(f.map.text(past), "26/11/01 share it (New)");
+        assert!(paths::same_file(&f.map.link_file(past).unwrap(), &new_page));
+        assert_eq!(f.map.text(other), "26/11/02 keep it (Other)");
+        assert!(paths::same_file(&f.map.link_file(other).unwrap(), &page_file(&f.doc_dir, "Other")));
+    }
+
+    #[test]
+    fn renaming_todo_items_leaves_other_nodes_under_todo_alone() {
+        let mut f = Fixture::new();
+        let todo = f.todo;
+        let group = f.add_child(todo, "Someday");
+        let mine = f.add_page_node(group, "Old");
+        f.map.set_text(mine, "later (Old)");
+        rename_todo_items(&mut f.map, &f.doc_dir.clone(), "Old", "New");
+        assert_eq!(f.map.text(mine), "later (Old)");
+        assert!(paths::same_file(&f.map.link_file(mine).unwrap(), &page_file(&f.doc_dir, "Old")));
     }
 
     #[test]

@@ -461,6 +461,21 @@ mod tests {
     }
 
     #[test]
+    fn rename_page_renames_its_past_due_items() {
+        let mut f = Fixture::new();
+        let root = f.map.root();
+        f.write_page("Task", "### Next Steps\n\n* 24/05/09 pay the bill\n");
+        let n = f.add_page_node(root, "Task");
+        let todo = f.todo;
+        let past_due = f.add_child(todo, PAST_DUE_NODE_NAME);
+        let item = f.add_page_node(past_due, "Task");
+        f.map.set_text(item, "24/05/09 pay the bill (Task)");
+        rename(&mut f.map, n, DocType::Page, "Chores").unwrap();
+        assert_eq!(f.map.text(item), "24/05/09 pay the bill (Chores)");
+        assert!(paths::same_file(&f.map.link_file(item).unwrap(), &page_file(&f.doc_dir, "Chores")));
+    }
+
+    #[test]
     fn rename_refuses_conflicts_and_bad_names() {
         let mut f = Fixture::new();
         let root = f.map.root();
