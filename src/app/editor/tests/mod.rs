@@ -10,7 +10,7 @@ use super::{
 };
 use crate::app::command::Command;
 use crate::app::dialog::Dialog;
-use crate::app::test_support::{key_event, send, typing_event};
+use crate::app::test_support::{key_event, remove_in_temp, send, typing_event};
 use crate::app::{AfterUnsaved, App, MapMsg, Message, WindowEvent};
 use crate::mindmap::NodeId;
 use crate::pkm::testutil::Fixture;
@@ -37,7 +37,7 @@ fn app_with_page(text: &str) -> (App, Fixture, NodeId, PathBuf) {
     let root = f.map.root();
     let page = f.write_page("Plan", text);
     let node = f.add_page_node(root, "Plan");
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.set_doc(f.map.clone(), None);
     app.doc.as_mut().unwrap().select(vec![node]);
     (app, f, node, page)

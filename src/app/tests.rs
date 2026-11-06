@@ -4,7 +4,7 @@
 use super::command::Command;
 use super::dialog::Dialog;
 use super::file::{AfterUnsaved, FileAction};
-use super::test_support::{key_event, send, type_node_text};
+use super::test_support::{key_event, remove_in_temp, send, type_node_text};
 use super::{App, MapMsg, settings};
 use crate::mindmap::MindMap;
 use crate::pkm::filter::Filter;
@@ -13,7 +13,7 @@ use crate::pkm::testutil::Fixture;
 use iced::keyboard::{Key, Modifiers, key::Named};
 
 fn app_with(map: MindMap) -> App {
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.set_doc(map, None);
     app
 }
@@ -302,7 +302,7 @@ fn a_markdown_file_chosen_in_file_open_uses_the_built_in_editor_even_when_it_is_
 #[test]
 fn started_with_a_markdown_file_only_its_editor_window_opens() {
     let (_dir, notes) = markdown_file();
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.start(Some(notes.clone()), super::INITIAL_WINDOW);
     assert!(app.editors_only, "no map window");
     assert!(app.doc.is_none());
@@ -314,7 +314,7 @@ fn started_with_a_markdown_file_only_its_editor_window_opens() {
 #[test]
 fn started_with_a_markdown_file_it_uses_the_built_in_editor_even_when_it_is_turned_off() {
     let (_dir, notes) = markdown_file();
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     app.editor_prefs.builtin = false;
     let _ = app.start(Some(notes.clone()), super::INITIAL_WINDOW);
     assert!(app.editors_only);
@@ -324,7 +324,7 @@ fn started_with_a_markdown_file_it_uses_the_built_in_editor_even_when_it_is_turn
 #[test]
 fn started_with_a_markdown_file_that_cannot_be_opened_it_starts_as_usual_and_says_why() {
     let dir = tempfile::tempdir().unwrap();
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.start(Some(dir.path().join("Gone.md")), super::INITIAL_WINDOW);
     assert!(!app.editors_only, "the map window opens");
     assert!(app.editors.is_empty());
@@ -340,7 +340,7 @@ fn started_with_a_map_file_it_shows_the_map() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("notes.mm");
     MindMap::new("root").save(&path).unwrap();
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.start(Some(path.clone()), super::INITIAL_WINDOW);
     assert!(!app.editors_only);
     assert!(app.editors.is_empty());
@@ -546,7 +546,7 @@ fn a_map_opens_as_it_was_last_shown() {
     assert_eq!(path, f.dir.path().join("map.mm"));
     assert_eq!(view.zoom, 1.25);
 
-    let mut reopened = App::new();
+    let mut reopened = App::new(remove_in_temp);
     let _ = reopened.set_doc(f.map.clone(), Some(view.clone()));
     let doc = reopened.doc.as_ref().unwrap();
     assert_eq!((doc.selection().to_vec(), doc.focus()), (vec![c, b], b));
@@ -557,12 +557,12 @@ fn a_map_opens_as_it_was_last_shown() {
     let mut gone = f.map.clone();
     gone.delete(b);
     gone.delete(c);
-    let mut reopened = App::new();
+    let mut reopened = App::new(remove_in_temp);
     let _ = reopened.set_doc(gone, Some(view.clone()));
     assert_eq!(reopened.doc.as_ref().unwrap().focus(), root);
     let mut folded = f.map.clone();
     folded.set_folded(a, true);
-    let mut reopened = App::new();
+    let mut reopened = App::new(remove_in_temp);
     let _ = reopened.set_doc(folded, Some(view));
     assert_eq!(reopened.doc.as_ref().unwrap().focus(), a);
 }
@@ -724,6 +724,28 @@ fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
         assert!(app.dialogs.is_empty());
         assert_eq!(root_texts(&app), vec!["c"]);
     }
+}
+
+#[test]
+fn deleting_a_page_removes_its_files_with_the_remover_of_the_application() {
+    let mut f = Fixture::new();
+    let root = f.map.root();
+    let page = f.write_page("Plan", "x\n");
+    let node = f.add_page_node(root, "Plan");
+    // A remover that fails: the page and its node stay, and the user is told.
+    let mut app = App::new(|_| Err("in use".into()));
+    let _ = app.set_doc(f.map.clone(), None);
+    app.doc.as_mut().unwrap().select(vec![node]);
+    press_ctrl(&mut app, Named::F11);
+    assert!(page.exists());
+    assert!(map(&app).exists(node));
+    assert!(matches!(app.dialogs.front(), Some(Dialog::Message(m)) if m == "failed to delete page: Plan"));
+    // The remover of the tests removes it in the temporary directory.
+    send(&mut app, MapMsg::DialogOk);
+    app.remover = remove_in_temp;
+    press_ctrl(&mut app, Named::F11);
+    assert!(!page.exists());
+    assert!(!map(&app).exists(node));
 }
 
 #[test]

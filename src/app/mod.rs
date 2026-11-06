@@ -307,26 +307,24 @@ pub struct App {
     status: Status,
     /// A node drag, armed by a press on a selected node.
     drag: Option<NodeDrag>,
-    /// Removes what the editors' assets panes delete: to the Recycle Bin.
-    asset_remover: fn(&[PathBuf]) -> Result<(), String>,
+    /// Removes every file the application deletes: the pages and directories
+    /// of PKM Delete and the items the editors' assets panes delete.
+    remover: Remover,
 }
 
-/// Moves files to the Recycle Bin; in tests, which work in temporary
-/// directories, removes them.
+/// Removes files the application deletes (after the checks that keep them
+/// inside the document directory): `recycle` in the running application,
+/// `test_support::remove_in_temp` in tests.
+type Remover = fn(&[PathBuf]) -> Result<(), String>;
+
+/// Moves files to the Recycle Bin: the remover of the running application.
 fn recycle(files: &[PathBuf]) -> Result<(), String> {
-    if cfg!(test) {
-        for f in files {
-            let removed = if f.is_dir() { std::fs::remove_dir_all(f) } else { std::fs::remove_file(f) };
-            removed.map_err(|e| e.to_string())?;
-        }
-        return Ok(());
-    }
     trash::delete_all(files).map_err(|e| e.to_string())
 }
 
 impl App {
     fn boot(initial: Option<PathBuf>, window: WindowGeometry) -> (Self, Task<Message>) {
-        let mut app = App::new();
+        let mut app = App::new(recycle);
         app.editor_prefs = EditorPrefs::load();
         let task = app.start(initial, window);
         (app, task)
@@ -364,8 +362,9 @@ impl App {
         Task::batch([opened.discard(), task])
     }
 
-    /// The application without a map, before anything is opened.
-    fn new() -> Self {
+    /// The application without a map, before anything is opened, deleting
+    /// files with `remover`.
+    fn new(remover: Remover) -> Self {
         App {
             main_window: window::Id::unique(),
             editors_only: false,
@@ -390,7 +389,7 @@ impl App {
             clipboard: None,
             status: Status::default(),
             drag: None,
-            asset_remover: recycle,
+            remover,
         }
     }
 

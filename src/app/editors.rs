@@ -86,7 +86,7 @@ impl App {
                 Task::none()
             }
             Effect::DeleteAsset(path) => {
-                let remove = self.asset_remover;
+                let remove = self.remover;
                 let result = self.asset_doc_dir(&path).and_then(|d| pkm::assets::delete(&path, &d, &mut |f| remove(f)));
                 if let Some(editor) = self.editors.get_mut(&id) {
                     match result {

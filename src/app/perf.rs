@@ -15,7 +15,7 @@
 use super::command::Command;
 use super::editor::{Bind, EditorMsg};
 use super::profile::{self, Phase};
-use super::test_support::{headless_renderer, key_event};
+use super::test_support::{headless_renderer, key_event, remove_in_temp};
 use super::viewport::NEAR_MARGIN;
 use super::{App, MAP_SCROLL_ID, MapMsg, Message, WindowEvent};
 use crate::mindmap::NodeId;
@@ -168,7 +168,7 @@ impl Bench {
         let root = f.map.root();
         f.write_page("Bench", &long_page(sections));
         let page = f.add_page_node(root, "Bench");
-        let mut app = App::new();
+        let mut app = App::new(remove_in_temp);
         let _ = app.set_doc(f.map.clone(), None);
         app.doc.as_mut().unwrap().select(vec![page]);
         let _ = app.update(MapMsg::WindowResized(WINDOW).into());

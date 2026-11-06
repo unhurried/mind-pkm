@@ -142,10 +142,9 @@ impl App {
             self.message(e);
             return Task::none();
         }
+        let remove = self.remover;
         let Some(doc) = &mut self.doc else { return Task::none() };
-        let delete = |map: &mut MindMap| {
-            commands::delete_execute(map, targets, &mut |files| trash::delete_all(files).map_err(|e| e.to_string()))
-        };
+        let delete = |map: &mut MindMap| commands::delete_execute(map, targets, &mut |files| remove(files));
         // An undo step only when a node went; the selection moves next to it.
         let went = |before: &MindMap, after: &MindMap, _: &_| {
             targets.iter().any(|&(n, _)| before.exists(n) && !after.exists(n))

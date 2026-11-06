@@ -53,7 +53,7 @@ The Rust toolchain is pinned in `rust-toolchain.toml` (CI reads it too); bump it
 
 ## Guardrails (never)
 
-- Never remove, move or overwrite anything outside the document directory, nor the document directory itself. Paths built from node text must pass `paths::is_strictly_inside` (a node is a page/directory node only then), and deleting goes through `commands::delete_execute`, which checks again and takes the remover as a parameter: the app moves files to the Recycle Bin, tests remove them inside a temporary directory - never the real trash. `delete_never_leaves_the_document_directory` must keep passing; extend it rather than weaken it.
+- Never remove, move or overwrite anything outside the document directory, nor the document directory itself. Paths built from node text must pass `paths::is_strictly_inside` (a node is a page/directory node only then), and deleting goes through `commands::delete_execute`, which checks again and takes the remover as a parameter. Every deletion of the app (PKM Delete, the assets pane) uses the one remover `App::new` is given: `recycle` (to the Recycle Bin) when the app runs, `test_support::remove_in_temp` in tests, which removes files only inside the temporary directory - never the real trash. `delete_never_leaves_the_document_directory` must keep passing; extend it rather than weaken it.
 - Never change the `.mm` reader/writer without the byte-for-byte round-trip test passing, and never reword a ported command's message.
 - Never skip, ignore or loosen a test, lint or `openspec validate` to get to green; fix the cause.
 
