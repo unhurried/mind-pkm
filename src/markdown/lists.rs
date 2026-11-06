@@ -181,7 +181,12 @@ pub fn tidy(text: &str, changed: Range<usize>) -> (String, Shift) {
 /// `tidy`, with the parse of the text it gives (so that it need not be
 /// parsed again).
 pub fn tidy_parsed(text: &str, changed: Range<usize>) -> (Document, Shift) {
-    let mut doc = Document::parse(text);
+    tidy_from(Document::parse(text), changed)
+}
+
+/// `tidy_parsed` for the text `doc` is the parse of (parsed in part from the
+/// parse of the text before an edit, say: `Document::reparse`).
+pub fn tidy_from(mut doc: Document, changed: Range<usize>) -> (Document, Shift) {
     let targets: Vec<(usize, usize)> = doc
         .lists
         .iter()

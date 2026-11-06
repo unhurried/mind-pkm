@@ -349,8 +349,10 @@ impl Page {
         result
     }
 
+    /// Parses the text again - in part, around where it changed, when that
+    /// gives the same (`Document::reparse`).
     fn reparse(&mut self) {
-        self.doc = Document::parse_masked(&self.text, self.tentative);
+        self.doc = std::mem::take(&mut self.doc).reparse(&self.text, self.tentative);
         self.revision += 1;
     }
 
@@ -1129,7 +1131,10 @@ impl Page {
         } else if !tidy {
             (self.untidy, self.deferred) = (false, None);
         } else if edited.pending.is_none() {
-            let (doc, shift) = lists::tidy_parsed(&edited.text, lists::changed(&self.text, &edited.text));
+            let changed = lists::changed(&self.text, &edited.text);
+            // The edited text parsed in part, from the parse before the edit.
+            let edited_doc = std::mem::take(&mut self.doc).reparse(&edited.text, None);
+            let (doc, shift) = lists::tidy_from(edited_doc, changed);
             edited.sel = Sel { anchor: shift.map(edited.sel.anchor), head: shift.map(edited.sel.head) };
             edited.text = doc.text.clone();
             parsed = Some(doc);
