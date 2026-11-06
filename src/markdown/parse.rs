@@ -398,69 +398,103 @@ fn lenient_links(text: &str) -> Prepared {
 /// The destinations with spaces of `[...](...)` that CommonMark doesn't take
 /// as links, outside code.
 fn spaced_destinations(text: &str) -> Vec<Range<usize>> {
-    if !text.contains("](") {
+    // Where code is takes a parse of its own: looked for only when a link may
+    // have a destination with spaces - most pages have none.
+    if !may_have_spaced_destinations(text) {
         return Vec::new();
     }
+    let spaced = |d: &Destination| is_spaced(&text[d.range.clone()]);
     let code = code_ranges(text);
     let in_code = |i: usize| code.iter().any(|r| r.contains(&i));
-    let bytes = text.as_bytes();
     let mut found = Vec::new();
     let mut search = 0;
     while let Some(i) = text[search..].find("](").map(|i| i + search) {
         search = i + 2;
-        if in_code(i) || !has_opening_bracket(text, i) {
+        if in_code(i) {
             continue;
         }
-        let line_end = text[i..].find('\n').map_or(text.len(), |e| i + e);
-        // The parenthesized part, parentheses balanced, on the same line.
-        let start = i + 2;
-        let mut depth = 0;
-        let mut close = None;
-        let mut j = start;
-        while j < line_end {
-            match bytes[j] {
-                b'\\' => j += 1,
-                b'(' => depth += 1,
-                b')' if depth == 0 => {
-                    close = Some(j);
-                    break;
-                }
-                b')' => depth -= 1,
-                _ => {}
-            }
-            j += 1;
+        let Some(d) = destination(text, i) else { continue };
+        if spaced(&d) {
+            found.push(d.range);
         }
-        let Some(close) = close else { continue };
-        let inner = &text[start..close];
-        let lead = inner.len() - inner.trim_start().len();
-        let dest_start = start + lead;
-        let mut dest_end = start + inner.trim_end().len();
-        if dest_start >= dest_end || bytes[dest_start] == b'<' {
-            continue;
-        }
-        // A title at the end: ` "..."`, ` '...'` or ` (...)`.
-        let body = &text[dest_start..dest_end];
-        let last = body.as_bytes()[body.len() - 1];
-        let opener = match last {
-            b'"' => Some('"'),
-            b'\'' => Some('\''),
-            b')' => Some('('),
-            _ => None,
-        };
-        if let Some(opener) = opener
-            && let Some(o) = body[..body.len() - 1].rfind(opener)
-            && o > 0
-            && body.as_bytes()[o - 1].is_ascii_whitespace()
-        {
-            dest_end = dest_start + body[..o].trim_end().len();
-        }
-        let dest = &text[dest_start..dest_end];
-        if dest.contains(' ') && !dest.contains(['<', '>']) {
-            found.push(dest_start..dest_end);
-        }
-        search = close;
+        search = d.close;
     }
     found
+}
+
+/// Whether a link, taken on its own (in code or not, wherever the links
+/// before it end), has a destination with spaces: `spaced_destinations`
+/// finds some only then.
+fn may_have_spaced_destinations(text: &str) -> bool {
+    text.match_indices("](").any(|(i, _)| destination(text, i).is_some_and(|d| is_spaced(&text[d.range])))
+}
+
+/// The destination of a link whose `](` is at `i`.
+struct Destination {
+    /// The destination, without the title.
+    range: Range<usize>,
+    /// Where the `)` closing the link is.
+    close: usize,
+}
+
+/// The destination of the link whose `](` is at `i`: the parenthesized part,
+/// parentheses balanced, on the same line, without a title at its end. None
+/// when the `]` has no `[` before it, nothing closes the parentheses, or the
+/// destination is empty or in angle brackets.
+fn destination(text: &str, i: usize) -> Option<Destination> {
+    if !has_opening_bracket(text, i) {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let line_end = text[i..].find('\n').map_or(text.len(), |e| i + e);
+    let start = i + 2;
+    let mut depth = 0;
+    let mut close = None;
+    let mut j = start;
+    while j < line_end {
+        match bytes[j] {
+            b'\\' => j += 1,
+            b'(' => depth += 1,
+            b')' if depth == 0 => {
+                close = Some(j);
+                break;
+            }
+            b')' => depth -= 1,
+            _ => {}
+        }
+        j += 1;
+    }
+    let close = close?;
+    let inner = &text[start..close];
+    let lead = inner.len() - inner.trim_start().len();
+    let dest_start = start + lead;
+    let mut dest_end = start + inner.trim_end().len();
+    if dest_start >= dest_end || bytes[dest_start] == b'<' {
+        return None;
+    }
+    // A title at the end: ` "..."`, ` '...'` or ` (...)`.
+    let body = &text[dest_start..dest_end];
+    let last = body.as_bytes()[body.len() - 1];
+    let opener = match last {
+        b'"' => Some('"'),
+        b'\'' => Some('\''),
+        b')' => Some('('),
+        _ => None,
+    };
+    if let Some(opener) = opener
+        && let Some(o) = body[..body.len() - 1].rfind(opener)
+        && o > 0
+        && body.as_bytes()[o - 1].is_ascii_whitespace()
+    {
+        dest_end = dest_start + body[..o].trim_end().len();
+    }
+    Some(Destination { range: dest_start..dest_end, close })
+}
+
+/// Whether a destination has spaces that CommonMark doesn't take (and no
+/// angle brackets the wrapping would clash with).
+fn is_spaced(dest: &str) -> bool {
+    dest.contains(' ') && !dest.contains(['<', '>'])
 }
 
 /// Whether `]` at `close` has an unescaped `[` before it on its line.
@@ -1212,6 +1246,20 @@ mod tests {
         assert_eq!(sources(text), vec!["[assets](My Page.assets)", "![x](My Page.assets/a b.png \"t\") `[c](d e)`"]);
         let code = doc.events.iter().find_map(|(e, r)| matches!(e, Event::Code(_)).then(|| r.clone())).unwrap();
         assert_eq!(&text[code], "`[c](d e)`");
+    }
+
+    #[test]
+    fn code_is_looked_for_only_when_a_destination_may_have_spaces() {
+        let plain = "[a](http://x.y/z) and `[c](d)` and ![i](p.png \"a title\")\n";
+        assert!(!may_have_spaced_destinations(plain));
+        assert!(spaced_destinations(plain).is_empty());
+        // In code only: looked for, and none found.
+        let in_code = "x `[c](d e)` y\n\n```\n[a](b c)\n```\n";
+        assert!(may_have_spaced_destinations(in_code));
+        assert!(spaced_destinations(in_code).is_empty());
+        let spaced = "[a](http://x.y) then [b](My Page.md)\n";
+        assert!(may_have_spaced_destinations(spaced));
+        assert_eq!(spaced_destinations(spaced).iter().map(|r| &spaced[r.clone()]).collect::<Vec<_>>(), ["My Page.md"]);
     }
 
     #[test]
