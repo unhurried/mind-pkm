@@ -53,7 +53,9 @@ impl Editor {
         Some(state.range.unwrap_or(CellRange::new(state.cell, state.cell)))
     }
 
-    /// A table command; `false` when the cursor is not in a table.
+    /// Runs a command as a table does, when the cursor is in one: the table's
+    /// own commands, and selecting a row or a cell's text. `false` when the
+    /// cursor is not in a table, or the command works there as everywhere else.
     pub(super) fn table_command(&mut self, cmd: EditorCommand) -> bool {
         use EditorCommand as C;
         let Some(cells) = self.cells() else { return false };
@@ -112,7 +114,55 @@ impl Editor {
                 }
                 self.page.perform(Action::SelectAll);
             }
-            _ => return false,
+            // These work in a table as everywhere else.
+            C::Open
+            | C::Save
+            | C::ExportHtml
+            | C::ExportPdf
+            | C::Close
+            | C::Undo
+            | C::Redo
+            | C::Cut
+            | C::Copy
+            | C::CopyMarkdown
+            | C::Paste
+            | C::PastePlain
+            | C::SelectAll
+            | C::SelectWord
+            | C::Find
+            | C::Replace
+            | C::FindNext
+            | C::FindPrevious
+            | C::ClearFormatting
+            | C::ToggleAutoPair
+            | C::Heading(_)
+            | C::Paragraph
+            | C::HeadingUp
+            | C::HeadingDown
+            | C::InsertTable
+            | C::CodeBlock
+            | C::MathBlock
+            | C::Quote
+            | C::OrderedList
+            | C::BulletList
+            | C::HorizontalRule
+            | C::Bold
+            | C::Italic
+            | C::Underline
+            | C::Code
+            | C::Strikethrough
+            | C::Highlight
+            | C::InlineMath
+            | C::Link
+            | C::Image
+            | C::SourceMode
+            | C::Outline
+            | C::Assets
+            | C::FullScreen
+            | C::ZoomIn
+            | C::ZoomOut
+            | C::ZoomReset
+            | C::DarkTheme => return false,
         }
         true
     }

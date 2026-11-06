@@ -6,7 +6,7 @@
 //! On top of what the parser reports, this recognizes Typora's `==highlight==`,
 //! `:emoji:` shortcodes, bare URLs, and a subset of inline HTML.
 
-use super::parse::Document;
+use super::parse::{Document, Events, matching_end};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Tag, TagEnd};
 use std::ops::Range;
 
@@ -203,8 +203,6 @@ pub enum Node {
     Footnote { number: usize, children: Vec<Node> },
 }
 
-type Events = [(Event<'static>, Range<usize>)];
-
 /// The nodes of a block's events (or any slice of complete elements, with
 /// inline events at its top making up a paragraph).
 pub fn nodes(doc: &Document, events: &Events) -> Vec<Node> {
@@ -317,23 +315,6 @@ fn is_block_tag(tag: &Tag) -> bool {
             | Tag::DefinitionListTitle
             | Tag::DefinitionListDefinition
     )
-}
-
-fn matching_end(events: &Events, start: usize) -> usize {
-    let mut depth = 0;
-    for (i, (event, _)) in events.iter().enumerate().skip(start) {
-        match event {
-            Event::Start(_) => depth += 1,
-            Event::End(_) => {
-                depth -= 1;
-                if depth == 0 {
-                    return i;
-                }
-            }
-            _ => {}
-        }
-    }
-    events.len().saturating_sub(1)
 }
 
 fn code_text(events: &Events) -> String {

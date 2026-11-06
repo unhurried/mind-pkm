@@ -1354,7 +1354,22 @@ impl Editor {
                 effects.push(Effect::SetPrefs(EditorPrefs { dark: !prefs.dark, ..prefs.clone() }));
                 Task::none()
             }
-            _ => Task::none(),
+            // The table's commands do nothing outside a table and in the
+            // source mode; in a table, `table_command` ran them above.
+            C::RowAbove
+            | C::RowBelow
+            | C::DeleteRow
+            | C::ColumnLeft
+            | C::ColumnRight
+            | C::DeleteColumn
+            | C::MoveRowUp
+            | C::MoveRowDown
+            | C::MoveColumnLeft
+            | C::MoveColumnRight
+            | C::AlignLeft
+            | C::AlignCenter
+            | C::AlignRight
+            | C::DeleteTable => Task::none(),
         }
     }
 

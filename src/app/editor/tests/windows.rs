@@ -23,7 +23,7 @@ fn pages_open_in_the_editor_unless_it_is_turned_off() {
     assert!(!opens_in_editor(&md, false));
     assert!(!opens_in_editor(&dir.path().join("a.pdf"), true));
     assert!(!opens_in_editor(dir.path(), true));
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     assert!(app.editor_prefs.builtin);
     send(&mut app, MapMsg::Command(Command::ToggleBuiltinEditor));
     assert!(!app.editor_prefs.builtin);
@@ -221,7 +221,7 @@ fn started_with_notes(text: &str) -> (App, tempfile::TempDir, window::Id, PathBu
     let (notes, other) = (dir.path().join("Notes.md"), dir.path().join("Other.md"));
     std::fs::write(&notes, text).unwrap();
     std::fs::write(&other, "x").unwrap();
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.start(Some(notes), crate::app::INITIAL_WINDOW);
     let id = *app.editors.keys().next().expect("an editor window");
     (app, dir, id, other)

@@ -75,7 +75,7 @@ fn renaming_a_directory_keeps_the_undo_of_an_open_page() {
     std::fs::create_dir(f.doc_dir.join("Area")).unwrap();
     let page = f.doc_dir.join("Area").join("Note.md");
     crate::markdown::page::write_page(&page, "note\n").unwrap();
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.set_doc(f.map.clone(), None);
     app.doc.as_mut().unwrap().select(vec![dir]);
     let _ = app.open_page(&page);
@@ -97,7 +97,7 @@ fn pages_in_a_renamed_directory_follow_it() {
     std::fs::create_dir(f.doc_dir.join("Area")).unwrap();
     let page = f.doc_dir.join("Area").join("Note.md");
     crate::markdown::page::write_page(&page, "note\n").unwrap();
-    let mut app = App::new();
+    let mut app = App::new(remove_in_temp);
     let _ = app.set_doc(f.map.clone(), None);
     app.doc.as_mut().unwrap().select(vec![dir]);
     let _ = app.open_page(&page);
@@ -126,16 +126,20 @@ fn add_assets_saves_the_open_page_and_reloads_it() {
 }
 
 #[test]
-fn the_editors_of_deleted_pages_close() {
-    // The deletion itself moves files to the Recycle Bin; here the file is
-    // removed in the temporary directory, around the editor's part.
-    let (mut app, _f, _, page) = app_with_page("x\n");
+fn deleting_an_open_page_saves_it_first_and_closes_its_editor() {
+    /// What the application moves to the Recycle Bin is the page with its changes.
+    fn remove_saved(files: &[PathBuf]) -> Result<(), String> {
+        assert_eq!(crate::markdown::page::read_page(&files[0]).unwrap(), "xy\n");
+        remove_in_temp(files)
+    }
+    let (mut app, _f, node, page) = app_with_page("x\n");
+    app.remover = remove_saved;
     let id = open_with_f1(&mut app);
     click_after(&mut app, id, "x");
     typing(&mut app, id, "y");
-    app.save_editors_of(std::slice::from_ref(&page)).unwrap();
-    assert_eq!(crate::markdown::page::read_page(&page).unwrap(), "xy\n");
-    std::fs::remove_file(&page).unwrap();
-    let _ = app.close_deleted_editors(std::slice::from_ref(&page));
+    send(&mut app, MapMsg::Key(key_event(Key::Named(Named::F11), Modifiers::empty())));
+    send(&mut app, MapMsg::DialogOk);
+    assert!(!page.exists());
+    assert!(!app.doc.as_ref().unwrap().map().exists(node));
     assert!(app.editors.is_empty());
 }

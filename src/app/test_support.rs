@@ -3,6 +3,39 @@
 use super::{App, Message};
 use iced::keyboard::key::{NativeCode, Physical};
 use iced::keyboard::{self, Key, Location, Modifiers};
+use std::path::{Path, PathBuf};
+
+/// The remover of the application in tests (`App::new`): instead of moving
+/// files to the Recycle Bin, it removes them - only inside the temporary
+/// directory, where the tests work. A file anywhere else fails the test.
+pub fn remove_in_temp(files: &[PathBuf]) -> Result<(), String> {
+    for f in files {
+        assert!(in_temp(f), "a test removes {}, which is not inside the temporary directory", f.display());
+        let removed = if f.is_dir() { std::fs::remove_dir_all(f) } else { std::fs::remove_file(f) };
+        removed.map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Whether `path` is an existing file or directory inside the temporary
+/// directory (and not that directory itself).
+fn in_temp(path: &Path) -> bool {
+    let (Ok(temp), Ok(path)) = (std::env::temp_dir().canonicalize(), path.canonicalize()) else { return false };
+    path.starts_with(&temp) && path != temp
+}
+
+#[test]
+fn the_test_remover_removes_only_inside_the_temporary_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("Plan.md");
+    std::fs::write(&file, "x\n").unwrap();
+    assert!(in_temp(&file) && in_temp(dir.path()));
+    let temp = std::env::temp_dir();
+    assert!(!in_temp(&temp) && !in_temp(temp.parent().unwrap()));
+    assert!(!in_temp(&dir.path().join("missing.md")));
+    remove_in_temp(std::slice::from_ref(&file)).unwrap();
+    assert!(!file.exists());
+}
 
 /// A renderer without a window (tiny-skia), for laying out and drawing widgets.
 pub fn headless_renderer() -> iced::Renderer {

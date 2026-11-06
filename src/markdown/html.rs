@@ -3,7 +3,7 @@
 //! editor shows (highlight, emoji, intraword sub/superscript, bare URLs,
 //! line breaks, the table of contents) are turned into HTML too.
 
-use super::parse::{BlockKind, Document};
+use super::parse::{BlockKind, Document, Events, matching_end};
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Tag, TagEnd};
 use std::ops::Range;
 
@@ -51,19 +51,19 @@ pub fn body(doc: &Document, opts: &HtmlOptions) -> String {
         let (event, range) = &all[i];
         match event {
             Event::Start(Tag::MetadataBlock(_)) => {
-                i = end_of(all, i) + 1;
+                i = matching_end(all, i) + 1;
                 continue;
             }
             Event::Start(Tag::Paragraph) if is_toc(doc, range) => {
                 events.push(Event::Html(toc_html(doc).into()));
                 toc_done = true;
-                i = end_of(all, i) + 1;
+                i = matching_end(all, i) + 1;
                 continue;
             }
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang)))
                 if lang.trim().eq_ignore_ascii_case("mermaid") =>
             {
-                let end = end_of(all, i);
+                let end = matching_end(all, i);
                 let code: String = all[i + 1..end]
                     .iter()
                     .filter_map(|(e, _)| match e {
@@ -80,7 +80,7 @@ pub fn body(doc: &Document, opts: &HtmlOptions) -> String {
             }
             Event::Start(Tag::Paragraph | Tag::Heading { .. } | Tag::TableCell | Tag::Item) => {
                 // Inline content: highlight is paired within it.
-                let end = end_of(all, i);
+                let end = matching_end(all, i);
                 events.push(event.clone());
                 inline_events(&all[i + 1..end], opts, &mut events);
                 events.push(all[end].0.clone());
@@ -129,23 +129,6 @@ fn toc_html(doc: &Document) -> String {
     out
 }
 
-fn end_of(events: &[(Event<'static>, Range<usize>)], start: usize) -> usize {
-    let mut depth = 0;
-    for (i, (e, _)) in events.iter().enumerate().skip(start) {
-        match e {
-            Event::Start(_) => depth += 1,
-            Event::End(_) => {
-                depth -= 1;
-                if depth == 0 {
-                    return i;
-                }
-            }
-            _ => {}
-        }
-    }
-    events.len() - 1
-}
-
 /// An event outside inline content.
 fn map_event(event: Event<'static>, opts: &HtmlOptions) -> Event<'static> {
     match event {
@@ -158,7 +141,7 @@ fn map_event(event: Event<'static>, opts: &HtmlOptions) -> Event<'static> {
 }
 
 /// The inline events of a paragraph, heading, list item or cell, with the editor's additions.
-fn inline_events(inner: &[(Event<'static>, Range<usize>)], opts: &HtmlOptions, out: &mut Vec<Event<'static>>) {
+fn inline_events(inner: &Events, opts: &HtmlOptions, out: &mut Vec<Event<'static>>) {
     // `==` pairs (an odd last one stays text).
     let total: usize = inner
         .iter()
