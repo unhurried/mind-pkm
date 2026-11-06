@@ -650,9 +650,10 @@ impl App {
         }
     }
 
-    /// A click selects the node; Ctrl adds or removes it, Shift adds it. A
-    /// press on a node of a multiple selection keeps the selection, so that it
-    /// can be dragged, and selects just the node if released without a drag.
+    /// A click selects the node; Ctrl adds or removes it, Shift selects the
+    /// nodes from the anchor to it (`Doc::select_range`). A press on a node of
+    /// a multiple selection keeps the selection, so that it can be dragged,
+    /// and selects just the node if released without a drag.
     fn node_clicked(&mut self, id: NodeId) {
         self.menu = None;
         self.search.focus = PanelFocus::Map;
@@ -661,7 +662,7 @@ impl App {
         if self.modifiers.control() {
             doc.toggle_selected(id);
         } else if self.modifiers.shift() {
-            doc.extend_selection(id);
+            doc.select_range(id);
         } else if doc.selection().len() > 1 && doc.selection().contains(&id) && id != doc.map().root() {
             doc.set_focus(id);
             click = Some(id);

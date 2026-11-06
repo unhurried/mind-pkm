@@ -116,7 +116,7 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 
 | Shortcut | Action |
 | --- | --- |
-| Click / Ctrl+Click / Shift+Click | Select a node / toggle it in the selection / add it to the selection |
+| Click / Ctrl+Click / Shift+Click | Select a node / toggle it in the selection / select the nodes from the last clicked one to it (the siblings between, else the shown nodes between in outline order) |
 | Right-click | A node's menu (new child / sibling, edit text, cut / copy / paste, fold, link and the PKM commands); on empty map space: paste, center, zoom and update. A node outside the selection becomes the only selected one; a selected node keeps the selection |
 | Drag empty map space | Scroll (pan) the map |
 | Drag a node onto another | Move the selected nodes: onto the middle of the target as its last child, onto its top / bottom edge before / after it (Esc cancels) |

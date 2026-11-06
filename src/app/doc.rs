@@ -42,6 +42,9 @@ pub struct Doc {
     shown: MindMap,
     /// What the layout was computed from.
     laid_out: Option<LayoutInputs>,
+    /// The anchor of the last Shift+click range, with the selection it made:
+    /// the next Shift+click starts from it while the selection is unchanged.
+    range: Option<(NodeId, Vec<NodeId>)>,
 }
 
 /// What a layout depends on: the map (its version), the filter, the margin,
@@ -97,6 +100,7 @@ impl Doc {
             redo: Vec::new(),
             serial: 0,
             laid_out: None,
+            range: None,
         }
     }
 
@@ -378,6 +382,42 @@ impl Doc {
             self.selection.push(id);
         }
         self.focus = id;
+    }
+
+    /// Selects the nodes from the anchor to `id`, both included, and focuses
+    /// `id` (Shift+click): the siblings between them if they are siblings,
+    /// else the shown nodes between them in document order. The anchor is the
+    /// one of the last range while the selection is still that range, else
+    /// the focused node.
+    pub(super) fn select_range(&mut self, id: NodeId) {
+        let (map, layout) = (&self.map, &self.layout);
+        let usable = |n: NodeId| map.exists(n) && layout.contains(n);
+        let anchor = match &self.range {
+            Some((a, range)) if *range == self.selection && usable(*a) => *a,
+            _ => self.focus,
+        };
+        if !usable(anchor) || !usable(id) {
+            self.extend_selection(id);
+            return;
+        }
+        let parent = map.parent(anchor);
+        let order = match parent {
+            Some(p) if parent == map.parent(id) => map.children(p),
+            _ => map.preorder(map.root()),
+        };
+        let order: Vec<NodeId> = order.into_iter().filter(|&n| layout.contains(n)).collect();
+        let (Some(from), Some(to)) = (order.iter().position(|&n| n == anchor), order.iter().position(|&n| n == id))
+        else {
+            self.extend_selection(id);
+            return;
+        };
+        let mut nodes: Vec<NodeId> = order[from.min(to)..=from.max(to)].to_vec();
+        if to < from {
+            // The clicked node last, so that it is the focused one.
+            nodes.reverse();
+        }
+        self.select(nodes);
+        self.range = Some((anchor, self.selection.clone()));
     }
 
     /// Adds the node to the selection, or takes it out unless it is the only

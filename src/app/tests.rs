@@ -450,6 +450,86 @@ fn up_and_down_cross_to_cousins() {
     assert_eq!(app.doc.as_ref().unwrap().focus(), a1);
 }
 
+fn click(app: &mut App, id: crate::mindmap::NodeId, modifiers: Modifiers) {
+    send(app, MapMsg::Key(iced::keyboard::Event::ModifiersChanged(modifiers)));
+    send(app, MapMsg::NodeClicked(id));
+    send(app, MapMsg::NodeDragEnd);
+    send(app, MapMsg::Key(iced::keyboard::Event::ModifiersChanged(Modifiers::empty())));
+}
+
+fn selected(app: &App) -> (Vec<crate::mindmap::NodeId>, crate::mindmap::NodeId) {
+    let doc = app.doc.as_ref().unwrap();
+    (doc.selection().to_vec(), doc.focus())
+}
+
+#[test]
+fn shift_click_selects_the_siblings_between_without_their_descendants() {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let a = m.add_child(root, "a");
+    let b = m.add_child(root, "b");
+    m.add_child(b, "b1");
+    let c = m.add_child(root, "c");
+    let d = m.add_child(root, "d");
+    let mut app = app_with(m);
+    click(&mut app, a, Modifiers::empty());
+    click(&mut app, d, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![a, b, c, d], d));
+    // Backwards: the clicked node is the focused one.
+    click(&mut app, d, Modifiers::empty());
+    click(&mut app, b, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![d, c, b], b));
+}
+
+#[test]
+fn shift_click_under_another_parent_selects_the_shown_nodes_between() {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let p = m.add_child(root, "p");
+    let a = m.add_child(p, "a");
+    let b = m.add_child(p, "b");
+    let q = m.add_child(root, "q");
+    let folded = m.add_child(q, "folded");
+    m.add_child(folded, "hidden");
+    m.set_folded(folded, true);
+    let c = m.add_child(q, "c");
+    let mut app = app_with(m);
+    click(&mut app, a, Modifiers::empty());
+    click(&mut app, c, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![a, b, q, folded, c], c));
+    // From the root, everything shown above the clicked node.
+    click(&mut app, root, Modifiers::empty());
+    click(&mut app, b, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![root, p, a, b], b));
+}
+
+#[test]
+fn consecutive_shift_clicks_keep_the_anchor() {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let a = m.add_child(root, "a");
+    let b = m.add_child(root, "b");
+    let c = m.add_child(root, "c");
+    let d = m.add_child(root, "d");
+    let mut app = app_with(m);
+    click(&mut app, b, Modifiers::empty());
+    click(&mut app, d, Modifiers::SHIFT);
+    click(&mut app, a, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![b, a], a));
+    click(&mut app, c, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![b, c], c));
+    // Another change of the selection makes the focused node the anchor.
+    click(&mut app, a, Modifiers::CTRL);
+    assert_eq!(selected(&app), (vec![b, c, a], a));
+    click(&mut app, d, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![a, b, c, d], d));
+    // A click within the selection, released without a drag, selects just the node.
+    click(&mut app, c, Modifiers::empty());
+    assert_eq!(selected(&app), (vec![c], c));
+    click(&mut app, a, Modifiers::SHIFT);
+    assert_eq!(selected(&app), (vec![c, b, a], a));
+}
+
 #[test]
 fn a_map_opens_as_it_was_last_shown() {
     let mut f = Fixture::new();
