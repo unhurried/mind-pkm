@@ -134,3 +134,50 @@ fn dropped_files_are_copied_into_the_assets_folder() {
     assert_eq!(md, vec!["![](Plan.assets/photo.png)".to_string(), "[doc.pdf](../doc.pdf)".to_string()]);
     assert!(f.doc_dir.join("Plan.assets").join("photo.png").is_file());
 }
+
+#[test]
+fn insert_link_takes_a_url_or_a_path_from_the_clipboard() {
+    let (mut app, _f, _, _) = app_with_page("see docs and the report\n");
+    let id = open_with_f1(&mut app);
+    let set = |app: &mut App, text: &str| app.system_clipboard.lock().unwrap().write(text, None);
+    // Ctrl+K alone changes nothing until the clipboard's text arrives.
+    select(&mut app, id, "docs");
+    press(&mut app, id, "k", Modifiers::CTRL);
+    assert_eq!(page_text(&app, id), "see docs and the report\n");
+    // A URL around the selection: the cursor after the link.
+    set(&mut app, "https://example.com/docs\n");
+    editor(&mut app, id, EditorMsg::LinkClipboard(Some("https://example.com/docs\n".into())));
+    assert_eq!(page_text(&app, id), "see [docs](https://example.com/docs) and the report\n");
+    typing(&mut app, id, "!");
+    assert_eq!(page_text(&app, id), "see [docs](https://example.com/docs)! and the report\n");
+    // A path copied as a path: without its quotes, with `/`.
+    set(&mut app, "\"C:\\Work\\report.pdf\"");
+    select(&mut app, id, "report");
+    insert_link(&mut app, id);
+    assert_eq!(page_text(&app, id), "see [docs](https://example.com/docs)! and the [report](C:/Work/report.pdf)\n");
+    // Without a selection: the cursor in the empty link text.
+    set(&mut app, "https://x.org");
+    click_after(&mut app, id, "see");
+    insert_link(&mut app, id);
+    typing(&mut app, id, "x");
+    assert!(page_text(&app, id).starts_with("see[x](https://x.org) [docs]"), "{}", page_text(&app, id));
+    // Other text: an empty destination, as without a clipboard.
+    set(&mut app, "just words");
+    select(&mut app, id, "and");
+    insert_link(&mut app, id);
+    typing(&mut app, id, "u");
+    assert!(page_text(&app, id).contains("! [and](u) the"), "{}", page_text(&app, id));
+}
+
+#[test]
+fn insert_link_in_source_mode_takes_the_clipboard_url() {
+    let (mut app, _f, _, _) = app_with_page("a word\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "a ");
+    press(&mut app, id, "/", Modifiers::CTRL);
+    assert!(app.editors[&id].source.is_some());
+    app.system_clipboard.lock().unwrap().write("https://x.org", None);
+    insert_link(&mut app, id);
+    typing(&mut app, id, "x");
+    assert_eq!(page_text(&app, id), "a [x](https://x.org)word\n");
+}

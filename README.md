@@ -160,7 +160,7 @@ The file stays plain Markdown and only the edited parts change: the UTF-8 BOM an
 | Ctrl+F / Ctrl+H, F3 / Shift+F3 | Find / replace, next / previous match |
 | Ctrl+1 ... Ctrl+6, Ctrl+0, Ctrl+= / Ctrl+- | Heading level, paragraph, raise / lower the heading level |
 | Ctrl+T, Ctrl+Shift+K, Ctrl+Shift+M, Ctrl+Shift+Q, Ctrl+Shift+[ / ] | Table, code block, math block, quote, ordered / bullet list |
-| Ctrl+B / Ctrl+I / Ctrl+U, Ctrl+Shift+\`, Alt+Shift+5, Ctrl+K, Ctrl+\\ | Bold / italic / underline, code, strikethrough, link, clear formatting |
+| Ctrl+B / Ctrl+I / Ctrl+U, Ctrl+Shift+\`, Alt+Shift+5, Ctrl+K, Ctrl+\\ | Bold / italic / underline, code, strikethrough, link (to the URL or file path on the clipboard, if it holds one), clear formatting |
 | Ctrl+Shift+I | Insert images |
 | Ctrl+/ | Source mode (the whole page as Markdown) |
 | Ctrl+O, Ctrl+D, F11, Ctrl+Shift+= / - / 0 | Outline, assets pane, full screen, zoom in / out / reset |

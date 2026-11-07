@@ -24,6 +24,10 @@ pub trait ClipboardBackend: Send {
     /// Puts text on the clipboard, with HTML as its rich form when given.
     fn write(&mut self, text: &str, html: Option<&str>);
     fn read(&mut self) -> ClipboardContent;
+    /// The text alone.
+    fn read_text(&mut self) -> Option<String> {
+        self.read().text
+    }
 }
 
 /// The platform's clipboard, opened on first use (and kept open: on X11 the
@@ -58,6 +62,10 @@ impl ClipboardBackend for SystemClipboard {
             rgba: i.bytes.into_owned(),
         });
         ClipboardContent { text: c.get_text().ok(), html: c.get().html().ok(), image, files }
+    }
+
+    fn read_text(&mut self) -> Option<String> {
+        self.clipboard()?.get_text().ok()
     }
 }
 

@@ -150,14 +150,69 @@ pub fn toggle_inline(text: &str, sel: Sel, style: InlineStyle) -> Edited {
     Edited { text: t, sel: Sel { anchor: s + open.len(), head: e + open.len() }, pending: None }
 }
 
-/// A link around the selection, with the cursor in its (empty) URL; without
-/// a selection, an empty link with the cursor in its text.
-pub fn insert_link(text: &str, sel: Sel) -> Edited {
+/// A link around the selection to `dest`, with the cursor after it; without
+/// a selection, a link with an empty text holding the cursor. Without `dest`,
+/// the URL is empty and holds the cursor when there is a selection.
+pub fn insert_link(text: &str, sel: Sel, dest: Option<&str>) -> Edited {
     let r = sel.range();
     let inner = &text[r.clone()];
-    let t = splice(text, r.clone(), &format!("[{inner}]()"));
-    let at = if inner.is_empty() { r.start + 1 } else { r.start + inner.len() + 3 };
+    let link = format!("[{inner}]({})", dest.unwrap_or(""));
+    let t = splice(text, r.clone(), &link);
+    let at = match dest {
+        _ if inner.is_empty() => r.start + 1,
+        Some(_) => r.start + link.len(),
+        None => r.start + inner.len() + 3,
+    };
     Edited { text: t, sel: Sel::caret(at), pending: None }
+}
+
+/// The link destination a text copied to the clipboard names, as written in
+/// a link: a URL (`scheme://...`, `mailto:`, `file:`) or a path - absolute
+/// (`C:\`, `\\server`, `/`) or relative with `./` / `../` - on one line,
+/// without the double quotes around it and with backslashes as `/` (which
+/// Markdown would take as escapes). None for other text, and for text that
+/// would end the link early (`<`, `>`, unbalanced parentheses).
+pub fn link_destination(clip: &str) -> Option<String> {
+    let s = clip.trim();
+    let s = s.strip_prefix('"').and_then(|t| t.strip_suffix('"')).map_or(s, str::trim);
+    if s.is_empty() || s.contains(['\n', '\r', '<', '>']) || !balanced_parens(s) {
+        return None;
+    }
+    let lower = s.to_ascii_lowercase();
+    let url = url_scheme(s).is_some() || lower.starts_with("mailto:") || lower.starts_with("file:");
+    if url {
+        return (!s.contains(char::is_whitespace)).then(|| s.to_string());
+    }
+    let b = s.as_bytes();
+    let drive = b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/');
+    let rooted = s.starts_with(['/', '\\']);
+    let relative = ["./", "../", ".\\", "..\\"].iter().any(|p| s.starts_with(p));
+    (drive || rooted || relative).then(|| s.replace('\\', "/"))
+}
+
+/// The scheme of `scheme://...`.
+fn url_scheme(s: &str) -> Option<&str> {
+    let (scheme, _) = s.split_once("://")?;
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    valid.then_some(scheme)
+}
+
+/// Whether every `)` closes a `(` and every `(` is closed.
+fn balanced_parens(s: &str) -> bool {
+    let mut depth = 0usize;
+    for c in s.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => match depth.checked_sub(1) {
+                Some(d) => depth = d,
+                None => return false,
+            },
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 /// The heading level of a paragraph or heading block's source (0 for a paragraph), and its content range.
@@ -588,9 +643,56 @@ mod tests {
     #[test]
     fn links() {
         let (t, s) = parse("see «docs» now");
-        assert_eq!(show(&insert_link(&t, s)), "see [docs](‸) now");
+        assert_eq!(show(&insert_link(&t, s, None)), "see [docs](‸) now");
         let (t, s) = parse("x‸");
-        assert_eq!(show(&insert_link(&t, s)), "x[‸]()");
+        assert_eq!(show(&insert_link(&t, s, None)), "x[‸]()");
+        // To a destination: after the link, or in its empty text.
+        let (t, s) = parse("see «docs» now");
+        assert_eq!(show(&insert_link(&t, s, Some("https://x.org"))), "see [docs](https://x.org)‸ now");
+        let (t, s) = parse("x‸ y");
+        assert_eq!(show(&insert_link(&t, s, Some("https://x.org"))), "x[‸](https://x.org) y");
+    }
+
+    #[test]
+    fn link_destinations_from_the_clipboard() {
+        let dest = |s: &str| link_destination(s);
+        // URLs.
+        assert_eq!(dest("https://example.com/a?b=c#d").as_deref(), Some("https://example.com/a?b=c#d"));
+        assert_eq!(dest("  http://x.org\n").as_deref(), Some("http://x.org"));
+        assert_eq!(dest("mailto:a@b.c").as_deref(), Some("mailto:a@b.c"));
+        assert_eq!(dest("file:///C:/a/b.txt").as_deref(), Some("file:///C:/a/b.txt"));
+        assert_eq!(dest("svn+ssh://host/repo").as_deref(), Some("svn+ssh://host/repo"));
+        assert_eq!(
+            dest("https://en.wikipedia.org/wiki/Rust_(language)").as_deref(),
+            Some("https://en.wikipedia.org/wiki/Rust_(language)")
+        );
+        // Paths: backslashes as `/`, quotes removed, spaces kept.
+        assert_eq!(dest("C:\\Work\\report.pdf").as_deref(), Some("C:/Work/report.pdf"));
+        assert_eq!(dest("\"C:\\My Docs\\_plan.md\"").as_deref(), Some("C:/My Docs/_plan.md"));
+        assert_eq!(dest("d:/x").as_deref(), Some("d:/x"));
+        assert_eq!(dest("\\\\server\\share\\a.txt").as_deref(), Some("//server/share/a.txt"));
+        assert_eq!(dest("/home/me/a b.txt").as_deref(), Some("/home/me/a b.txt"));
+        assert_eq!(dest("./Plan.assets/a.png").as_deref(), Some("./Plan.assets/a.png"));
+        assert_eq!(dest("..\\Other.md").as_deref(), Some("../Other.md"));
+        // Not a destination.
+        for s in [
+            "",
+            "hello",
+            "notes.md",
+            "foo/bar",
+            "a https://x.org",
+            "https://x.org/a b",
+            "https://x.org\nhttps://y.org",
+            "C:\\a)b",
+            "C:\\a(b",
+            "/a<b>",
+            "\"\"",
+            "://x",
+            "1http://x",
+            "C:",
+        ] {
+            assert_eq!(dest(s), None, "{s:?}");
+        }
     }
 
     fn heading(marked: &str, level: u8) -> String {

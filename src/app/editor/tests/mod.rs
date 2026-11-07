@@ -82,6 +82,14 @@ fn select(app: &mut App, id: window::Id, what: &str) {
     page.place(crate::markdown::edit::Sel { anchor: start, head: start + what.len() });
 }
 
+/// Presses Ctrl+K and hands the editor the clipboard's text, as the app
+/// reads it in the background.
+fn insert_link(app: &mut App, id: window::Id) {
+    press(app, id, "k", Modifiers::CTRL);
+    let text = app.system_clipboard.lock().unwrap().read_text();
+    editor(app, id, EditorMsg::LinkClipboard(text));
+}
+
 fn clipboard(app: &App) -> super::clipboard::ClipboardContent {
     app.system_clipboard.lock().unwrap().read()
 }
