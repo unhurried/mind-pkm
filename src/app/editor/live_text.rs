@@ -296,6 +296,20 @@ fn shape(text: &str, font: Font, size: f32, line_height: f32, shown_start: usize
     Shaped { paragraph, clusters, ascent, descent, glyph, width }
 }
 
+/// How thick an underline and a strikethrough are.
+const DECORATION_THICKNESS: f32 = 1.0;
+
+/// Where the underline and the strikethrough of a text run of `size` go (the
+/// tops of the lines), on a line whose text's line box starts at `top`: where
+/// the rendered text widget (iced's rich text, which shows the blocks not
+/// being edited) draws them - from the line box and the size, not from the
+/// glyphs - so that they stay in place when a block is edited.
+fn decoration_tops(top: f32, size: f32, line_height: f32) -> (f32, f32) {
+    // The bottom of the size's box centered in the line box.
+    let bottom = top + size + (size * line_height - size) / 2.0;
+    (bottom - size * 0.08, bottom - size / 2.0)
+}
+
 impl LiveText<'_> {
     fn key_of(&self, run: &Run) -> Option<ShapeKey> {
         match &run.kind {
@@ -666,22 +680,18 @@ impl Widget<EditorMsg, Theme, Renderer> for LiveText<'_> {
                         let Some(clip) = clip.intersection(viewport) else { continue };
                         let position = Point::new(origin.x + f.x - f.run_x, origin.y + line.baseline - shaped.ascent);
                         renderer.fill_paragraph(&shaped.paragraph, position, look.color, clip);
-                        let thickness = (look.size / 14.0).max(1.0);
-                        if look.underline {
-                            let y = origin.y + line.baseline + look.size * 0.12;
-                            quad(
-                                renderer,
-                                Rectangle::new(Point::new(origin.x + f.x, y), Size::new(f.width, thickness)),
-                                look.color,
-                            );
-                        }
-                        if look.strike {
-                            let y = origin.y + line.baseline - look.size * 0.3;
-                            quad(
-                                renderer,
-                                Rectangle::new(Point::new(origin.x + f.x, y), Size::new(f.width, thickness)),
-                                look.color,
-                            );
+                        let (underline, strike) = decoration_tops(line.text_top, look.size, self.line_height);
+                        for (drawn, y) in [(look.underline, underline), (look.strike, strike)] {
+                            if drawn {
+                                quad(
+                                    renderer,
+                                    Rectangle::new(
+                                        Point::new(origin.x + f.x, origin.y + y),
+                                        Size::new(f.width, DECORATION_THICKNESS),
+                                    ),
+                                    look.color,
+                                );
+                            }
                         }
                     }
                     RunKind::Image { handle, .. } => {
@@ -892,6 +902,80 @@ mod tests {
             .collect();
         let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0);
         flow::layout(&items, 1000.0, (empty.ascent, empty.descent), at).height
+    }
+
+    /// Where the rendered text widget (iced's rich text) draws the underline
+    /// and the strikethrough of the last run (the tops of the lines, all 1px
+    /// thick), as `iced_widget::text::rich` does: from the top of the span's
+    /// line box and the span's size, not from the glyphs.
+    fn rendered_decorations(runs: &[TestRun]) -> (f32, f32) {
+        let spans: Vec<iced::widget::text::Span<'_, (), Font>> =
+            runs.iter().map(|(t, s, f)| iced::widget::text::Span::new(*t).size(*s).font(*f)).collect();
+        let p = Paragraph::with_spans(core_text::Text {
+            content: spans.as_slice(),
+            bounds: Size::new(1000.0, f32::INFINITY),
+            size: Pixels(SIZE),
+            line_height: LineHeight::Relative(LINE_HEIGHT),
+            font: APP_FONT,
+            align_x: core_text::Alignment::Default,
+            align_y: iced::alignment::Vertical::Top,
+            shaping: Shaping::Advanced,
+            wrapping: Wrapping::WordOrGlyph,
+        });
+        let size = runs[runs.len() - 1].1;
+        let region = p.span_bounds(runs.len() - 1)[0];
+        let baseline = region.y + size + (size * LINE_HEIGHT - size) / 2.0;
+        (baseline - size * 0.08, baseline - size / 2.0)
+    }
+
+    /// Where the editing widget draws them, for the same runs.
+    fn editing_decorations(runs: &[TestRun], object: Option<(f32, f32)>) -> (f32, f32) {
+        let mut at = 0;
+        let mut items: Vec<Measured> = Vec::new();
+        if let Some((ascent, descent)) = object {
+            items.push(Measured::Object { shown: 0..1, width: 10.0, ascent, descent, centered: false });
+            at = 1;
+        }
+        for (t, size, font) in runs {
+            let shaped = shape(t, *font, *size, LINE_HEIGHT, at);
+            at += t.len();
+            items.push(Measured::Text {
+                clusters: shaped.clusters,
+                ascent: shaped.ascent,
+                descent: shaped.descent,
+                glyph: shaped.glyph,
+            });
+        }
+        let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0);
+        let flow = flow::layout(&items, 1000.0, (empty.ascent, empty.descent), at);
+        let line = &flow.lines[0];
+        let (underline, strike) = decoration_tops(line.text_top, runs[runs.len() - 1].1, LINE_HEIGHT);
+        // Relative to a line without the object.
+        let shift = line.baseline
+            - flow::layout(&items[usize::from(object.is_some())..], 1000.0, (0.0, 0.0), at).lines[0].baseline;
+        (underline - shift, strike - shift)
+    }
+
+    #[test]
+    fn a_link_is_underlined_where_it_is_when_rendered() {
+        let bold = Font { weight: iced::font::Weight::Bold, ..APP_FONT };
+        let cases: [(&str, Vec<TestRun>); 5] = [
+            ("plain", vec![("a link", SIZE, APP_FONT)]),
+            ("after text", vec![("hello ", SIZE, APP_FONT), ("a link", SIZE, APP_FONT)]),
+            ("code", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, CODE_FONT)]),
+            ("superscript", vec![("hello ", SIZE, APP_FONT), ("x", SIZE * 0.75, APP_FONT)]),
+            ("bold", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, bold)]),
+        ];
+        for (name, runs) in cases {
+            let rendered = rendered_decorations(&runs);
+            for object in [None, Some((SIZE * 3.0, SIZE))] {
+                let editing = editing_decorations(&runs, object);
+                assert!(
+                    (rendered.0 - editing.0).abs() < 0.01 && (rendered.1 - editing.1).abs() < 0.01,
+                    "{name} (object: {object:?}): rendered {rendered:?}, editing {editing:?}"
+                );
+            }
+        }
     }
 
     #[test]
