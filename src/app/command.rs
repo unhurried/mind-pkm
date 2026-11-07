@@ -34,6 +34,7 @@ pub enum Command {
     MoveUp,
     MoveDown,
     Indent,
+    Outdent,
     ToggleFold,
     SetLink,
     CenterSelected,
@@ -133,6 +134,12 @@ impl App {
             }
             Command::Indent => {
                 doc.indent_focus();
+                self.viewport.keep_parent_in_place = true;
+                self.warn_if_under_page(&[focus]);
+                Task::none()
+            }
+            Command::Outdent => {
+                doc.outdent_focus();
                 self.viewport.keep_parent_in_place = true;
                 self.warn_if_under_page(&[focus]);
                 Task::none()

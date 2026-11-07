@@ -132,6 +132,7 @@ pub const MENUS: &[Menu<Command>] = &[
             ("Move Up", "Ctrl+Up", Command::MoveUp),
             ("Move Down", "Ctrl+Down", Command::MoveDown),
             ("Make Child of Node Above", "Ctrl+Right", Command::Indent),
+            ("Make Sibling of Parent", "Ctrl+Left", Command::Outdent),
             ("Fold / Unfold", "Space", Command::ToggleFold),
             ("Set Link...", "Ctrl+K", Command::SetLink),
             ("Center Selected Node", "Esc", Command::CenterSelected),

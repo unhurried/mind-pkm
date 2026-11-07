@@ -691,6 +691,40 @@ fn ctrl_right_makes_the_node_the_last_child_of_the_node_above() {
 }
 
 #[test]
+fn ctrl_left_makes_the_node_the_next_sibling_of_its_parent() {
+    let mut m = MindMap::new("root");
+    let root = m.root();
+    let a = m.add_child(root, "a");
+    m.add_child(root, "c");
+    m.add_child(a, "a1");
+    let a2 = m.add_child(a, "a2");
+    m.add_child(a, "a3");
+    m.add_child(a2, "a21");
+    let mut app = app_with(m);
+
+    // The root and a child of the root have no grandparent: nothing happens.
+    for n in [root, a] {
+        app.doc.as_mut().unwrap().select(vec![n]);
+        press_ctrl(&mut app, Named::ArrowLeft);
+    }
+    assert_eq!(root_texts(&app), vec!["a", "c"]);
+    assert!(!app.doc.as_ref().unwrap().dirty());
+
+    // a2 goes right after a, with its subtree; the selection stays on it.
+    app.doc.as_mut().unwrap().select(vec![a2]);
+    press_ctrl(&mut app, Named::ArrowLeft);
+    assert_eq!(root_texts(&app), vec!["a", "a2", "c"]);
+    assert_eq!(map(&app).child_texts(a), vec!["a1", "a3"]);
+    assert_eq!(map(&app).child_texts(a2), vec!["a21"]);
+    assert_eq!(app.doc.as_ref().unwrap().focus(), a2);
+
+    // Ctrl+Z takes it back to its place.
+    send(&mut app, MapMsg::Command(Command::Undo));
+    assert_eq!(root_texts(&app), vec!["a", "c"]);
+    assert_eq!(map(&app).child_texts(a), vec!["a1", "a2", "a3"]);
+}
+
+#[test]
 fn delete_and_f11_ask_first_and_ctrl_skips_the_question() {
     for key in [Named::Delete, Named::F11] {
         let mut m = MindMap::new("root");

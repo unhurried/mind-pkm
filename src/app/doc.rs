@@ -611,6 +611,15 @@ impl Doc {
         }
     }
 
+    /// Makes the focused node the next sibling of its parent. Nothing happens
+    /// for the root or a child of the root.
+    pub(super) fn outdent_focus(&mut self) {
+        let parent = self.map.parent(self.focus).filter(|&p| self.map.parent(p).is_some());
+        if let Some(node) = parent {
+            self.move_nodes(&[self.focus], DropTarget { node, place: DropPlace::After });
+        }
+    }
+
     /// Folds the selected nodes with children, or unfolds them all when the
     /// first one is folded.
     pub(super) fn toggle_fold_selected(&mut self) {

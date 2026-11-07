@@ -165,6 +165,7 @@ pub fn command_for_key(key: &Key, m: Modifiers) -> Option<Command> {
             (Named::ArrowUp, true, _) => MoveUp,
             (Named::ArrowDown, true, _) => MoveDown,
             (Named::ArrowRight, true, false) => Indent,
+            (Named::ArrowLeft, true, false) => Outdent,
             _ => return None,
         },
         Key::Character(c) if ctrl => match (c.to_lowercase().as_str(), m.shift()) {
@@ -222,6 +223,7 @@ mod tests {
             "Up" => Some(Named::ArrowUp),
             "Down" => Some(Named::ArrowDown),
             "Right" => Some(Named::ArrowRight),
+            "Left" => Some(Named::ArrowLeft),
             f if f.starts_with('F') && f.len() > 1 => {
                 let n: usize = f[1..].parse().expect(label);
                 Some(
