@@ -6,10 +6,10 @@ The editor's assets pane: seeing the files and folders of a page's assets folder
 ## Requirements
 
 ### Requirement: Showing and hiding the assets pane
-View → Assets (Ctrl+Shift+2) SHALL show and hide a pane on the right of the editor window, marked with a check in the menu while shown. Each editor window SHALL show or hide its own pane, and the pane SHALL be hidden when a window opens. The page's column SHALL narrow to leave room for the pane and, when it is shown too, the outline.
+View → Assets (Ctrl+D) SHALL show and hide a pane on the right of the editor window, marked with a check in the menu while shown. Each editor window SHALL show or hide its own pane, and the pane SHALL be hidden when a window opens. The page's column SHALL narrow to leave room for the pane and, when it is shown too, the outline.
 
 #### Scenario: Showing the pane
-- **WHEN** Ctrl+Shift+2 is pressed in the editor of `Trip.md`
+- **WHEN** Ctrl+D is pressed in the editor of `Trip.md`
 - **THEN** the assets pane appears on the right and View → Assets is checked
 
 #### Scenario: Other windows

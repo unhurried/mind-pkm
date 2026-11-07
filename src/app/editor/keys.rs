@@ -2,7 +2,7 @@
 
 use super::EditorMsg;
 use crate::app::ui::Menu;
-use iced::keyboard::key::{Code, Named, Physical};
+use iced::keyboard::key::{Named, Physical};
 use iced::keyboard::{Key, Modifiers};
 use iced::widget::text_editor::{Binding, KeyPress, Status};
 
@@ -86,7 +86,7 @@ pub const MENUS: &[Menu<EditorCommand>] = &[
     (
         "File",
         &[
-            ("Open...", "Ctrl+O", C::Open),
+            ("Open...", "Ctrl+Shift+O", C::Open),
             ("Save", "Ctrl+S", C::Save),
             ("Export HTML...", "", C::ExportHtml),
             ("Export PDF...", "", C::ExportPdf),
@@ -104,7 +104,7 @@ pub const MENUS: &[Menu<EditorCommand>] = &[
             ("Paste", "Ctrl+V", C::Paste),
             ("Paste as Plain Text", "Ctrl+Shift+V", C::PastePlain),
             ("Select All", "Ctrl+A", C::SelectAll),
-            ("Select Word", "Ctrl+D", C::SelectWord),
+            ("Select Word", "", C::SelectWord),
             ("Select Line / Table Row", "Ctrl+L", C::SelectLine),
             ("Select Styled Text / Table Cell", "Ctrl+E", C::SelectSpan),
             ("Find", "Ctrl+F", C::Find),
@@ -173,8 +173,8 @@ pub const MENUS: &[Menu<EditorCommand>] = &[
         "View",
         &[
             ("Source Mode", "Ctrl+/", C::SourceMode),
-            ("Outline", "Ctrl+Shift+1", C::Outline),
-            ("Assets", "Ctrl+Shift+2", C::Assets),
+            ("Outline", "Ctrl+O", C::Outline),
+            ("Assets", "Ctrl+D", C::Assets),
             ("Full Screen", "F11", C::FullScreen),
             ("Zoom In", "Ctrl+Shift+=", C::ZoomIn),
             ("Zoom Out", "Ctrl+Shift+-", C::ZoomOut),
@@ -281,11 +281,6 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
             _ => return None,
         });
     }
-    // Ctrl+Shift+2 by its key: the character there is `@` on US keyboards,
-    // which (where `` ` `` is on Japanese ones) means Code.
-    if ctrl && shift && !alt && physical == Physical::Code(Code::Digit2) {
-        return Some(C::Assets);
-    }
     let c = shortcut_char(key, physical)?;
     if alt && shift && !ctrl {
         return (c == "5" || c == "%").then_some(C::Strikethrough);
@@ -294,7 +289,8 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
         return None;
     }
     Some(match (c.as_str(), shift) {
-        ("o", false) => C::Open,
+        ("o", false) => C::Outline,
+        ("o", true) => C::Open,
         ("s", false) => C::Save,
         ("w", false) => C::Close,
         ("z", false) => C::Undo,
@@ -305,7 +301,7 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
         ("v", false) => C::Paste,
         ("v", true) => C::PastePlain,
         ("a", false) => C::SelectAll,
-        ("d", false) => C::SelectWord,
+        ("d", false) => C::Assets,
         ("l", false) => C::SelectLine,
         ("e", false) => C::SelectSpan,
         ("f", false) => C::Find,
@@ -328,8 +324,6 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
         ("k", false) => C::Link,
         ("i", true) => C::Image,
         ("/", false) => C::SourceMode,
-        ("1" | "!", true) => C::Outline,
-        ("2" | "\"", true) => C::Assets,
         ("=" | ";" | "+", true) => C::ZoomIn,
         ("-" | "_", true) => C::ZoomOut,
         ("0" | ")", true) => C::ZoomReset,
@@ -488,12 +482,15 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_o_opens_a_file() {
-        let o = Key::Character("o".into());
-        assert_eq!(command_for_key(&o, unidentified(), Modifiers::CTRL), Some(C::Open));
-        assert!(
-            MENUS[0].1.iter().any(|&(label, shortcut, cmd)| (label, shortcut, cmd) == ("Open...", "Ctrl+O", C::Open))
-        );
+    fn ctrl_o_d_and_ctrl_shift_o() {
+        let key = |c: &str, m: Modifiers| command_for_key(&Key::Character(c.into()), unidentified(), m);
+        let (ctrl, ctrl_shift) = (Modifiers::CTRL, Modifiers::CTRL | Modifiers::SHIFT);
+        assert_eq!(key("o", ctrl), Some(C::Outline));
+        assert_eq!(key("d", ctrl), Some(C::Assets));
+        assert_eq!(key("o", ctrl_shift), Some(C::Open));
+        // The former shortcuts are free.
+        assert_eq!(key("1", ctrl_shift), None);
+        assert_eq!(key("2", ctrl_shift), None);
     }
 
     #[test]
@@ -506,20 +503,5 @@ mod tests {
         assert_eq!(ch("@", ctrl_shift), Some(C::Code));
         assert_eq!(ch("¥", ctrl), Some(C::ClearFormatting));
         assert_eq!(ch("b", Modifiers::empty()), None);
-        assert_eq!(ch("\"", ctrl_shift), Some(C::Assets));
-    }
-
-    #[test]
-    fn assets_by_the_key_of_2() {
-        let digit2 = Physical::Code(Code::Digit2);
-        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
-        // US: Shift+2 is `@`; Japanese: `"`.
-        for c in ["@", "\"", "2"] {
-            assert_eq!(command_for_key(&Key::Character(c.into()), digit2, ctrl_shift), Some(C::Assets), "{c}");
-        }
-        // `@` on its own key (Japanese) stays Code.
-        let at = Physical::Code(Code::BracketLeft);
-        assert_eq!(command_for_key(&Key::Character("@".into()), at, ctrl_shift), Some(C::Code));
-        assert_eq!(command_for_key(&Key::Character("2".into()), digit2, Modifiers::CTRL), Some(C::Heading(2)));
     }
 }

@@ -212,7 +212,7 @@ fn selection_helpers() {
     press(&mut app, id, "e", Modifiers::CTRL);
     assert_eq!(app.editors[&id].page.selected_source(), "bold text");
     click_after(&mut app, id, "mo");
-    press(&mut app, id, "d", Modifiers::CTRL);
+    editor(&mut app, id, EditorMsg::Command(EditorCommand::SelectWord));
     assert_eq!(app.editors[&id].page.selected_source(), "more");
     press(&mut app, id, "l", Modifiers::CTRL);
     assert_eq!(app.editors[&id].page.selected_source(), "some **bold text** and more");

@@ -278,7 +278,7 @@ fn outline_zoom_theme_and_full_screen() {
     let (mut app, _f, _, _) = app_with_page("# A\n\ntext\n\n## B\n\nmore\n");
     let id = open_with_f1(&mut app);
     // The outline lists the headings; a click goes to one.
-    press(&mut app, id, "1", Modifiers::CTRL | Modifiers::SHIFT);
+    press(&mut app, id, "o", Modifiers::CTRL);
     assert!(app.editors[&id].outline);
     assert_eq!(app.editors[&id].page.doc().headings.len(), 2);
     editor(&mut app, id, EditorMsg::HeadingClicked(1));
