@@ -313,6 +313,28 @@ fn the_outline_folds_and_unfolds() {
 }
 
 #[test]
+fn a_new_window_shows_the_outline_as_it_was_last() {
+    let (mut app, f, _, _) = app_with_page("# A\n");
+    let id = open_with_f1(&mut app);
+    assert!(!app.editors[&id].outline);
+    press(&mut app, id, "o", Modifiers::CTRL);
+    assert!(app.editor_prefs.outline);
+    // The next page opens with the outline shown.
+    let other = f.write_page("Other", "# B\n");
+    let _ = app.open_in_editor(&other);
+    let other_id = *app.editors.iter().find(|(_, e)| e.page.path() == other).unwrap().0;
+    assert!(app.editors[&other_id].outline);
+    // Hidden there, the next one opens without it; the first window keeps it.
+    press(&mut app, other_id, "o", Modifiers::CTRL);
+    assert!(!app.editor_prefs.outline);
+    let third = f.write_page("Third", "# C\n");
+    let _ = app.open_in_editor(&third);
+    let third_id = *app.editors.iter().find(|(_, e)| e.page.path() == third).unwrap().0;
+    assert!(!app.editors[&third_id].outline);
+    assert!(app.editors[&id].outline);
+}
+
+#[test]
 fn outline_zoom_theme_and_full_screen() {
     let (mut app, _f, _, _) = app_with_page("# A\n\ntext\n\n## B\n\nmore\n");
     let id = open_with_f1(&mut app);

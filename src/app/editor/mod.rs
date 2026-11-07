@@ -74,6 +74,10 @@ pub struct EditorPrefs {
     pub auto_pair: bool,
     pub window: Size,
     pub images: ImageOptions,
+    /// A new window shows the outline (as it was last shown or hidden).
+    pub outline: bool,
+    /// A new window shows the assets pane (as it was last shown or hidden).
+    pub assets: bool,
 }
 
 impl EditorPrefs {
@@ -85,6 +89,8 @@ impl EditorPrefs {
             auto_pair: settings::editor_auto_pair(),
             window: settings::editor_window().unwrap_or(DEFAULT_WINDOW),
             images: settings::image_options(),
+            outline: settings::editor_outline(),
+            assets: settings::editor_assets(),
         }
     }
 }
@@ -98,6 +104,8 @@ impl Default for EditorPrefs {
             auto_pair: true,
             window: DEFAULT_WINDOW,
             images: ImageOptions::default(),
+            outline: false,
+            assets: false,
         }
     }
 }
@@ -374,9 +382,15 @@ struct DataImages {
 }
 
 impl Editor {
-    /// An editor of the page at `path`, for a window of `window_size`.
-    pub fn open(path: &Path, window_size: Size) -> Result<Editor, String> {
-        Ok(Editor { window_size, ..Editor::new(Page::open(path)?) })
+    /// An editor of the page at `path`, for a window of the size `prefs`
+    /// remember, showing the outline and the assets pane if they say so.
+    pub fn open(path: &Path, prefs: &EditorPrefs) -> Result<Editor, String> {
+        Ok(Editor {
+            window_size: prefs.window,
+            outline: prefs.outline,
+            assets: prefs.assets.then(assets::AssetsPane::new),
+            ..Editor::new(Page::open(path)?)
+        })
     }
 
     pub fn new(page: Page) -> Editor {
@@ -1370,10 +1384,12 @@ impl Editor {
             C::SourceMode => self.toggle_source_mode(),
             C::Outline => {
                 self.outline = !self.outline;
+                effects.push(Effect::SetPrefs(EditorPrefs { outline: self.outline, ..prefs.clone() }));
                 Task::none()
             }
             C::Assets => {
                 self.toggle_assets();
+                effects.push(Effect::SetPrefs(EditorPrefs { assets: self.assets.is_some(), ..prefs.clone() }));
                 Task::none()
             }
             C::FullScreen => {

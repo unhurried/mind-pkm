@@ -590,11 +590,23 @@ Ctrl+/ SHALL switch between the live preview and a source mode that shows the wh
 - **THEN** the clipboard holds the Markdown of exactly the selected text
 
 ### Requirement: Outline
-Ctrl+O SHALL show and hide an outline beside the document listing the headings, indented by level; clicking one SHALL scroll to that heading.
+Ctrl+O SHALL show and hide an outline beside the document listing the headings, indented by level; clicking one SHALL scroll to that heading. Each editor window SHALL show or hide its own outline; a window that opens SHALL show the outline if it was last shown in any editor window and hide it if it was last hidden, remembered across starts.
 
 #### Scenario: Jumping to a heading
 - **WHEN** the outline is shown and `Journal` is clicked in it
 - **THEN** the document scrolls so that the heading `Journal` is at the top
+
+#### Scenario: The next window shows the outline
+- **WHEN** Ctrl+O shows the outline in the editor of `Trip.md` and `Plan.md` is opened
+- **THEN** the editor of `Plan.md` opens with the outline shown
+
+#### Scenario: The next window hides the outline
+- **WHEN** the outline is shown in the editors of `Trip.md` and `Plan.md`, Ctrl+O hides it in the editor of `Plan.md` and `Notes.md` is opened
+- **THEN** the editor of `Notes.md` opens without the outline and the editor of `Trip.md` keeps it
+
+#### Scenario: Remembered across starts
+- **WHEN** the outline was last shown, the application is closed and started again and a page is opened
+- **THEN** the page's editor opens with the outline shown
 
 ### Requirement: Folding the outline
 An outline entry followed by headings of a lower level (up to the next heading of the same or a higher level) SHALL have an arrow that folds and unfolds the entries under it, without scrolling the document. By default the outline SHALL be unfolded down to H3: entries of H1 and H2 unfolded, those of H3 and below folded. What was folded or unfolded SHALL be kept while the page is edited, as long as the heading's text stays the same.
