@@ -14,7 +14,7 @@ pub const BODY_SIZE: f32 = 15.0;
 pub(super) const LINE_HEIGHT: f32 = 1.6;
 
 /// The width of the page's column at 100%.
-pub(super) const PAGE_WIDTH: f32 = 820.0;
+pub(super) const PAGE_WIDTH: f32 = 1024.0;
 
 pub(super) const PAGE_PADDING: [f32; 2] = [24.0, 36.0];
 
