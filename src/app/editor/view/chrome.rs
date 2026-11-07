@@ -5,11 +5,15 @@ use super::theme::{OUTLINE_WIDTH, Palette};
 use crate::app::editor::find::FindBar;
 use crate::app::editor::keys::{EditorCommand, MENUS, PAGE_MENU, TABLE_MENU, TableMenuItem};
 use crate::app::editor::modal::modal;
+use crate::app::editor::outline;
 use crate::app::editor::{AssetsMsg, DialogAnswer, Editor, EditorDialog, EditorMsg, EditorPrefs, FindMsg, TableMsg};
 use crate::app::ui::{self};
 use iced::advanced::text::Wrapping;
 use iced::widget::{Column, button, column, container, row, scrollable, space, text, text_input};
 use iced::{Alignment, Background, Element, Fill, Point, Theme, border};
+
+/// The width of an outline entry's arrow, and of the room for one.
+const ARROW_WIDTH: f32 = 16.0;
 
 pub(super) fn dialog_view(dialog: &EditorDialog, p: Palette, input_id: iced::widget::Id) -> Element<'_, EditorMsg> {
     let answer = |label: &'static str, a: DialogAnswer, primary: bool| -> Element<'_, EditorMsg> {
@@ -173,19 +177,30 @@ impl Editor {
 
     pub(super) fn outline_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, EditorMsg> {
         let p = ctx.p;
+        let headings = &self.page.doc().headings;
         let mut list = Column::new().spacing(2).padding(10);
-        for (i, h) in self.page.doc().headings.iter().enumerate() {
-            list = list.push(
-                button(text(h.text.clone()).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph))
-                    .padding(iced::Padding { left: 6.0 + 12.0 * f32::from(h.level - 1), ..iced::Padding::from([2, 6]) })
-                    .width(Fill)
-                    .style(move |_: &Theme, status| button::Style {
-                        background: matches!(status, button::Status::Hovered).then_some(Background::Color(p.hover)),
-                        text_color: p.text,
-                        ..Default::default()
-                    })
-                    .on_press(EditorMsg::HeadingClicked(i)),
-            );
+        for entry in outline::entries(headings, &self.outline_toggled) {
+            let h = &headings[entry.index];
+            let arrow: Element<EditorMsg> = match entry.folded {
+                Some(folded) => button(text(if folded { "▸" } else { "▾" }).size(11).color(p.muted))
+                    .padding([2, 2])
+                    .width(ARROW_WIDTH)
+                    .style(|_: &Theme, _| button::Style::default())
+                    .on_press(EditorMsg::OutlineFoldToggled(entry.index))
+                    .into(),
+                None => space().width(ARROW_WIDTH).into(),
+            };
+            let heading = button(text(h.text.clone()).size(12).color(p.text).wrapping(Wrapping::WordOrGlyph))
+                .padding([2, 4])
+                .width(Fill)
+                .style(move |_: &Theme, status| button::Style {
+                    background: matches!(status, button::Status::Hovered).then_some(Background::Color(p.hover)),
+                    text_color: p.text,
+                    ..Default::default()
+                })
+                .on_press(EditorMsg::HeadingClicked(entry.index));
+            list =
+                list.push(row![space().width(12.0 * f32::from(h.level - 1)), arrow, heading].align_y(Alignment::Start));
         }
         container(scrollable(list).height(Fill))
             .width(OUTLINE_WIDTH)
