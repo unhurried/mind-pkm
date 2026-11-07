@@ -273,6 +273,45 @@ fn a_page_that_is_not_utf8_is_reported() {
     assert!(matches!(app.dialogs.front(), Some(Dialog::Message(m)) if m.starts_with("failed to open")));
 }
 
+/// The headings the outline lists, `+` before a folded one, `-` before an unfolded one.
+fn outline_listed(app: &App, id: window::Id) -> Vec<String> {
+    let e = &app.editors[&id];
+    let headings = &e.page.doc().headings;
+    crate::app::editor::outline::entries(headings, &e.outline_toggled)
+        .into_iter()
+        .map(|x| {
+            let mark = match x.folded {
+                None => "",
+                Some(true) => "+",
+                Some(false) => "-",
+            };
+            format!("{mark}{}", headings[x.index].text)
+        })
+        .collect()
+}
+
+#[test]
+fn the_outline_folds_and_unfolds() {
+    let (mut app, _f, _, _) = app_with_page("# A\n\n## B\n\n### C\n\n#### D\n\ntext\n");
+    let id = open_with_f1(&mut app);
+    press(&mut app, id, "o", Modifiers::CTRL);
+    // Unfolded down to H3.
+    assert_eq!(outline_listed(&app, id), ["-A", "-B", "+C"]);
+    // The arrow unfolds C without moving to it.
+    let head = app.editors[&id].page.sel().head;
+    editor(&mut app, id, EditorMsg::OutlineFoldToggled(2));
+    assert_eq!(outline_listed(&app, id), ["-A", "-B", "-C", "D"]);
+    assert_eq!(app.editors[&id].page.sel().head, head);
+    // Editing the page keeps it unfolded.
+    click_after(&mut app, id, "text");
+    typing(&mut app, id, " more");
+    assert!(page_text(&app, id).contains("text more"));
+    assert_eq!(outline_listed(&app, id), ["-A", "-B", "-C", "D"]);
+    // Folding A hides everything under it.
+    editor(&mut app, id, EditorMsg::OutlineFoldToggled(0));
+    assert_eq!(outline_listed(&app, id), ["+A"]);
+}
+
 #[test]
 fn outline_zoom_theme_and_full_screen() {
     let (mut app, _f, _, _) = app_with_page("# A\n\ntext\n\n## B\n\nmore\n");

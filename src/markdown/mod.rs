@@ -20,4 +20,4 @@ pub mod paste;
 pub mod render;
 pub mod table;
 
-pub use parse::{Block, BlockKind, Document, ListItem};
+pub use parse::{Block, BlockKind, Document, HeadingInfo, ListItem};

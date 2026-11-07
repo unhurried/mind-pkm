@@ -17,6 +17,7 @@ mod keys;
 mod live_text;
 mod modal;
 mod near;
+mod outline;
 mod page;
 mod press_relay;
 mod render;
@@ -49,7 +50,7 @@ pub use live_text::LiveMsg;
 use page::{Page, content_sel, move_content};
 pub use render::{RenderCache, RenderKey};
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -145,6 +146,8 @@ pub enum EditorMsg {
     TaskToggled(usize),
     /// A heading of the outline or a table of contents.
     HeadingClicked(usize),
+    /// The arrow of a heading in the outline: fold or unfold its entries.
+    OutlineFoldToggled(usize),
     /// The right button went down at this point of the window (before the
     /// widget under the pointer says what was right-clicked).
     RightPressedAt(Point),
@@ -280,6 +283,8 @@ pub struct Editor {
     /// The whole page in a text editor, in source mode.
     source: Option<Content>,
     outline: bool,
+    /// The anchors of the headings folded or unfolded against the outline's default.
+    outline_toggled: HashSet<String>,
     /// The assets pane, when shown.
     assets: Option<assets::AssetsPane>,
     fullscreen: bool,
@@ -381,6 +386,7 @@ impl Editor {
             dialogs: VecDeque::new(),
             source: None,
             outline: false,
+            outline_toggled: HashSet::new(),
             assets: None,
             fullscreen: false,
             status: Status::default(),
@@ -701,6 +707,12 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::HeadingClicked(i) => self.go_to_heading(i),
+            EditorMsg::OutlineFoldToggled(i) => {
+                if let Some(h) = self.page.doc().headings.get(i) {
+                    outline::toggle(&mut self.outline_toggled, h);
+                }
+                Task::none()
+            }
             EditorMsg::RightPressedAt(p) => {
                 self.right_pressed_at = p;
                 Task::none()
