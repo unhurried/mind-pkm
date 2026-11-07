@@ -18,6 +18,7 @@ mod drag;
 mod editor;
 mod editors;
 mod file;
+mod floating;
 mod ime;
 mod keyed_column;
 mod keys;

@@ -805,14 +805,19 @@ impl Editor {
         Task::none()
     }
 
-    fn on_escape(&mut self) -> Task<EditorMsg> {
-        if !self.dialogs.is_empty() {
-            self.dialogs.pop_front();
-        } else if self.menu.is_some()
+    /// Whether a menu of the window is open: the menu bar's, a right-click
+    /// menu (the page's, a cell's) or an item's of the assets pane.
+    pub(super) fn menu_open(&self) -> bool {
+        self.menu.is_some()
             || self.context_menu.is_some()
             || self.table_ui.menu.is_some()
             || self.assets.as_ref().is_some_and(|a| a.menu.is_some())
-        {
+    }
+
+    fn on_escape(&mut self) -> Task<EditorMsg> {
+        if !self.dialogs.is_empty() {
+            self.dialogs.pop_front();
+        } else if self.menu_open() {
             self.menu = None;
             self.context_menu = None;
             self.table_ui.menu = None;

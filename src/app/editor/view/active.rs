@@ -17,6 +17,7 @@ use crate::app::editor::page::{Active, Live, Mode, TableState};
 use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::render::{RenderKey, Rendered};
 use crate::app::editor::{DataHandle, Editor, EditorMsg, EditorPrefs, RightClick, TableMsg};
+use crate::app::floating::floating;
 use crate::app::ime::ime_aligned;
 use crate::app::right_press::right_press_in;
 use crate::app::view::APP_FONT;
@@ -515,7 +516,11 @@ impl Editor {
         let grid = sideways(grid.into(), widths.scrolls, Some(self.id("table-scroll")), move |x| {
             EditorMsg::TableScrolled(start, x)
         });
-        column![self.table_toolbar(p), grid].spacing(4).into()
+        // The toolbar floats above the table, taking no room: going into the
+        // table moves nothing. Hidden while a menu or a dialog is open, which
+        // it would otherwise cover.
+        let shown = !self.menu_open() && self.dialogs.is_empty();
+        floating(grid, self.table_toolbar(p), 4.0, shown).into()
     }
 
     /// What the cells of the table being edited show: the cursor's cell its
@@ -556,7 +561,8 @@ impl Editor {
         ctx.column_widths(&natural, width)
     }
 
-    /// Above the table being edited: alignment, size and deleting the table.
+    /// Above the table being edited, over the page: alignment, size and
+    /// deleting the table, on a background of its own.
     fn table_toolbar(&self, p: Palette) -> Element<'_, EditorMsg> {
         let tool = |label: &'static str, cmd: EditorCommand| {
             button(text(label).size(11).center())
@@ -583,7 +589,7 @@ impl Editor {
         };
         let (rows, cols) = self.resize_values();
         let label = |s: &'static str| text(s).size(11).color(p.muted);
-        row![
+        let tools = row![
             tool("Left", EditorCommand::AlignLeft),
             tool("Center", EditorCommand::AlignCenter),
             tool("Right", EditorCommand::AlignRight),
@@ -596,11 +602,14 @@ impl Editor {
                 .padding([2, 8])
                 .style(button::secondary)
                 .on_press(EditorMsg::Table(TableMsg::Resize)),
-            space().width(Fill),
+            space().width(12),
             tool("Delete Table", EditorCommand::DeleteTable),
         ]
         .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
+        .align_y(Alignment::Center);
+        container(tools)
+            .padding([3, 6])
+            .style(move |_| container::background(p.bar_bg).border(border::color(p.border).width(1).rounded(4)))
+            .into()
     }
 }
