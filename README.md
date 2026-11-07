@@ -129,6 +129,7 @@ With several nodes selected, Open, Delete and Add to ToDo act on all of them (De
 | Space | Fold / unfold |
 | Ctrl+Up / Ctrl+Down | Move the node up / down among its siblings |
 | Ctrl+Right | Make the node the last child of the node above it (its previous sibling) |
+| Ctrl+Left | Make the node the next sibling of its parent (move it up a level) |
 | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste nodes (text from other applications is pasted one node per line) |
 | Ctrl+K | Set or remove a node's link |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
