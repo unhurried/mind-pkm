@@ -30,7 +30,7 @@ fn app_with_assets(text: &str, files: &[&str]) -> (App, Fixture, window::Id) {
         }
     }
     let id = open_with_f1(&mut app);
-    press(&mut app, id, "2", Modifiers::CTRL | Modifiers::SHIFT);
+    press(&mut app, id, "d", Modifiers::CTRL);
     finish_read(&mut app, id);
     (app, f, id)
 }
@@ -87,7 +87,7 @@ fn the_assets_pane_lists_the_folder_as_a_tree() {
 fn a_page_without_an_assets_folder() {
     let (mut app, _f, _, _) = app_with_page("x\n");
     let id = open_with_f1(&mut app);
-    press(&mut app, id, "2", Modifiers::CTRL | Modifiers::SHIFT);
+    press(&mut app, id, "d", Modifiers::CTRL);
     finish_read(&mut app, id);
     assert!(pane(&app, id).has_no_folder());
 }
@@ -223,7 +223,7 @@ fn assets_outside_the_document_directory_or_open_are_not_changed() {
     std::fs::write(&kept, "").unwrap();
     let _ = app.open_in_editor(&outside);
     let loose = *app.editors.iter().find(|(_, e)| e.page.path() == outside).unwrap().0;
-    press(&mut app, loose, "2", Modifiers::CTRL | Modifiers::SHIFT);
+    press(&mut app, loose, "d", Modifiers::CTRL);
     finish_read(&mut app, loose);
     assert_eq!(pane(&app, loose).shown().unwrap(), vec!["keep.png"]);
     assets(&mut app, loose, AssetsMsg::RightClicked(kept.clone()));
