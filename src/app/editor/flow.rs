@@ -335,6 +335,21 @@ fn line_metrics(atoms: &[Atom], line: &[usize], empty: (f32, f32)) -> (f32, f32,
     if content { (ascent, descent, text_above) } else { (empty.0, empty.1, None) }
 }
 
+/// How thick an underline and a strikethrough are.
+pub const DECORATION_THICKNESS: f32 = 1.0;
+
+/// Where the underline and the strikethrough of a text run of `size` go (the
+/// tops of the lines), on a line whose text's line box (`line_height` times
+/// the size, the glyphs centered in it) starts at `top`. Both the rendered
+/// blocks and the block being edited draw them here, from the line box and
+/// the size rather than from the glyphs, so that they stay in place when a
+/// block is edited and run straight along a line of mixed fonts.
+pub fn decoration_tops(top: f32, size: f32, line_height: f32) -> (f32, f32) {
+    // The bottom of the size's box centered in the line box.
+    let bottom = top + size + (size * line_height - size) / 2.0;
+    (bottom + size * 0.02, bottom - size / 2.0)
+}
+
 /// Where a caret is: its x, and the line it is on.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Caret {

@@ -4,6 +4,7 @@
 use super::heading;
 use super::hit::{HitInfo, HitRun};
 use super::inline::{cell_lines, inline_text, paragraph_view};
+use super::rich::rich;
 use super::table_widths::ColumnWidths;
 use super::theme::{
     BLOCK_GAP, CELL_PADDING, CODE_FONT, CODE_PADDING, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR,
@@ -238,7 +239,7 @@ pub(super) fn image_view<'a>(inline: &Inline, ctx: &Ctx<'a>, width: f32, block: 
                 }
             }
             Some(_) => broken(format!("missing: {src}")),
-            None => rich_text(vec![
+            None => rich(vec![
                 Span::new(format!("🖼 {} ", if alt.is_empty() { "image" } else { alt })).color(p.muted),
                 Span::new(src.clone()).color(p.link).underline(true).link(SpanLink { dest: src.clone(), at }),
             ])
@@ -262,7 +263,7 @@ pub(super) fn embed_view<'a>(tag: &str, src: Option<&str>, p: Palette, ctx: &Ctx
             Span::new(format!(" {src}")).color(p.link).underline(true).link(SpanLink { dest: src.to_string(), at: 0 }),
         );
     }
-    container(rich_text(spans).size(ctx.size(0.9)).on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at)))
+    container(rich(spans).size(ctx.size(0.9)).on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at)))
         .padding(12)
         .style(move |_| container::background(p.code_bg).border(border::color(p.border).width(1).rounded(4)))
         .into()

@@ -5,7 +5,7 @@
 //! keys and the IME into messages - offsets where the layout is needed (a
 //! click, Up/Down, Home/End), motions and insertions otherwise.
 
-use super::flow::{self, Cluster, Flow, Measured};
+use super::flow::{self, Cluster, DECORATION_THICKNESS, Flow, Measured};
 use super::keys::Bind;
 use super::{EditorCommand, EditorMsg, RightClick};
 use crate::app::ime;
@@ -294,20 +294,6 @@ fn shape(text: &str, font: Font, size: f32, line_height: f32, shown_start: usize
         clusters[i].end = clusters.get(i + 1).map_or(end, |n| n.start);
     }
     Shaped { paragraph, clusters, ascent, descent, glyph, width }
-}
-
-/// How thick an underline and a strikethrough are.
-const DECORATION_THICKNESS: f32 = 1.0;
-
-/// Where the underline and the strikethrough of a text run of `size` go (the
-/// tops of the lines), on a line whose text's line box starts at `top`: where
-/// the rendered text widget (iced's rich text, which shows the blocks not
-/// being edited) draws them - from the line box and the size, not from the
-/// glyphs - so that they stay in place when a block is edited.
-fn decoration_tops(top: f32, size: f32, line_height: f32) -> (f32, f32) {
-    // The bottom of the size's box centered in the line box.
-    let bottom = top + size + (size * line_height - size) / 2.0;
-    (bottom - size * 0.08, bottom - size / 2.0)
 }
 
 impl LiveText<'_> {
@@ -680,13 +666,14 @@ impl Widget<EditorMsg, Theme, Renderer> for LiveText<'_> {
                         let Some(clip) = clip.intersection(viewport) else { continue };
                         let position = Point::new(origin.x + f.x - f.run_x, origin.y + line.baseline - shaped.ascent);
                         renderer.fill_paragraph(&shaped.paragraph, position, look.color, clip);
-                        let (underline, strike) = decoration_tops(line.text_top, look.size, self.line_height);
+                        let (underline, strike) = flow::decoration_tops(line.text_top, look.size, self.line_height);
                         for (drawn, y) in [(look.underline, underline), (look.strike, strike)] {
                             if drawn {
                                 quad(
                                     renderer,
                                     Rectangle::new(
-                                        Point::new(origin.x + f.x, origin.y + y),
+                                        // On whole pixels, as in the rendered blocks.
+                                        Point::new(origin.x + f.x, (origin.y + y).round()),
                                         Size::new(f.width, DECORATION_THICKNESS),
                                     ),
                                     look.color,
@@ -904,10 +891,10 @@ mod tests {
         flow::layout(&items, 1000.0, (empty.ascent, empty.descent), at).height
     }
 
-    /// Where the rendered text widget (iced's rich text) draws the underline
-    /// and the strikethrough of the last run (the tops of the lines, all 1px
-    /// thick), as `iced_widget::text::rich` does: from the top of the span's
-    /// line box and the span's size, not from the glyphs.
+    /// Where the rendered blocks' text widget (`view::rich`) draws the
+    /// underline and the strikethrough of the last run (the tops of the
+    /// lines): from the top of the part of the span on the line, as the
+    /// paragraph lays it out.
     fn rendered_decorations(runs: &[TestRun]) -> (f32, f32) {
         let spans: Vec<iced::widget::text::Span<'_, (), Font>> =
             runs.iter().map(|(t, s, f)| iced::widget::text::Span::new(*t).size(*s).font(*f)).collect();
@@ -922,10 +909,8 @@ mod tests {
             shaping: Shaping::Advanced,
             wrapping: Wrapping::WordOrGlyph,
         });
-        let size = runs[runs.len() - 1].1;
         let region = p.span_bounds(runs.len() - 1)[0];
-        let baseline = region.y + size + (size * LINE_HEIGHT - size) / 2.0;
-        (baseline - size * 0.08, baseline - size / 2.0)
+        flow::decoration_tops(region.y, runs[runs.len() - 1].1, LINE_HEIGHT)
     }
 
     /// Where the editing widget draws them, for the same runs.
@@ -949,7 +934,7 @@ mod tests {
         let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0);
         let flow = flow::layout(&items, 1000.0, (empty.ascent, empty.descent), at);
         let line = &flow.lines[0];
-        let (underline, strike) = decoration_tops(line.text_top, runs[runs.len() - 1].1, LINE_HEIGHT);
+        let (underline, strike) = flow::decoration_tops(line.text_top, runs[runs.len() - 1].1, LINE_HEIGHT);
         // Relative to a line without the object.
         let shift = line.baseline
             - flow::layout(&items[usize::from(object.is_some())..], 1000.0, (0.0, 0.0), at).lines[0].baseline;
@@ -975,6 +960,17 @@ mod tests {
                     "{name} (object: {object:?}): rendered {rendered:?}, editing {editing:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn an_underline_is_clear_of_the_baseline_and_inside_the_line() {
+        for (name, font) in [("text", APP_FONT), ("code", CODE_FONT)] {
+            let shaped = shape("a link", font, SIZE, LINE_HEIGHT, 0);
+            let (underline, _) = flow::decoration_tops(0.0, SIZE, LINE_HEIGHT);
+            let below = underline - shaped.ascent;
+            assert!(below >= SIZE * 0.1, "{name}: {below} below the baseline");
+            assert!(underline + DECORATION_THICKNESS <= shaped.ascent + shaped.descent, "{name}: below the line");
         }
     }
 

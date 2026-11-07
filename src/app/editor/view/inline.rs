@@ -3,6 +3,7 @@
 
 use super::blocks::{embed_view, image_view, math_view};
 use super::hit::{HitInfo, HitRun};
+use super::rich::rich;
 use super::table_widths::Piece;
 use super::theme::{CODE_FONT, LINE_HEIGHT, bold, italic};
 use super::{Ctx, SpanLink, TextBase};
@@ -11,7 +12,7 @@ use crate::app::press_point::press_in;
 use crate::markdown::content::{Inline, Link, SourceMap, Style};
 use iced::advanced::text::Wrapping;
 use iced::widget::text::Span;
-use iced::widget::{Column, Row, container, mouse_area, pin, rich_text, space, stack, text};
+use iced::widget::{Column, Row, container, mouse_area, pin, space, stack, text};
 use iced::{Alignment, Color, Element, Fill, Font};
 use std::sync::Arc;
 
@@ -204,7 +205,7 @@ fn text_line<'a>(
         // An empty line keeps its height.
         return text(" ").size(base.size).line_height(LINE_HEIGHT).into();
     }
-    let mut rich = rich_text(spans)
+    let mut rich = rich(spans)
         .size(base.size)
         .font(base.font)
         .line_height(LINE_HEIGHT)

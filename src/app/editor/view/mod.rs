@@ -17,6 +17,7 @@ mod document;
 mod heading;
 mod hit;
 mod inline;
+mod rich;
 mod table_widths;
 mod theme;
 
