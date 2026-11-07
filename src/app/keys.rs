@@ -120,6 +120,19 @@ impl App {
     }
 }
 
+/// Whether a key event no widget took goes to the application as a message.
+/// Every message builds every window again, so those nothing acts on stay
+/// out: a key's release, and the keys an input method takes while it
+/// composes text (on Windows each of them comes as `Process`) - the text
+/// it composes comes to the focused widget on its own.
+pub(super) fn forwarded(event: &keyboard::Event) -> bool {
+    match event {
+        keyboard::Event::KeyPressed { key, .. } => *key != Key::Named(Named::Process),
+        keyboard::Event::KeyReleased { .. } => false,
+        keyboard::Event::ModifiersChanged(_) => true,
+    }
+}
+
 fn is_function_key(key: &Key) -> bool {
     matches!(
         key,
@@ -316,5 +329,36 @@ mod tests {
         assert_eq!(command_for_key(&key("-"), ctrl), Some(Command::ZoomOut));
         assert_eq!(command_for_key(&key("0"), ctrl), Some(Command::ZoomReset));
         assert_eq!(command_for_key(&key("+"), Modifiers::empty()), None);
+    }
+
+    #[test]
+    fn only_key_events_something_acts_on_become_messages() {
+        use keyboard::key::{NativeCode, Physical};
+        let physical = Physical::Unidentified(NativeCode::Unidentified);
+        let pressed = |key: Key, text: Option<&str>| keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical,
+            location: keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+            text: text.map(Into::into),
+            repeat: false,
+        };
+        let released = |key: Key| keyboard::Event::KeyReleased {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical,
+            location: keyboard::Location::Standard,
+            modifiers: Modifiers::empty(),
+        };
+        assert!(forwarded(&pressed(Key::Character("a".into()), Some("a"))));
+        assert!(forwarded(&pressed(Key::Named(Named::F1), None)));
+        assert!(forwarded(&pressed(Key::Named(Named::ArrowDown), None)));
+        assert!(forwarded(&keyboard::Event::ModifiersChanged(Modifiers::SHIFT)));
+        // Nothing acts on a release.
+        assert!(!forwarded(&released(Key::Character("a".into()))));
+        assert!(!forwarded(&released(Key::Named(Named::F1))));
+        // A key an input method takes while composing text.
+        assert!(!forwarded(&pressed(Key::Named(Named::Process), None)));
     }
 }

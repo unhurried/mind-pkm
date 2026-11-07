@@ -422,9 +422,10 @@ impl App {
 
     fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
-            // Keys no widget took, as `keyboard::listen` would give them, with their window.
+            // Keys no widget took, as `keyboard::listen` would give them, with
+            // their window - but not those nothing acts on (`keys::forwarded`).
             iced::event::listen_with(|event, status, window| match (event, status) {
-                (iced::Event::Keyboard(event), iced::event::Status::Ignored) => {
+                (iced::Event::Keyboard(event), iced::event::Status::Ignored) if keys::forwarded(&event) => {
                     Some(Message::Window(window, WindowEvent::Key(event)))
                 }
                 _ => None,

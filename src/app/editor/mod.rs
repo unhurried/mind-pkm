@@ -324,6 +324,8 @@ pub struct Editor {
     data_images: RefCell<DataImages>,
     /// The status bar's counts, as last counted.
     counted: RefCell<Counted>,
+    /// The entries of the page column, as last made.
+    entries: RefCell<column::Entries>,
     /// The heights of the page's blocks as last laid out, for those that
     /// get no widgets.
     heights: RefCell<near::Heights>,
@@ -407,6 +409,7 @@ impl Editor {
             image_files: RefCell::default(),
             data_images: RefCell::default(),
             counted: RefCell::default(),
+            entries: RefCell::default(),
             heights: RefCell::default(),
             unmeasured: Cell::new(false),
             known: Cell::new(usize::MAX),

@@ -5,10 +5,12 @@
 
 use super::page::Page;
 use crate::markdown::BlockKind;
+use crate::markdown::edit::Pending;
 use crate::markdown::parse::ContainerKind;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
+use std::rc::Rc;
 
 /// What an entry of the column shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +144,49 @@ pub fn entries(page: &Page) -> Vec<Entry> {
     entries
 }
 
+/// What the entries of the column are made from, besides the page's text
+/// and its parse (which change with its revision).
+#[derive(Debug, PartialEq)]
+struct Made {
+    revision: u64,
+    active: Option<(Range<usize>, BlockKind)>,
+    pending: Option<Pending>,
+}
+
+impl Made {
+    fn of(page: &Page) -> Made {
+        Made {
+            revision: page.revision(),
+            active: page.active().map(|a| (a.region.clone(), a.kind.clone())),
+            pending: page.pending().cloned(),
+        }
+    }
+}
+
+/// The entries of the column as last made: made again only when the page's
+/// text or its active region changed, not with every view - every window's
+/// view is built again after any message, and making them hashes the source
+/// of every block of the page.
+#[derive(Debug, Default)]
+pub struct Entries {
+    made: Option<(Made, Rc<[Entry]>)>,
+}
+
+impl Entries {
+    /// The entries of the column for `page` (`entries`).
+    pub fn of(&mut self, page: &Page) -> Rc<[Entry]> {
+        let made = Made::of(page);
+        if let Some((m, entries)) = &self.made
+            && *m == made
+        {
+            return entries.clone();
+        }
+        let entries: Rc<[Entry]> = entries(page).into();
+        self.made = Some((made, entries.clone()));
+        entries
+    }
+}
+
 /// The room above a block of `kind` after one of `previous`.
 fn gap(previous: Option<&BlockKind>, kind: &BlockKind) -> Gap {
     match (previous, kind) {
@@ -167,7 +212,7 @@ fn shared(above: &[(ContainerKind, Option<usize>)], below: &[(ContainerKind, Opt
 mod tests {
     use super::*;
     use crate::markdown::edit::{self, Sel};
-    use iced::widget::text_editor::{Action, Edit};
+    use iced::widget::text_editor::{Action, Edit, Motion};
     use std::path::PathBuf;
 
     fn page(text: &str) -> Page {
@@ -285,5 +330,40 @@ mod tests {
         assert_eq!(entries[1].kinds(), [ContainerKind::Quote]);
         assert!(entries[1].shared.is_empty(), "the paragraph before is outside the quote");
         assert_eq!(entries[2].shared, [ContainerKind::Quote]);
+    }
+
+    #[test]
+    fn entries_are_made_again_only_when_the_page_or_its_active_region_changed() {
+        let mut p = page("one\n\ntwo\n\nthree\n");
+        let mut cached = Entries::default();
+        // As made for the page.
+        let check = |cached: &mut Entries, p: &Page| {
+            let made = cached.of(p);
+            assert_eq!(&made[..], &entries(p)[..]);
+            made
+        };
+        let first = check(&mut cached, &p);
+        // Nothing changed: the same entries, not made again.
+        assert!(Rc::ptr_eq(&cached.of(&p), &first));
+        // A block made the active region, the text typed into, another block
+        // made the active one, a new paragraph: made again each time.
+        p.place(Sel::caret(6));
+        let active = check(&mut cached, &p);
+        assert!(!Rc::ptr_eq(&active, &first));
+        p.perform(Action::Edit(Edit::Insert('x')));
+        let typed = check(&mut cached, &p);
+        assert!(!Rc::ptr_eq(&typed, &active));
+        p.place(Sel::caret(0));
+        let moved = check(&mut cached, &p);
+        assert!(!Rc::ptr_eq(&moved, &typed));
+        // The cursor moved within the active region: the same entries.
+        p.perform(Action::Move(Motion::Right));
+        assert_eq!(p.sel(), Sel::caret(1));
+        assert!(Rc::ptr_eq(&cached.of(&p), &moved));
+        let e = edit::enter(p.text(), p.doc(), 0..3, Sel::caret(3)).unwrap();
+        p.apply(e);
+        assert!(p.pending().is_some());
+        let pending = check(&mut cached, &p);
+        assert!(!Rc::ptr_eq(&pending, &moved));
     }
 }
