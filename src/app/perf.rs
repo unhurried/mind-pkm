@@ -310,16 +310,6 @@ fn key(named: Named) -> keyboard::Event {
     key_event(Key::Named(named), Modifiers::empty())
 }
 
-fn release(named: Named) -> keyboard::Event {
-    keyboard::Event::KeyReleased {
-        key: Key::Named(named),
-        modified_key: Key::Named(named),
-        physical_key: keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified),
-        location: keyboard::Location::Standard,
-        modifiers: Modifiers::empty(),
-    }
-}
-
 /// Runs every scenario on a map of about `fanout^3` nodes with a page of
 /// `sections` sections open, and prints the report.
 fn report(fanout: usize, sections: usize) {
@@ -346,7 +336,6 @@ fn report(fanout: usize, sections: usize) {
     let start = b.nodes[0];
     b.app.doc.as_mut().unwrap().select(vec![start]);
     run("map: Down key (press)", &mut b, &mut |b, t, _| b.step(t, MapMsg::Key(key(Named::ArrowDown))));
-    run("map: key release", &mut b, &mut |b, t, _| b.step(t, MapMsg::Key(release(Named::ArrowDown))));
     run("map: click a node", &mut b, &mut |b, t, i| {
         let node = b.nodes[(i * 97) % b.nodes.len()];
         b.step(t, MapMsg::NodeClicked(node));
@@ -378,6 +367,21 @@ fn report(fanout: usize, sections: usize) {
     run("editor: Enter / Backspace", &mut b, &mut |b, t, i| {
         let bind = if i % 2 == 0 { Bind::Enter } else { Bind::Backspace };
         b.step(t, Message::Editor(editor, EditorMsg::Bind(bind)))
+    });
+    // A message that changes nothing, with a block being edited.
+    run("editor: tick (any message)", &mut b, &mut |b, t, _| b.step(t, MapMsg::Tick));
+    // Typed into a block, then a click in another: leaving the block tidies
+    // the lists there.
+    run("editor: click away after typing", &mut b, &mut |b, t, _| {
+        let text = b.app.editors[&editor].page.text().to_string();
+        let at = text.find("Paragraph 3").unwrap() + "Paragraph 3".len();
+        b.unmeasured(Message::Editor(editor, EditorMsg::PressedAt(at)));
+        b.unmeasured(Message::Editor(editor, EditorMsg::Released));
+        b.unmeasured(Message::Editor(editor, EditorMsg::Action(Action::Edit(Edit::Insert('a')))));
+        let text = b.app.editors[&editor].page.text().to_string();
+        let away = text.find("Paragraph 4 with").unwrap() + 3;
+        b.step(t, Message::Editor(editor, EditorMsg::PressedAt(away)));
+        b.unmeasured(Message::Editor(editor, EditorMsg::Released));
     });
     run("editor: pointer moves over text", &mut b, &mut |b, t, i| {
         let at = Point::new(260.0 + (i % 5) as f32 * 7.0, 120.0 + i as f32 * 23.0);

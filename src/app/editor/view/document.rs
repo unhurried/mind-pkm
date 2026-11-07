@@ -9,7 +9,7 @@ use super::theme::{
 };
 use crate::app::after_draw::after_draw;
 use crate::app::editor::assets::{DropTarget, content_end};
-use crate::app::editor::column::{self, Entry, EntryKey, Gap, Shown};
+use crate::app::editor::column::{Entry, EntryKey, Gap, Shown};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext};
 use crate::app::editor::near;
@@ -187,7 +187,7 @@ impl Editor {
             None => {
                 // Only the blocks near the visible part get widgets; those
                 // laid out tell their heights, for when they get none.
-                let entries = column::entries(&self.page);
+                let entries = self.entries.borrow_mut().of(&self.page);
                 let (rooms, plan) = self.near_plan(&entries, width, ctx.zoom);
                 let (heights, placement, zoom) = (&self.heights, &self.placement, ctx.zoom);
                 let mut col = keyed_column().width(width).on_layout(move |parts: &[(Part, Rectangle)]| {
@@ -220,7 +220,7 @@ impl Editor {
                 };
                 let mut previous_end = None;
                 let mut previous_block = None;
-                for (n, entry) in entries.into_iter().enumerate() {
+                for (n, entry) in entries.iter().enumerate() {
                     let block = match entry.shown {
                         Shown::Block(i) => Some(i),
                         Shown::Active => None,

@@ -914,11 +914,26 @@ impl Page {
     /// Writes the lists overlapping or touching `at` in their form.
     fn tidy_lists(&mut self, at: Range<usize>) -> Shift {
         let len = self.text.len();
-        let (doc, shift) = lists::tidy_parsed(&self.text, at.start.min(len)..at.end.min(len));
-        if !shift.is_empty() {
-            self.sel = Sel { anchor: shift.map(self.sel.anchor), head: shift.map(self.sel.head) };
-            self.text = doc.text.clone();
-            if self.tentative.is_none() { self.parsed(doc) } else { self.reparse() }
+        let at = at.start.min(len)..at.end.min(len);
+        // Tidied from the page's parse - not from a parse of the whole page
+        // again - unless a marker is left out of it. With no list there, it
+        // comes back as it was.
+        let masked = self.tentative.is_some();
+        let doc = if masked { Document::parse(&self.text) } else { std::mem::take(&mut self.doc) };
+        debug_assert!(doc.text == self.text);
+        let (doc, shift) = lists::tidy_from(doc, at);
+        if shift.is_empty() {
+            if !masked {
+                self.doc = doc;
+            }
+            return shift;
+        }
+        self.sel = Sel { anchor: shift.map(self.sel.anchor), head: shift.map(self.sel.head) };
+        self.text = doc.text.clone();
+        if masked {
+            self.reparse()
+        } else {
+            self.parsed(doc)
         }
         shift
     }
@@ -1366,6 +1381,24 @@ mod tests {
         q.apply(e);
         q.place(Sel::caret(0));
         assert_eq!(q.text, "one");
+    }
+
+    #[test]
+    fn leaving_an_edited_block_tidies_its_lists_from_the_page_parse() {
+        // A list item: its list written tight, and parsed as a whole parse would.
+        let mut p = page("* a\n\n* b\n\npara\n");
+        p.place(Sel::caret(3));
+        typing(&mut p, "!");
+        let at = p.text.find("para").unwrap();
+        p.place(Sel::caret(at));
+        assert_eq!(p.text, "* a!\n* b\n\npara\n");
+        assert_eq!(p.region_text(), Some("para"));
+        assert_eq!(p.doc, Document::parse(&p.text));
+        // A paragraph, no list there: the text and its parse stay as they are.
+        typing(&mut p, "x");
+        p.place(Sel::caret(0));
+        assert_eq!(p.text, "* a!\n* b\n\nxpara\n");
+        assert_eq!(p.doc, Document::parse(&p.text));
     }
 
     #[test]
