@@ -205,3 +205,52 @@ fn backspace_in_an_empty_task_item_makes_a_paragraph_at_once() {
     editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
     assert_eq!(page_text(&app, id), "- [ ] a\n- [ ] \n");
 }
+
+/// Ctrl+Up / Ctrl+Down, as the window gets them.
+fn ctrl_arrow(app: &mut App, id: window::Id, down: bool) {
+    let key = Key::Named(if down { Named::ArrowDown } else { Named::ArrowUp });
+    send(app, Message::Window(id, WindowEvent::Key(key_event(key, Modifiers::CTRL))));
+}
+
+#[test]
+fn ctrl_up_and_down_move_a_task_with_the_cursor() {
+    let (mut app, _f, _, _) = app_with_page("- [x] a\n- [ ] b\n  - b1\n- [ ] c\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "] b");
+    ctrl_arrow(&mut app, id, false);
+    assert_eq!(page_text(&app, id), "- [ ] b\n  - b1\n- [x] a\n- [ ] c\n");
+    // The cursor moved with it: typing goes on in the item.
+    typing(&mut app, id, "!");
+    assert_eq!(page_text(&app, id), "- [ ] b!\n  - b1\n- [x] a\n- [ ] c\n");
+    // At the top of the list, Ctrl+Up changes nothing.
+    ctrl_arrow(&mut app, id, false);
+    assert_eq!(page_text(&app, id), "- [ ] b!\n  - b1\n- [x] a\n- [ ] c\n");
+    ctrl_arrow(&mut app, id, true);
+    ctrl_arrow(&mut app, id, true);
+    assert_eq!(page_text(&app, id), "- [x] a\n- [ ] c\n- [ ] b!\n  - b1\n");
+    command(&mut app, id, EditorCommand::Undo);
+    assert_eq!(page_text(&app, id), "- [x] a\n- [ ] b!\n  - b1\n- [ ] c\n");
+}
+
+#[test]
+fn ctrl_up_outside_a_list_and_in_an_ordered_list() {
+    let (mut app, _f, _, _) = app_with_page("one\n\n1. a\n2. b\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    ctrl_arrow(&mut app, id, true);
+    assert_eq!(page_text(&app, id), "one\n\n1. a\n2. b\n");
+    click_after(&mut app, id, "2. b");
+    ctrl_arrow(&mut app, id, false);
+    assert_eq!(page_text(&app, id), "one\n\n1. b\n2. a\n");
+}
+
+#[test]
+fn moving_an_item_in_the_source_mode() {
+    let (mut app, _f, _, _) = app_with_page("- a\n- b\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "- b");
+    command(&mut app, id, EditorCommand::SourceMode);
+    ctrl_arrow(&mut app, id, false);
+    assert_eq!(page_text(&app, id), "- b\n- a\n");
+    assert_eq!(app.editors[&id].source.as_ref().map(|s| s.text()).as_deref(), Some("- b\n- a\n"));
+}

@@ -1305,6 +1305,7 @@ impl Editor {
             C::CodeBlock => self.insert_block("```\n", "\n```"),
             C::MathBlock => self.insert_block("$$\n", "\n$$"),
             C::HorizontalRule => self.insert_block("---", ""),
+            C::MoveItemUp | C::MoveItemDown => self.move_item(cmd == C::MoveItemDown),
             // The cursor in the first header cell, between the spaces of `|  |`.
             C::InsertTable => self.insert_block_with_cursor("|  |  |\n| --- | --- |\n|  |  |\n|  |  |", 2),
             C::Bold => self.toggle(InlineStyle::Bold),
@@ -1574,6 +1575,21 @@ impl Editor {
         }
         if let Some(e) = edit::nested(self.page.text(), self.page.doc(), a.region.clone(), self.page.sel(), f) {
             self.page.apply(e);
+        }
+        self.focus()
+    }
+
+    /// Move Item Up / Down: the list item at the cursor, also in the source mode.
+    fn move_item(&mut self, down: bool) -> Task<EditorMsg> {
+        let rule = |t: &str, d: &crate::markdown::Document, r, s| edit::move_item(t, d, r, s, down);
+        let Some(source) = &self.source else { return self.edit_region(rule) };
+        let text = source.text();
+        let sel = content_sel(source, &text);
+        let doc = crate::markdown::Document::parse(&text);
+        if let Some(e) = edit::region_at(&doc, sel.head).and_then(|region| edit::nested(&text, &doc, region, sel, rule))
+        {
+            self.page.set_text(e.text, e.sel);
+            self.refresh_source();
         }
         self.focus()
     }

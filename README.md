@@ -151,6 +151,7 @@ The file stays plain Markdown and only the edited parts change: the UTF-8 BOM an
 | --- | --- |
 | Enter / Shift+Enter | New paragraph (continuing a list or quote; an empty item ends the list, an empty paragraph leaves the quote or list item) / line break within the block |
 | Tab / Shift+Tab | Indent / outdent a list item; next / previous cell in a table |
+| Ctrl+Up / Ctrl+Down | Move a list or task item, with its nested items, up / down among the items of its list (an ordered list keeps its numbers in place) |
 | Up / Down at a block's edge, Shift+Up / Shift+Down | Into the next block; select whole blocks |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
 | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy (as rich text and Markdown) / paste (HTML from other applications becomes Markdown, a spreadsheet range a table, an image an inserted image) |

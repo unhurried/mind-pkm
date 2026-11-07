@@ -1,7 +1,7 @@
 //! The editing rules of the page editor that go beyond inserting characters:
-//! what Enter, Shift+Enter, Backspace, Delete and Tab do depending on the
-//! block, as pure functions from the page text and the cursor to the new
-//! text and cursor.
+//! what Enter, Shift+Enter, Backspace, Delete, Tab and Ctrl+Up / Down do
+//! depending on the block, as pure functions from the page text and the
+//! cursor to the new text and cursor.
 //!
 //! The cursor is in the *active region*: the source the editor shows, which is
 //! a block (or a few, while text is pasted or typed). A new empty paragraph
@@ -1207,6 +1207,116 @@ fn indent_list_item(text: &str, doc: &Document, region: Range<usize>, sel: Sel, 
     Some(Edited { text: t, sel: Sel { anchor: clamp(sel.anchor, s), head: clamp(sel.head, h) }, pending: None })
 }
 
+/// Ctrl+Up / Ctrl+Down in a list item: the item, with its nested items and
+/// the blocks under it, swaps places with the previous (or next) item of its
+/// list; the numbers of an ordered list stay in their places. None when the
+/// region is no list item or the item has no neighbor that way.
+pub fn move_item(text: &str, doc: &Document, region: Range<usize>, sel: Sel, down: bool) -> Option<Edited> {
+    let index = doc.blocks.iter().position(|b| b.range.start == region.start)?;
+    let block = &doc.blocks[index];
+    let BlockKind::ListItem(item) = &block.kind else { return None };
+    let start = block.range.start;
+    let list =
+        doc.lists.iter().rev().find(|l| l.depth == item.depth && l.range.start <= start && start <= l.range.end)?;
+    // The items of its list: the deeper ones are nested in them, those in
+    // other containers (a quote in an item) belong to lists of their own.
+    let siblings: Vec<usize> = (0..doc.blocks.len())
+        .filter(|&i| {
+            let b = &doc.blocks[i];
+            b.outer == block.outer
+                && list.range.start <= b.range.start
+                && b.range.start <= list.range.end
+                && matches!(&b.kind, BlockKind::ListItem(p) if p.depth == item.depth)
+        })
+        .collect();
+    let at = siblings.iter().position(|&i| i == index)?;
+    let other = if down { *siblings.get(at + 1)? } else { siblings[at.checked_sub(1)?] };
+    // An item's whole lines, with its nested items and the blocks under it.
+    let span = |i: usize| {
+        let b = &doc.blocks[i];
+        let BlockKind::ListItem(p) = &b.kind else { return b.range.clone() };
+        let end = text[..p.subtree_end.max(b.range.end)].trim_end().len().max(b.range.end);
+        b.range.start..line_range(text, end).end
+    };
+    let (a, b) = if down { (span(index), span(other)) } else { (span(other), span(index)) };
+    let digits = |r: &Range<usize>| -> Option<&str> {
+        let line = &text[line_range(text, r.start)];
+        let m = line_marker(line)?;
+        matches!(m.kind, MarkerKind::Ordered(..)).then(|| {
+            let rest = &line[m.indent..];
+            &rest[..rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len()]
+        })
+    };
+    // Each takes the other's number (none for bullets).
+    let (new_b, map_b) = renumber(&text[b.clone()], digits(&a).unwrap_or(""));
+    let (new_a, map_a) = renumber(&text[a.clone()], digits(&b).unwrap_or(""));
+    let mut out = String::with_capacity(text.len() + 8);
+    out.push_str(&text[..a.start]);
+    out.push_str(&new_b);
+    out.push_str(&text[a.end..b.start]);
+    let a_at = out.len();
+    out.push_str(&new_a);
+    out.push_str(&text[b.end..]);
+    let grown = out.len() as isize - text.len() as isize;
+    let map = |o: usize| {
+        if o < a.start {
+            o
+        } else if o <= a.end {
+            a_at + map_a(o - a.start)
+        } else if o < b.start {
+            a.start + new_b.len() + (o - a.end)
+        } else if o <= b.end {
+            a.start + map_b(o - b.start)
+        } else {
+            (o as isize + grown) as usize
+        }
+    };
+    Some(Edited { sel: Sel { anchor: map(sel.anchor), head: map(sel.head) }, text: out, pending: None })
+}
+
+/// A list item's lines `sub` with the number of its marker replaced by
+/// `number` (nothing changes when it is empty), its further lines indented
+/// as much more or less as the marker got wider or narrower; and where each
+/// offset of `sub` went.
+fn renumber(sub: &str, number: &str) -> (String, impl Fn(usize) -> usize + use<>) {
+    let indent = sub.len() - sub.trim_start_matches(' ').len();
+    let old = sub[indent..].len() - sub[indent..].trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let number = if number.is_empty() { &sub[indent..indent + old] } else { number };
+    let wider = number.len() as isize - old as isize;
+    // For each line: where it starts and its content starts, before and after.
+    let mut lines: Vec<(usize, usize, usize, usize)> = Vec::new();
+    let mut out = String::with_capacity(sub.len() + 8);
+    let mut pos = 0;
+    for (k, line) in sub.split('\n').enumerate() {
+        if k > 0 {
+            out.push('\n');
+        }
+        let new_start = out.len();
+        let (skip, new_skip) = if k == 0 {
+            out.push_str(&line[..indent]);
+            out.push_str(number);
+            (indent + old, indent + number.len())
+        } else if line.trim().is_empty() {
+            (0, 0)
+        } else if wider >= 0 {
+            out.push_str(&" ".repeat(wider as usize));
+            (0, wider as usize)
+        } else {
+            let spaces = line.len() - line.trim_start_matches(' ').len();
+            (spaces.min(-wider as usize), 0)
+        };
+        out.push_str(&line[skip..]);
+        lines.push((pos, pos + skip, new_start, new_start + new_skip));
+        pos += line.len() + 1;
+    }
+    let map = move |o: usize| {
+        let k = lines.partition_point(|l| l.0 <= o).saturating_sub(1);
+        let (start, content, new_start, new_content) = lines[k];
+        if o >= content { new_content + (o - content) } else { new_start + (o - start).min(new_content - new_start) }
+    };
+    (out, map)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1560,6 +1670,67 @@ mod tests {
         assert_eq!(tab_at("- ‸a\n- b", false), "- ‸a\n- b");
         assert_eq!(tab_at("- a\n  - ‸b\n    - c", true), "- a\n- ‸b\n  - c");
         assert_eq!(tab_at("- ‸a", true), "- ‸a");
+    }
+
+    fn move_at(marked: &str, down: bool) -> Option<String> {
+        let (text, region, c) = setup(marked);
+        let doc = Document::parse(&text);
+        nested(&text, &doc, region, Sel::caret(c), |t, d, r, s| move_item(t, d, r, s, down)).map(|e| show(&e))
+    }
+
+    #[test]
+    fn moving_list_items() {
+        let up = |m: &str| move_at(m, false);
+        let down = |m: &str| move_at(m, true);
+        assert_eq!(up("- [x] a\n- [ ] b‸").as_deref(), Some("- [ ] b‸\n- [x] a"));
+        assert_eq!(down("- [x] a‸\n- [ ] b\n").as_deref(), Some("- [ ] b\n- [x] a‸\n"));
+        assert_eq!(up("- a\n- b‸\n- c").as_deref(), Some("- b‸\n- a\n- c"));
+        // With the nested items, past the nested items of the other.
+        assert_eq!(down("- a‸\n  - a1\n- b").as_deref(), Some("- b\n- a‸\n  - a1"));
+        assert_eq!(up("- a\n  - a1\n- b‸\n  - b1").as_deref(), Some("- b‸\n  - b1\n- a\n  - a1"));
+        // A nested item among its siblings only.
+        assert_eq!(down("- a\n  - x‸\n  - y\n- b").as_deref(), Some("- a\n  - y\n  - x‸\n- b"));
+        assert_eq!(up("- a\n  - x‸\n- b"), None);
+        assert_eq!(down("- a\n  - x‸\n- b"), None);
+        assert_eq!(up("- a‸\n- b"), None);
+        assert_eq!(down("- a\n- b‸"), None);
+        // Not across a paragraph into another list, nor outside lists.
+        assert_eq!(up("- a\n\ntext\n\n- b‸"), None);
+        assert_eq!(up("one\n\ntwo‸"), None);
+        // The cursor keeps its place in the text; an empty item moves too.
+        assert_eq!(up("- a\n- b‸c").as_deref(), Some("- b‸c\n- a"));
+        assert_eq!(up("- a\n- ‸").as_deref(), Some("- ‸\n- a"));
+    }
+
+    #[test]
+    fn moving_items_with_blocks_under_them() {
+        // The blank lines between the items stay where they are.
+        assert_eq!(move_at("- a\n\n  para a\n\n- b‸", false).as_deref(), Some("- b‸\n\n- a\n\n  para a"));
+        assert_eq!(
+            move_at("- a‸\n\n  para a\n\n- b\n\n  para b\n", true).as_deref(),
+            Some("- b\n\n  para b\n\n- a‸\n\n  para a\n")
+        );
+    }
+
+    #[test]
+    fn moving_ordered_items_keeps_the_numbers() {
+        assert_eq!(move_at("1. a\n2. b‸", false).as_deref(), Some("1. b‸\n2. a"));
+        assert_eq!(move_at("1) a‸\n2) b\n3) c", true).as_deref(), Some("1) b\n2) a‸\n3) c"));
+        // A wider or narrower number indents the item's further lines alike.
+        assert_eq!(
+            move_at("9. a\n   - a1\n10. b‸\n    - b1", false).as_deref(),
+            Some("9. b‸\n   - b1\n10. a\n    - a1")
+        );
+    }
+
+    #[test]
+    fn moving_items_in_a_quote_and_an_item() {
+        assert_eq!(move_at("> - a\n> - b‸", false).as_deref(), Some("> - b‸\n> - a"));
+        assert_eq!(move_at("> - a‸\n>   - a1\n> - b", true).as_deref(), Some("> - b\n> - a‸\n>   - a1"));
+        assert_eq!(
+            move_at("- a\n\n  para\n\n  - x\n  - y‸\n", false).as_deref(),
+            Some("- a\n\n  para\n\n  - y‸\n  - x\n")
+        );
     }
 
     #[test]
