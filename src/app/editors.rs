@@ -148,6 +148,12 @@ impl App {
         if old.window != prefs.window {
             settings::set_editor_window(prefs.window);
         }
+        if old.outline != prefs.outline {
+            settings::set_editor_outline(prefs.outline);
+        }
+        if old.assets != prefs.assets {
+            settings::set_editor_assets(prefs.assets);
+        }
     }
 
     /// Closes the editor window `id`; without a map window, the last one
@@ -192,11 +198,13 @@ impl App {
         if let Some((&id, _)) = self.editors.iter().find(|(_, e)| crate::paths::key(e.page.path()) == key) {
             return Ok(window::gain_focus(id));
         }
-        let mut editor = Editor::open(path, self.editor_prefs.window)?;
+        let mut editor = Editor::open(path, &self.editor_prefs)?;
         let (id, opened) = window::open(window_settings(self.editor_prefs.window, None, false));
         editor.window = Some(id);
         self.editors.insert(id, editor);
-        Ok(Task::batch([opened.discard(), self.request_renders()]))
+        // Opened at the start too, before any message: the assets pane it
+        // opens with reads its folder now.
+        Ok(Task::batch([opened.discard(), self.request_renders(), self.read_assets()]))
     }
 
     /// What an open the editor window `id` asked for gives: its task, or

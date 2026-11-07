@@ -47,19 +47,30 @@ fn effects_of(app: &mut App, id: window::Id, msg: EditorMsg) -> Vec<Effect> {
     effects
 }
 
+/// The editor window of `path`.
+fn window_of(app: &App, path: &std::path::Path) -> window::Id {
+    *app.editors.iter().find(|(_, e)| e.page.path() == path).unwrap().0
+}
+
 #[test]
-fn the_assets_pane_is_shown_per_window_and_hidden_when_a_window_opens() {
+fn the_assets_pane_is_shown_per_window_and_a_new_window_opens_as_it_was_last() {
     let (mut app, f, id) = app_with_assets("x\n", &[]);
     assert!(app.editors[&id].assets.is_some());
-    // Another page opens without it; the first keeps it.
+    assert!(app.editor_prefs.assets);
+    // Another page opens with it, and reads its folder.
     let other = f.write_page("Other", "y\n");
     let _ = app.open_in_editor(&other);
-    let other_id = *app.editors.iter().find(|(_, e)| e.page.path() == other).unwrap().0;
+    let other_id = window_of(&app, &other);
+    assert!(pane(&app, other_id).reading());
+    // Hidden there (the View menu entry toggles it too), the next page opens
+    // without it; the first window keeps it.
+    editor(&mut app, other_id, EditorMsg::Command(EditorCommand::Assets));
     assert!(app.editors[&other_id].assets.is_none());
+    assert!(!app.editor_prefs.assets);
+    let third = f.write_page("Third", "z\n");
+    let _ = app.open_in_editor(&third);
+    assert!(app.editors[&window_of(&app, &third)].assets.is_none());
     assert!(app.editors[&id].assets.is_some());
-    // The View menu entry toggles it too.
-    editor(&mut app, id, EditorMsg::Command(EditorCommand::Assets));
-    assert!(app.editors[&id].assets.is_none());
 }
 
 #[test]
@@ -222,8 +233,8 @@ fn assets_outside_the_document_directory_or_open_are_not_changed() {
     let kept = f.dir.path().join("Loose.assets").join("keep.png");
     std::fs::write(&kept, "").unwrap();
     let _ = app.open_in_editor(&outside);
-    let loose = *app.editors.iter().find(|(_, e)| e.page.path() == outside).unwrap().0;
-    press(&mut app, loose, "d", Modifiers::CTRL);
+    // It opens with the pane, shown in the first window.
+    let loose = window_of(&app, &outside);
     finish_read(&mut app, loose);
     assert_eq!(pane(&app, loose).shown().unwrap(), vec!["keep.png"]);
     assets(&mut app, loose, AssetsMsg::RightClicked(kept.clone()));

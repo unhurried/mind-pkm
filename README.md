@@ -177,7 +177,7 @@ The menus (File, Edit, Paragraph, Format, Table, View) hold every command with i
 - **Export**: File → Export HTML... writes a self-contained HTML file (math and diagrams as SVG, images referenced relative to it). File → Export PDF... prints that page to a PDF with Microsoft Edge (or Google Chrome) in the background. The style sheet can be replaced by an `export.css` in `%APPDATA%\mind-pkm\`.
 - **HTML in pages**: `<u>`, `<mark>`, `<sub>`, `<sup>`, `<kbd>`, `<br>`, `<img>` and `<span style="color: ...">` are rendered; other tags (`<iframe>`, `<video>`, ...) show as a placeholder with a link.
 
-The editor remembers its window size, zoom, theme and the auto-pairing switch. These lines in `%APPDATA%\mind-pkm\settings.txt` change how images are inserted:
+The editor remembers its window size, zoom, theme and the auto-pairing switch, and whether the outline and the assets pane were last shown: a page opens with them shown or hidden as they were in the last window that showed or hid them (windows already open keep theirs). These lines in `%APPDATA%\mind-pkm\settings.txt` change how images are inserted:
 
 | Setting | Effect |
 | --- | --- |
