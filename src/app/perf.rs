@@ -437,13 +437,15 @@ fn perf_very_long_page() {
 /// What a window shows, as an operation finds it: where the map's scrollable
 /// is and how far it is scrolled, the scrollables and containers with an id
 /// (bounds, the content's bounds and how far it is scrolled; bounds), and the
-/// texts of the text widgets.
+/// texts of the text widgets with where the last of each is (in the
+/// coordinates it is laid out in: on the window in an overlay).
 #[derive(Default)]
 struct Shown {
     map: Option<(Rectangle, Vector)>,
     scrollables: HashMap<widget::Id, (Rectangle, Rectangle, Vector)>,
     containers: Vec<(widget::Id, Rectangle)>,
     texts: HashSet<String>,
+    text_at: HashMap<String, Rectangle>,
 }
 
 impl Operation for Shown {
@@ -473,8 +475,9 @@ impl Operation for Shown {
         }
     }
 
-    fn text(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, text: &str) {
+    fn text(&mut self, _id: Option<&widget::Id>, bounds: Rectangle, text: &str) {
         self.texts.insert(text.to_string());
+        self.text_at.insert(text.to_string(), bounds);
     }
 }
 
@@ -951,4 +954,90 @@ fn the_fold_buttons_near_the_view_take_presses() {
     let messages = click(&mut b, marker);
     assert!(matches!(messages[..], [Message::Map(MapMsg::FoldClicked(n))] if n == node.id), "{messages:?}");
     assert!(!b.app.doc.as_ref().unwrap().map().is_folded(node.id));
+}
+
+/// Where the container with id `name` of the page is (in the coordinates the
+/// page's widgets are laid out in).
+fn page_container(b: &mut Bench, shown: &Shown, name: &str) -> Option<Rectangle> {
+    let id = b.app.editors[&b.editor].id(name);
+    shown.containers.iter().find(|(i, _)| *i == id).map(|(_, bounds)| *bounds)
+}
+
+/// Going into a table moves neither the table nor the block after it: its
+/// toolbar floats just above it, over the page, and takes presses (not the
+/// block under it); with the table's top scrolled out of view the toolbar
+/// is at the top of the visible part; while a menu is open it is hidden.
+#[test]
+fn the_table_toolbar_floats_above_the_table() {
+    let mut b = Bench::new(3, 6);
+    let editor = b.editor;
+    let table = block_of(&b, "| Key | Value | Note |\n| --- | ---: | --- |\n| a2 ");
+    let next = block_of(&b, "## Section 3");
+    // The table in the middle of the visible part.
+    let section = block_of(&b, "## Section 2");
+    let heading = b.app.editors[&editor].page.doc().headings.iter().position(|h| h.block == section).unwrap();
+    b.unmeasured(Message::Editor(editor, EditorMsg::HeadingClicked(heading)));
+    let doc = b.app.editors[&editor].id("doc");
+    let (_, _, shown) = page_view(&mut b);
+    let top = shown.scrollables[&doc].0.y;
+    let section = page_container(&mut b, &shown, &format!("block-{section}")).expect("the heading scrolled to");
+    scroll_page_to(&mut b, section.y - top);
+    let (_, _, shown) = page_view(&mut b);
+    let rendered = page_container(&mut b, &shown, &format!("block-{table}")).expect("the table has widgets");
+    scroll_page_to(&mut b, rendered.y - top - 300.0);
+    let (visible, _, shown) = page_view(&mut b);
+    let rendered = page_container(&mut b, &shown, &format!("block-{table}")).unwrap();
+    let below = page_container(&mut b, &shown, &format!("block-{next}")).expect("the block after the table");
+    assert!(visible.contains(rendered.position()) && visible.contains(below.position()), "{visible:?}");
+    assert!(!shown.texts.contains("Resize"));
+    // A click in a cell.
+    b.unmeasured(Message::Editor(editor, EditorMsg::TableCellPressed(table, 1, 0)));
+    b.unmeasured(Message::Editor(editor, EditorMsg::Released));
+    assert!(b.app.editors[&editor].page.active().is_some());
+    let (visible, _, shown) = page_view(&mut b);
+    let edited = page_container(&mut b, &shown, "active-box").expect("the table being edited");
+    let after = page_container(&mut b, &shown, &format!("block-{next}")).unwrap();
+    assert!(
+        (edited.y - rendered.y).abs() < 0.5 && (edited.height - rendered.height).abs() < 0.5,
+        "{rendered:?} -> {edited:?}"
+    );
+    assert!((after.y - below.y).abs() < 0.5, "{below:?} -> {after:?}");
+    // The toolbar, on the window: just above the table.
+    let to_page = visible.position() - shown.scrollables[&doc].0.position();
+    let resize = shown.text_at["Resize"] + to_page;
+    assert!(resize.y + resize.height < edited.y && resize.y > edited.y - 40.0, "{resize:?} over {edited:?}");
+    // Its Center button takes a click; the block under it does not.
+    let at = shown.text_at["Center"].center();
+    let _ = b.messages(editor, moved(at), at, false);
+    let mut messages = Vec::new();
+    for event in [mouse::Event::ButtonPressed(mouse::Button::Left), mouse::Event::ButtonReleased(mouse::Button::Left)] {
+        messages.extend(b.messages(editor, Event::Mouse(event), at, false).0);
+    }
+    assert!(
+        messages.iter().any(|m| matches!(m, Message::Editor(_, EditorMsg::Command(EditorCommand::AlignCenter))))
+            && !messages.iter().any(|m| matches!(
+                m,
+                Message::Editor(_, EditorMsg::TextPressed | EditorMsg::BlockPressed(_) | EditorMsg::PressedAt(_))
+            )),
+        "{messages:?}"
+    );
+    for m in messages {
+        let _ = b.app.update(m);
+    }
+    b.rebuild();
+    assert!(b.app.editors[&editor].page.text().lines().any(|l| l.starts_with("| :--") && l.contains("-: |")));
+    // The table's top scrolled out of view: the toolbar at the top of the visible part.
+    let (_, _, shown) = page_view(&mut b);
+    let edited = page_container(&mut b, &shown, "active-box").unwrap();
+    scroll_page_to(&mut b, edited.y - top + 30.0);
+    let (_, _, shown) = page_view(&mut b);
+    let window_top = shown.scrollables[&doc].0.y;
+    let resize = shown.text_at["Resize"];
+    assert!(resize.y > window_top && resize.y < window_top + 20.0, "{resize:?} below {window_top}");
+    // Hidden while the Table menu is open.
+    b.unmeasured(Message::Editor(editor, EditorMsg::Menu(Some(4))));
+    let shown = b.shown(editor);
+    assert!(shown.texts.contains("Insert Row Above") && !shown.texts.contains("Resize"));
+    b.unmeasured(Message::Editor(editor, EditorMsg::Menu(None)));
+    assert!(b.shown(editor).texts.contains("Resize"));
 }
