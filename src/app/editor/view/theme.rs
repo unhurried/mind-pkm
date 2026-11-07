@@ -3,10 +3,39 @@
 use crate::app::ui::{DialogStyle, MenuStyle};
 use crate::app::view::APP_FONT;
 use crate::markdown::BlockKind;
+use iced::advanced::graphics::text::font_system;
 use iced::widget::text_editor;
 use iced::{Background, Border, Color, Font, Theme, font};
+use std::sync::OnceLock;
 
-pub const CODE_FONT: Font = if cfg!(windows) { Font::with_name("Consolas") } else { Font::MONOSPACE };
+/// The family code is set in where it is installed: a monospace font with
+/// Japanese whose full-width characters are exactly two half-width ones wide.
+const CODE_FAMILY: &str = "BIZ UDGothic";
+
+/// The code font where `CODE_FAMILY` is not installed.
+const FALLBACK_CODE_FONT: Font = if cfg!(windows) { Font::with_name("Consolas") } else { Font::MONOSPACE };
+
+/// The font code is set in: `CODE_FAMILY` if the font system has it, else
+/// `FALLBACK_CODE_FONT` - a font named but missing would leave every
+/// character to the per-script fallback. Chosen once, the first time it is
+/// asked (`app::run` asks before any text is drawn).
+pub fn code_font() -> Font {
+    static CHOSEN: OnceLock<Font> = OnceLock::new();
+    if let Some(&font) = CHOSEN.get() {
+        return font;
+    }
+    // iced holds the font system's lock while it formats highlighted text,
+    // which asks for the code font: never wait for the lock here.
+    let Ok(mut system) = font_system().try_write() else { return FALLBACK_CODE_FONT };
+    let font =
+        choose_code_font(system.raw().db().faces().flat_map(|f| f.families.iter().map(|(name, _)| name.as_str())));
+    *CHOSEN.get_or_init(|| font)
+}
+
+/// The code font, given the family names of the installed fonts.
+fn choose_code_font<'a>(mut families: impl Iterator<Item = &'a str>) -> Font {
+    if families.any(|name| name == CODE_FAMILY) { Font::with_name(CODE_FAMILY) } else { FALLBACK_CODE_FONT }
+}
 
 /// Body text size and line height at 100%.
 pub const BODY_SIZE: f32 = 15.0;
@@ -176,7 +205,7 @@ pub const TEXT_LINE_HEIGHT: f32 = LINE_HEIGHT;
 
 /// The size, font and padding of code in its box (as rendered).
 pub fn code_text_style(zoom: f32) -> (f32, Font, f32) {
-    (BODY_SIZE * zoom * 0.9, CODE_FONT, CODE_PADDING)
+    (BODY_SIZE * zoom * 0.9, code_font(), CODE_PADDING)
 }
 
 pub(super) fn editor_style(p: Palette, background: Color) -> text_editor::Style {
@@ -186,5 +215,24 @@ pub(super) fn editor_style(p: Palette, background: Color) -> text_editor::Style 
         placeholder: p.muted,
         value: p.text,
         selection: p.selection,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn code_font_is_biz_udgothic_where_it_is_installed() {
+        let installed = ["Meiryo UI", "BIZ UDPGothic", "BIZ UDGothic", "Consolas"];
+        assert_eq!(choose_code_font(installed.into_iter()), Font::with_name("BIZ UDGothic"));
+    }
+
+    #[test]
+    fn code_font_falls_back_where_biz_udgothic_is_missing() {
+        // The proportional family of the same font file does not count.
+        let installed = ["Meiryo UI", "BIZ UDPGothic", "Consolas"];
+        assert_eq!(choose_code_font(installed.into_iter()), FALLBACK_CODE_FONT);
+        assert_eq!(choose_code_font(std::iter::empty()), FALLBACK_CODE_FONT);
     }
 }

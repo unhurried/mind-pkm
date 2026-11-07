@@ -3,7 +3,7 @@
 //! the code font, links in the link color, fenced code highlighted for its
 //! language. Also the syntax highlighting of rendered code blocks.
 
-use super::view::{CODE_FONT, Palette};
+use super::view::{Palette, code_font};
 use crate::app::view::APP_FONT;
 use iced::advanced::text::highlighter::{self, Format};
 use iced::{Color, Font, Theme, font};
@@ -164,18 +164,18 @@ pub fn format(h: &Highlight, theme: &Theme) -> Format<Font> {
         Highlight::Strong => (None, Some(bold)),
         Highlight::Emphasis => (None, Some(italic)),
         Highlight::StrongEmphasis => (None, Some(Font { style: font::Style::Italic, ..bold })),
-        Highlight::Code => (Some(p.code), Some(CODE_FONT)),
+        Highlight::Code => (Some(p.code), Some(code_font())),
         Highlight::Link => (Some(p.link), None),
         Highlight::Url => (Some(p.muted), None),
         Highlight::Html => (Some(p.html), None),
-        Highlight::Math => (Some(p.math), Some(CODE_FONT)),
+        Highlight::Math => (Some(p.math), Some(code_font())),
         Highlight::Strike => (Some(p.muted), None),
         Highlight::Mark => (Some(p.mark), None),
-        Highlight::Fence => (Some(p.muted), Some(CODE_FONT)),
-        Highlight::CodeText => (None, Some(CODE_FONT)),
-        Highlight::Syntax(c) => (Some(*c), Some(CODE_FONT)),
+        Highlight::Fence => (Some(p.muted), Some(code_font())),
+        Highlight::CodeText => (None, Some(code_font())),
+        Highlight::Syntax(c) => (Some(*c), Some(code_font())),
         Highlight::Match => (Some(p.find), Some(bold)),
-        Highlight::FrontMatter => (Some(p.muted), Some(CODE_FONT)),
+        Highlight::FrontMatter => (Some(p.muted), Some(code_font())),
     };
     Format { color, font }
 }
@@ -373,7 +373,7 @@ fn marker_for(h: Highlight) -> Highlight {
         Highlight::Strong | Highlight::Heading => Highlight::MarkerIn(bold),
         Highlight::Emphasis => Highlight::MarkerIn(Font { style: font::Style::Italic, ..APP_FONT }),
         Highlight::StrongEmphasis => Highlight::MarkerIn(Font { style: font::Style::Italic, ..bold }),
-        Highlight::Code | Highlight::Math => Highlight::MarkerIn(CODE_FONT),
+        Highlight::Code | Highlight::Math => Highlight::MarkerIn(code_font()),
         _ => Highlight::Marker,
     }
 }

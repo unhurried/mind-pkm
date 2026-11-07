@@ -26,7 +26,7 @@ pub use document::Placement;
 pub use hit::HitRun;
 pub use hit::{HitInfo, caret_in, hit_test, piece_key};
 pub use table_widths::WidthCache;
-pub use theme::{BODY_SIZE, CODE_FONT, Palette, TEXT_LINE_HEIGHT, code_text_style, region_text_style};
+pub use theme::{BODY_SIZE, Palette, TEXT_LINE_HEIGHT, code_font, code_text_style, region_text_style};
 
 use super::render::RenderCache;
 use super::{Editor, EditorMsg, EditorPrefs};
