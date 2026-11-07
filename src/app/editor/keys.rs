@@ -44,6 +44,8 @@ pub enum EditorCommand {
     OrderedList,
     BulletList,
     HorizontalRule,
+    MoveItemUp,
+    MoveItemDown,
     // Format
     Bold,
     Italic,
@@ -134,6 +136,8 @@ pub const MENUS: &[Menu<EditorCommand>] = &[
             ("Ordered List", "Ctrl+Shift+[", C::OrderedList),
             ("Bullet List", "Ctrl+Shift+]", C::BulletList),
             ("Horizontal Rule", "", C::HorizontalRule),
+            ("Move Item Up", "Ctrl+Up", C::MoveItemUp),
+            ("Move Item Down", "Ctrl+Down", C::MoveItemDown),
         ],
     ),
     (
@@ -274,6 +278,8 @@ pub fn command_for_key(key: &Key, physical: Physical, m: Modifiers) -> Option<Ed
             (Named::F11, false, false, false) => C::FullScreen,
             (Named::Enter, true, false, false) => C::RowBelow,
             (Named::Backspace, true, true, false) => C::DeleteRow,
+            (Named::ArrowUp, true, false, false) => C::MoveItemUp,
+            (Named::ArrowDown, true, false, false) => C::MoveItemDown,
             (Named::ArrowUp, false, false, true) => C::MoveRowUp,
             (Named::ArrowDown, false, false, true) => C::MoveRowDown,
             (Named::ArrowLeft, false, false, true) => C::MoveColumnLeft,

@@ -146,6 +146,8 @@ impl Editor {
             | C::OrderedList
             | C::BulletList
             | C::HorizontalRule
+            | C::MoveItemUp
+            | C::MoveItemDown
             | C::Bold
             | C::Italic
             | C::Underline
