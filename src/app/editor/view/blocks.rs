@@ -7,8 +7,8 @@ use super::inline::{cell_lines, inline_text, paragraph_view};
 use super::rich::rich;
 use super::table_widths::ColumnWidths;
 use super::theme::{
-    BLOCK_GAP, CELL_PADDING, CODE_FONT, CODE_PADDING, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR,
-    QUOTE_PADDING, bold,
+    BLOCK_GAP, CELL_PADDING, CODE_PADDING, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING,
+    bold, code_font,
 };
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::highlight::{self};
@@ -70,7 +70,7 @@ fn nodes_view<'a>(nodes: &[Node], ctx: &Ctx<'a>, width: f32, block: usize) -> El
             }
             Node::Rule => rule::horizontal(1).into(),
             Node::Table(t) => table_view(t, ctx, block, width),
-            Node::FrontMatter(t) => text(t.clone()).font(CODE_FONT).color(p.muted).into(),
+            Node::FrontMatter(t) => text(t.clone()).font(code_font()).color(p.muted).into(),
             Node::Footnote { number, children } => {
                 row![text(format!("[{number}]")).color(p.muted), nodes_view(children, ctx, width - 32.0, block)].into()
             }
@@ -127,14 +127,15 @@ fn code_text_view<'a>(
             }
         };
         let spans: Vec<Span<'static, SpanLink, Font>> =
-            pieces.iter().map(|(t, c)| Span::new(t.clone()).color(*c).font(CODE_FONT).size(size)).collect();
-        let rich = rich_text(spans).size(size).font(CODE_FONT).line_height(LINE_HEIGHT).wrapping(Wrapping::WordOrGlyph);
+            pieces.iter().map(|(t, c)| Span::new(t.clone()).color(*c).font(code_font()).size(size)).collect();
+        let rich =
+            rich_text(spans).size(size).font(code_font()).line_height(LINE_HEIGHT).wrapping(Wrapping::WordOrGlyph);
         let element: Element<EditorMsg> = match starts.and_then(|s| s.get(n)) {
             Some(&start) => {
                 let map = content::source_map(line.len(), start..start + line.len());
                 let info = Arc::new(HitInfo {
                     block,
-                    runs: vec![HitRun { text: line.to_string(), size, font: CODE_FONT, map: Some(map) }],
+                    runs: vec![HitRun { text: line.to_string(), size, font: code_font(), map: Some(map) }],
                     width: width - 2.0 * CODE_PADDING,
                 });
                 let mut area = mouse_area(rich.width(width - 2.0 * CODE_PADDING))
@@ -172,7 +173,7 @@ pub(super) fn math_view<'a>(tex: &str, display: bool, ctx: &Ctx<'a>) -> Element<
         }
         Some(Rendered::Done(Err(e))) => {
             let source = text(if display { tex.to_string() } else { format!("${tex}$") })
-                .font(CODE_FONT)
+                .font(code_font())
                 .size(ctx.size(0.9))
                 .color(p.math);
             if display {
@@ -181,7 +182,7 @@ pub(super) fn math_view<'a>(tex: &str, display: bool, ctx: &Ctx<'a>) -> Element<
                 source.into()
             }
         }
-        _ => text(tex.to_string()).font(CODE_FONT).size(ctx.size(0.9)).color(p.muted).into(),
+        _ => text(tex.to_string()).font(code_font()).size(ctx.size(0.9)).color(p.muted).into(),
     };
     if display { container(content).center_x(Fill).padding([4, 0]).into() } else { content }
 }
@@ -195,7 +196,7 @@ pub(super) fn mermaid_view<'a>(source: &str, ctx: &Ctx<'a>, width: f32) -> Eleme
             container(svg(s.handle.clone()).width(s.width * scale).height(s.height * scale)).center_x(Fill).into()
         }
         Some(Rendered::Done(Err(e))) => column![
-            container(text(source.to_string()).font(CODE_FONT).size(ctx.size(0.9)).color(p.text))
+            container(text(source.to_string()).font(code_font()).size(ctx.size(0.9)).color(p.text))
                 .padding(CODE_PADDING)
                 .width(Fill)
                 .style(move |_| container::background(p.code_bg).border(border::rounded(4))),
@@ -412,7 +413,7 @@ impl Editor {
             BlockKind::Table => table_view(&content::table_block(doc, i), ctx, i, width),
             BlockKind::FrontMatter => {
                 let source = &self.page.text()[block.range.clone()];
-                container(text(source.to_string()).font(CODE_FONT).size(ctx.size(0.85)).color(p.muted))
+                container(text(source.to_string()).font(code_font()).size(ctx.size(0.85)).color(p.muted))
                     .padding(CODE_PADDING)
                     .width(Fill)
                     .style(move |_| container::background(p.code_bg).border(border::rounded(4)))

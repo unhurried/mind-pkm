@@ -149,6 +149,17 @@ mod tests {
     }
 
     #[test]
+    fn exported_code_is_set_in_biz_udgothic_first() {
+        let html =
+            html_document(Path::new("/d/Code.md"), "```\n日本 ab\n```\n", None, crate::markdown::html::DEFAULT_CSS);
+        assert!(
+            html.contains(r#"code, kbd, pre { font-family: "BIZ UDGothic", Consolas, "Courier New", monospace;"#),
+            "{html}"
+        );
+        assert!(html.contains("日本 ab"), "{html}");
+    }
+
+    #[test]
     fn images_are_relative_to_where_the_html_goes() {
         let dir = tempfile::tempdir().unwrap();
         let page = dir.path().join("docs").join("Trip.md");

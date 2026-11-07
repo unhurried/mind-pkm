@@ -18,7 +18,7 @@ It reads and writes the same files as the add-on: your Freeplane `.mm` map and t
 1. Download `mind-pkm.exe` from the [releases page](../../releases) and put it anywhere.
 2. Run it, and open your map with File → Open. The last opened map is reopened on the next start, with the zoom level, scroll position and selected nodes it was last shown with (remembered per map in `%APPDATA%\mind-pkm\views.txt`), in a window of the size and position it last had (`window=` in `%APPDATA%\mind-pkm\settings.txt`; remove that line if the window ends up off-screen); a map path given on the command line (or opening a `.mm` file with the exe from Explorer) takes precedence, and a `.md` file opens in the page editor alone (see [Opening Markdown Files](#opening-markdown-files)).
 
-The UI uses the Meiryo UI font; where it is missing, the system's fallback fonts are used.
+The UI uses the Meiryo UI font; where it is missing, the system's fallback fonts are used. Code in pages (code blocks, inline code, keys) is set in BIZ UDGothic, half-width and full-width characters alike, so that Japanese and ASCII line up (a full-width character is two half-width ones wide); where BIZ UDGothic is missing, in Consolas.
 
 There is nothing to install and no runtime to set up: the exe embeds everything, including the Japanese dictionary for the search index.
 

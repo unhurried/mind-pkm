@@ -5,7 +5,7 @@ use super::blocks::{embed_view, image_view, math_view};
 use super::hit::{HitInfo, HitRun};
 use super::rich::rich;
 use super::table_widths::Piece;
-use super::theme::{CODE_FONT, LINE_HEIGHT, bold, italic};
+use super::theme::{LINE_HEIGHT, bold, code_font, italic};
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::{EditorMsg, RightClick};
 use crate::app::press_point::press_in;
@@ -285,7 +285,7 @@ fn match_pieces(t: &str, map: &SourceMap, ctx: &Ctx) -> Vec<(std::ops::Range<usi
 
 /// The size and font of a run's style.
 pub(super) fn run_font(style: Style, base: TextBase) -> (f32, Font) {
-    let mut font = if style.code || style.kbd { CODE_FONT } else { base.font };
+    let mut font = if style.code || style.kbd { code_font() } else { base.font };
     if style.bold {
         font = bold(font);
     }

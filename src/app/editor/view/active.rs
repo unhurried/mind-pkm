@@ -6,8 +6,8 @@ use super::heading;
 use super::inline::{cell_lines, inline_text, run_font};
 use super::table_widths::{ColumnWidths, Piece};
 use super::theme::{
-    CELL_PADDING, CODE_FONT, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING,
-    TABLE_COLUMN_MAX, bold, code_text_style, editor_style, region_text_style,
+    CELL_PADDING, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING, TABLE_COLUMN_MAX, bold,
+    code_font, code_text_style, editor_style, region_text_style,
 };
 use super::{Ctx, TextBase};
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
@@ -188,9 +188,11 @@ fn live_runs(
                             }
                             Some(Rendered::Done(Err(_))) => RunKind::Label {
                                 text: format!("${tex}$"),
-                                look: plain(base.size * 0.9, CODE_FONT, p.error),
+                                look: plain(base.size * 0.9, code_font(), p.error),
                             },
-                            _ => RunKind::Label { text: tex.clone(), look: plain(base.size * 0.9, CODE_FONT, p.muted) },
+                            _ => {
+                                RunKind::Label { text: tex.clone(), look: plain(base.size * 0.9, code_font(), p.muted) }
+                            }
                         }
                     }
                     Object::Footnote { label, number } => RunKind::Label {

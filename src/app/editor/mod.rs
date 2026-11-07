@@ -57,6 +57,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub use tables::TableMsg;
 use tables::TableUi;
 use view::HitInfo;
+pub use view::code_font;
 
 /// The size of the first editor window, when none was remembered.
 pub const DEFAULT_WINDOW: Size = Size::new(900.0, 860.0);

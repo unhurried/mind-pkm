@@ -845,7 +845,7 @@ impl<'a> From<LiveText<'a>> for Element<'a, EditorMsg> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::editor::view::CODE_FONT;
+    use crate::app::editor::view::code_font;
     use crate::app::view::APP_FONT;
 
     const SIZE: f32 = 15.0;
@@ -947,7 +947,7 @@ mod tests {
         let cases: [(&str, Vec<TestRun>); 5] = [
             ("plain", vec![("a link", SIZE, APP_FONT)]),
             ("after text", vec![("hello ", SIZE, APP_FONT), ("a link", SIZE, APP_FONT)]),
-            ("code", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, CODE_FONT)]),
+            ("code", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, code_font())]),
             ("superscript", vec![("hello ", SIZE, APP_FONT), ("x", SIZE * 0.75, APP_FONT)]),
             ("bold", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, bold)]),
         ];
@@ -965,7 +965,7 @@ mod tests {
 
     #[test]
     fn an_underline_is_clear_of_the_baseline_and_inside_the_line() {
-        for (name, font) in [("text", APP_FONT), ("code", CODE_FONT)] {
+        for (name, font) in [("text", APP_FONT), ("code", code_font())] {
             let shaped = shape("a link", font, SIZE, LINE_HEIGHT, 0);
             let (underline, _) = flow::decoration_tops(0.0, SIZE, LINE_HEIGHT);
             let below = underline - shaped.ascent;
@@ -979,8 +979,8 @@ mod tests {
         let bold = Font { weight: iced::font::Weight::Bold, ..APP_FONT };
         let cases: [(&str, Vec<TestRun>); 5] = [
             ("plain", vec![("hello world", SIZE, APP_FONT)]),
-            ("code", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, CODE_FONT), (" w", SIZE, APP_FONT)]),
-            ("code only", vec![("x", SIZE, CODE_FONT)]),
+            ("code", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, code_font()), (" w", SIZE, APP_FONT)]),
+            ("code only", vec![("x", SIZE, code_font())]),
             ("superscript", vec![("hello ", SIZE, APP_FONT), ("x", SIZE * 0.75, APP_FONT), (" w", SIZE, APP_FONT)]),
             ("bold", vec![("hello ", SIZE, APP_FONT), ("x", SIZE, bold)]),
         ];

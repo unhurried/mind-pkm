@@ -76,6 +76,8 @@ const DIALOG_INPUT_ID: &str = "dialog-input";
 
 pub fn run(initial: Option<PathBuf>) -> iced::Result {
     let geometry = settings::window().unwrap_or(INITIAL_WINDOW);
+    // Chosen from the installed fonts before any text is drawn.
+    editor::code_font();
     iced::daemon(move || App::boot(initial.clone(), geometry), App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
