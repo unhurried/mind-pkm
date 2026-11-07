@@ -26,6 +26,8 @@ const EDITOR_WINDOW_KEY: &str = "editor_window=";
 const EDITOR_ZOOM_KEY: &str = "editor_zoom=";
 const EDITOR_THEME_KEY: &str = "editor_theme=";
 const AUTO_PAIR_KEY: &str = "auto_pair=";
+const EDITOR_OUTLINE_KEY: &str = "editor_outline=";
+const EDITOR_ASSETS_KEY: &str = "editor_assets=";
 const IMAGE_COPY_KEY: &str = "image_copy=";
 const IMAGE_FOLDER_KEY: &str = "image_folder=";
 const IMAGE_DOT_SLASH_KEY: &str = "image_dot_slash=";
@@ -226,6 +228,24 @@ pub fn editor_auto_pair() -> bool {
 
 pub fn set_editor_auto_pair(on: bool) {
     set_value(AUTO_PAIR_KEY, if on { "1" } else { "0" });
+}
+
+/// Whether a new editor window shows the outline (`editor_outline=1`).
+pub fn editor_outline() -> bool {
+    value(EDITOR_OUTLINE_KEY).is_some_and(|v| v == "1")
+}
+
+pub fn set_editor_outline(on: bool) {
+    set_value(EDITOR_OUTLINE_KEY, if on { "1" } else { "0" });
+}
+
+/// Whether a new editor window shows the assets pane (`editor_assets=1`).
+pub fn editor_assets() -> bool {
+    value(EDITOR_ASSETS_KEY).is_some_and(|v| v == "1")
+}
+
+pub fn set_editor_assets(on: bool) {
+    set_value(EDITOR_ASSETS_KEY, if on { "1" } else { "0" });
 }
 
 pub use crate::markdown::images::ImageOptions;

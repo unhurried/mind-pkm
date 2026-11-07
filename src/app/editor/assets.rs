@@ -116,7 +116,7 @@ pub fn content_end(text: &str, range: std::ops::Range<usize>) -> usize {
 }
 
 impl AssetsPane {
-    fn new() -> AssetsPane {
+    pub(super) fn new() -> AssetsPane {
         AssetsPane { stale: true, ..AssetsPane::default() }
     }
 
