@@ -63,6 +63,10 @@ pub struct Line {
     pub height: f32,
     /// The baseline's y.
     pub baseline: f32,
+    /// Where the line box of the text on it starts (`top` on a line without
+    /// text): above the baseline by as much as a paragraph of the same text
+    /// alone - the line's objects can reach higher.
+    pub text_top: f32,
     pub frags: Vec<Frag>,
     /// The shown bytes on the line (with its trailing spaces and line break).
     pub shown: Range<usize>,
@@ -241,7 +245,7 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
     let mut flow = Flow { lines: Vec::new(), height: 0.0, len };
     let mut top = 0.0;
     for line in lines {
-        let (ascent, descent) = line_metrics(&atoms, &line, empty);
+        let (ascent, descent, text_above) = line_metrics(&atoms, &line, empty);
         let mut frags: Vec<Frag> = Vec::new();
         let mut x = 0.0;
         for &a in &line {
@@ -289,7 +293,9 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
         let prev_end = flow.lines.last().map_or(0, |l: &Line| l.shown.end);
         let shown = start.unwrap_or(prev_end)..end.unwrap_or(prev_end);
         let hard = line.last().is_some_and(|&a| atoms[a].newline);
-        flow.lines.push(Line { top, height: ascent + descent, baseline: top + ascent, frags, shown, hard, width: x });
+        let baseline = top + ascent;
+        let text_top = text_above.map_or(top, |above| baseline - above);
+        flow.lines.push(Line { top, height: ascent + descent, baseline, text_top, frags, shown, hard, width: x });
         top += ascent + descent;
     }
     flow.height = top;
@@ -300,8 +306,9 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
 /// it is laid out like one paragraph of mixed fonts: the line is as tall as
 /// its tallest run, and the glyphs - the tallest ascent and the deepest
 /// descent among all fonts - are centered in it. Objects reach as far as they
-/// do; an empty line has the height of `empty`.
-fn line_metrics(atoms: &[Atom], line: &[usize], empty: (f32, f32)) -> (f32, f32) {
+/// do; an empty line has the height of `empty`. With them, how far above the
+/// baseline the text's line box starts (None: no text).
+fn line_metrics(atoms: &[Atom], line: &[usize], empty: (f32, f32)) -> (f32, f32, Option<f32>) {
     let (mut ascent, mut descent) = (0.0f32, 0.0f32);
     let (mut height, mut glyph_ascent, mut glyph_descent) = (0.0f32, 0.0f32, 0.0f32);
     let mut text = false;
@@ -318,12 +325,29 @@ fn line_metrics(atoms: &[Atom], line: &[usize], empty: (f32, f32)) -> (f32, f32)
             descent = descent.max(a.descent);
         }
     }
+    let mut text_above = None;
     if text {
         let above = (height - (glyph_ascent + glyph_descent)) / 2.0 + glyph_ascent;
         ascent = ascent.max(above);
         descent = descent.max(height - above);
+        text_above = Some(above);
     }
-    if content { (ascent, descent) } else { empty }
+    if content { (ascent, descent, text_above) } else { (empty.0, empty.1, None) }
+}
+
+/// How thick an underline and a strikethrough are.
+pub const DECORATION_THICKNESS: f32 = 1.0;
+
+/// Where the underline and the strikethrough of a text run of `size` go (the
+/// tops of the lines), on a line whose text's line box (`line_height` times
+/// the size, the glyphs centered in it) starts at `top`. Both the rendered
+/// blocks and the block being edited draw them here, from the line box and
+/// the size rather than from the glyphs, so that they stay in place when a
+/// block is edited and run straight along a line of mixed fonts.
+pub fn decoration_tops(top: f32, size: f32, line_height: f32) -> (f32, f32) {
+    // The bottom of the size's box centered in the line box.
+    let bottom = top + size + (size * line_height - size) / 2.0;
+    (bottom + size * 0.02, bottom - size / 2.0)
 }
 
 /// Where a caret is: its x, and the line it is on.
