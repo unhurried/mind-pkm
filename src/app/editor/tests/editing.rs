@@ -180,7 +180,7 @@ fn format_shortcuts_and_clearing() {
     press(&mut app, id, "i", Modifiers::CTRL);
     assert_eq!(page_text(&app, id), "a word *here*\n");
     select(&mut app, id, "word");
-    press(&mut app, id, "k", Modifiers::CTRL);
+    insert_link(&mut app, id);
     assert_eq!(page_text(&app, id), "a [word]() *here*\n");
     // Ctrl+\ clears the formatting of the block.
     click_after(&mut app, id, "a ");

@@ -67,6 +67,12 @@ impl App {
                     move |content| Message::Editor(id, EditorMsg::Pasted(content, plain)),
                 )
             }
+            Effect::ReadClipboardForLink => {
+                let clipboard = self.system_clipboard.clone();
+                Task::perform(blocking(move || clipboard.lock().ok().and_then(|mut c| c.read_text())), move |text| {
+                    Message::Editor(id, EditorMsg::LinkClipboard(text))
+                })
+            }
             Effect::AssetMenu(path) => {
                 let can_change = self.asset_doc_dir(&path).is_ok();
                 if let Some(editor) = self.editors.get_mut(&id) {

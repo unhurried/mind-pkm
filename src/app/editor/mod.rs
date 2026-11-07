@@ -171,6 +171,9 @@ pub enum EditorMsg {
     Dialog(DialogAnswer),
     /// The clipboard was read for pasting (as plain text when `true`).
     Pasted(ClipboardContent, bool),
+    /// The clipboard's text was read for Insert Link (a URL or a path in it
+    /// becomes the link's destination).
+    LinkClipboard(Option<String>),
     /// Image files picked with Format → Image.
     ImagesChosen(Option<Vec<PathBuf>>),
     /// The Markdown of inserted files (copied into the image folder), or why not.
@@ -266,6 +269,8 @@ pub enum Effect {
     },
     /// Read the clipboard to paste (as plain text when `true`).
     ReadClipboard(bool),
+    /// Read the clipboard's text for Insert Link.
+    ReadClipboardForLink,
     /// Open the right-click menu of an item of the assets pane, saying whether it may be changed.
     AssetMenu(PathBuf),
     RenameAsset(PathBuf, String),
@@ -636,6 +641,10 @@ impl Editor {
             EditorMsg::FileDropped(path) => self.insert_files(vec![path], prefs),
             EditorMsg::Focused => Task::none(),
             EditorMsg::Pasted(content, plain) => self.pasted(content, plain, prefs),
+            EditorMsg::LinkClipboard(text) => {
+                let dest = text.as_deref().and_then(format::link_destination);
+                self.edit_selection(|t, sel| format::insert_link(t, sel, dest.as_deref()))
+            }
             EditorMsg::ImagesChosen(files) => self.insert_files(files.unwrap_or_default(), prefs),
             EditorMsg::Inserted(result) => {
                 self.forget_image_files();
@@ -1350,7 +1359,11 @@ impl Editor {
             C::Strikethrough => self.toggle(InlineStyle::Strike),
             C::Highlight => self.toggle(InlineStyle::Highlight),
             C::InlineMath => self.toggle(InlineStyle::Math),
-            C::Link => self.edit_selection(format::insert_link),
+            // Inserted when the clipboard's text arrives (`LinkClipboard`).
+            C::Link => {
+                effects.push(Effect::ReadClipboardForLink);
+                Task::none()
+            }
             C::Copy | C::CopyMarkdown => {
                 self.copy(cmd == C::CopyMarkdown, effects);
                 Task::none()
