@@ -14,7 +14,9 @@ fn pane(app: &App, id: window::Id) -> &crate::app::editor::assets::AssetsPane {
 /// Finishes the read the pane asked for, as the background task would.
 fn finish_read(app: &mut App, id: window::Id) {
     let dir = app.editors[&id].assets_dir();
-    let tree = crate::pkm::assets::read_tree(&dir);
+    let doc_dir = app.doc.as_ref().and_then(|d| crate::pkm::load_doc_dir(d.map()).ok());
+    let root = doc_dir.as_deref().filter(|root| crate::paths::is_strictly_inside(&dir, root)).or_else(|| dir.parent());
+    let tree = root.and_then(|root| crate::pkm::assets::read_tree(&dir, root));
     assets(app, id, AssetsMsg::Read(dir, tree));
 }
 
