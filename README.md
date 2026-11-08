@@ -198,6 +198,9 @@ Press `F6` (or `Ctrl+F`) to open the search panel under the map: type keywords a
 - **Filtering**: the scope box (`Pages` / `Attachments` / `Both`) limits results to pages (the default), attachments, or both. A page is a `.md` file outside any `<page>.assets/` directory; every other file counts as an attachment.
 - **Jumping to the map node**: a result's node is the node that links its file, its containing directory, or - for a file under a page's `.assets/` directory - its page. Select the result and press `Ctrl+Enter` or use `Select Node` to select and center that node in the map.
 - **Index**: kept at `<docDir>/.search-index/tantivy/` (with `tantivy.meta` recording each indexed file's last-modified time, to skip unchanged files on the next update). It is refreshed whenever the search panel opens, every few minutes while the map is being changed, and on F12. The Lucene index the Freeplane add-on kept in the same directory is left alone, so both can be used side by side.
+- **Links and cache safety**: search skips symbolic links and Windows reparse points (including junctions); the assets pane also omits them and refuses rename/delete through them. A linked search cache is rejected, and an unrelated nonempty `tantivy/` folder is preserved rather than deleted. Existing version 1 indexes are rebuilt once to discard content previously collected through links.
+
+These checks inspect paths again before use. They do not provide a filesystem sandbox against another process concurrently replacing directories between a check and an operation.
 
 ## Development
 

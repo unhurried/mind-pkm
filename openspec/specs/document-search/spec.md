@@ -12,6 +12,13 @@ The index SHALL cover every file under the document directory except those insid
 - **WHEN** the document directory holds a corrupt `report.pdf`
 - **THEN** indexing completes and `report.pdf` is still found by the keyword `report`
 
+### Requirement: Document link boundaries
+The walk SHALL skip symbolic links and Windows reparse points, including junctions, for both files and directories. Files and parent paths SHALL be checked again before extraction. A prior result whose path now traverses a link SHALL be omitted, and the next update SHALL remove it from the index.
+
+#### Scenario: Linked external attachment
+- **WHEN** an assets folder or text file below the document directory links outside it
+- **THEN** neither its name nor the linked content is indexed
+
 ### Requirement: Keyword matching
 A query SHALL be split into keywords at whitespace, including the full-width space; a file SHALL match when every keyword matches its content or its file name (AND). Keywords SHALL be literal text, never query syntax, and a keyword of several words SHALL match as a phrase.
 
@@ -72,6 +79,17 @@ The index SHALL be kept in `<docDir>/.search-index/tantivy/`, with `<docDir>/.se
 #### Scenario: Used next to the add-on
 - **WHEN** the index is updated in a document directory that also holds the add-on's index
 - **THEN** `.search-index/lucene/` and `.search-index/files.meta` are unchanged
+
+### Requirement: Cache link boundaries and ownership
+Cache reads, writes and rebuilds SHALL refuse links/reparse points in the cache path, metadata, or Tantivy contents. Rebuild SHALL remove a nonempty cache only when it carries the application's ownership marker or is a legacy index with the application's schema. Unrecognized nonempty folders SHALL be preserved and an error returned. Index version 1 SHALL be rebuilt before results are exposed, discarding content previously collected through links.
+
+#### Scenario: Cache root links outside the document directory
+- **WHEN** `.search-index` links to an external folder containing `tantivy/`
+- **THEN** update and search return an error and the external folder is unchanged
+
+#### Scenario: Unrecognized cache contents
+- **WHEN** `.search-index/tantivy/` contains unrelated files and is not an application-owned index
+- **THEN** rebuild returns an error and preserves those files
 
 ### Requirement: Index updates
 Index updates SHALL be incremental (re-indexing only new and modified files and dropping deleted ones), SHALL rebuild everything when the recorded schema version differs or the index is missing, and SHALL run in the background when the search panel opens, on F12, and with the periodic refresh.

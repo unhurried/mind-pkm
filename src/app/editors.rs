@@ -7,7 +7,7 @@ use super::command::open_with_default;
 use super::editor::{AssetsMsg, Editor, EditorDialog, EditorMsg, EditorPrefs, Effect, opens_in_editor};
 use super::file::file_name;
 use super::{App, Message, blocking, settings, window_settings};
-use crate::pkm;
+use crate::{paths, pkm};
 use iced::{Task, window};
 use std::path::{Path, PathBuf};
 
@@ -123,11 +123,19 @@ impl App {
     /// Reads the folders the assets panes ask for, in the background.
     pub(super) fn read_assets(&mut self) -> Task<Message> {
         let mut tasks = Vec::new();
+        let doc_dir = self.doc.as_ref().and_then(|d| pkm::load_doc_dir(d.map()).ok());
         for (&id, editor) in self.editors.iter_mut() {
             if let Some(dir) = editor.start_assets_read() {
+                // Independently opened pages outside the map's document tree
+                // still have a read-only assets pane, rooted at their parent.
+                let root = doc_dir
+                    .as_ref()
+                    .filter(|root| paths::is_strictly_inside(&dir, root))
+                    .cloned()
+                    .or_else(|| dir.parent().map(Path::to_path_buf));
                 tasks.push(Task::perform(
                     blocking(move || {
-                        let tree = pkm::assets::read_tree(&dir);
+                        let tree = root.and_then(|root| pkm::assets::read_tree(&dir, &root));
                         (dir, tree)
                     }),
                     move |(dir, tree)| Message::Editor(id, EditorMsg::Assets(AssetsMsg::Read(dir, tree))),

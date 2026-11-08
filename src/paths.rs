@@ -57,6 +57,65 @@ pub fn is_strictly_inside(path: &Path, dir: &Path) -> bool {
     rest.is_some_and(|r| !r.is_empty() && r.split(sep).all(|s| !s.trim_end_matches(['.', ' ']).is_empty()))
 }
 
+/// Whether metadata describes a link, including Windows junctions and other
+/// reparse points (which are not all reported as symlinks).
+pub(crate) fn is_link(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+/// Resolves a strict descendant of the chosen directory without accepting
+/// links below it. Missing components are allowed for creation/rename targets;
+/// inaccessible components and dangling links fail closed. The chosen root
+/// itself may be a link, but its resolved directory is the boundary.
+///
+/// This is a point-in-time check, not a directory-handle based filesystem API:
+/// callers must check again at use and must not assume protection against a
+/// concurrent process replacing an ancestor after this function returns.
+pub fn resolve_inside(path: &Path, dir: &Path) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+    let denied =
+        || Error::new(ErrorKind::PermissionDenied, "path is outside the document directory or contains a link");
+    // Do not fold `link/..` before inspecting it: that changes its filesystem meaning.
+    if path.components().any(|c| c == Component::ParentDir) || !is_strictly_inside(path, dir) {
+        return Err(denied());
+    }
+    let root = dir.canonicalize()?;
+    if !root.is_dir() {
+        return Err(denied());
+    }
+    let relative = normalize(path).strip_prefix(normalize(dir)).map_err(|_| denied())?.to_path_buf();
+    let mut resolved = root.clone();
+    for component in relative.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return Err(denied());
+        }
+        resolved.push(component);
+        match std::fs::symlink_metadata(&resolved) {
+            Ok(metadata) => {
+                if is_link(&metadata) {
+                    return Err(denied());
+                }
+                let actual = resolved.canonicalize()?;
+                if !actual.starts_with(&root) || actual == root {
+                    return Err(denied());
+                }
+                resolved = actual;
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(resolved)
+}
+
 // Characters encoded in a link URI path, as java.net.URI does for a path
 // component; non-ASCII characters are left as they are.
 const URI_PATH_ENCODE: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
@@ -258,6 +317,77 @@ mod tests {
         ] {
             assert_eq!(is_strictly_inside(&p, &d), inside, "{}", p.display());
         }
+    }
+
+    #[test]
+    fn resolves_existing_and_new_descendants_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("docs");
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/a.txt"), "test").unwrap();
+        assert_eq!(
+            resolve_inside(&root.join("assets/a.txt"), &root).unwrap(),
+            root.canonicalize().unwrap().join("assets/a.txt")
+        );
+        assert!(resolve_inside(&root.join("new/sub/file.txt"), &root).is_ok());
+        for path in [root.clone(), root.join("../outside"), root.join("..."), root.join("assets/../new")] {
+            assert!(resolve_inside(&path, &root).is_err(), "{}", path.display());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_links_in_every_component_including_dangling_and_internal_links() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("docs");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+        symlink(&outside, root.join("external")).unwrap();
+        symlink(root.join("real"), root.join("internal")).unwrap();
+        symlink(outside.join("secret.txt"), root.join("file.txt")).unwrap();
+        symlink(outside.join("missing"), root.join("dangling")).unwrap();
+        for name in [
+            "external",
+            "external/secret.txt",
+            "external/new.txt",
+            "internal",
+            "internal/new.txt",
+            "file.txt",
+            "dangling",
+            "dangling/new.txt",
+            "external/../real",
+        ] {
+            assert!(resolve_inside(&root.join(name), &root).is_err(), "{name}");
+        }
+        // A deliberately chosen document root may itself be reached by a link.
+        let alias = tmp.path().join("chosen-root");
+        symlink(&root, &alias).unwrap();
+        assert_eq!(resolve_inside(&alias.join("real/new.txt"), &alias).unwrap(), root.join("real/new.txt"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_windows_junctions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("docs");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let junction = root.join("junction");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(resolve_inside(&junction.join("new.txt"), &root).is_err());
+        assert!(crate::pkm::assets::read_tree(&junction, &root).is_none());
+        assert!(crate::search::update_index(&root).is_ok());
+        std::fs::remove_dir(&junction).unwrap();
     }
 
     #[cfg(windows)]
