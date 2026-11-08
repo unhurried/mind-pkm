@@ -4,11 +4,62 @@
 //! line breaks, the table of contents) are turned into HTML too.
 
 use super::parse::{BlockKind, Document, Events, matching_end};
+use base64::Engine;
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Tag, TagEnd};
 use std::ops::Range;
+use std::sync::LazyLock;
 
 /// The style sheet of exported pages.
 pub const DEFAULT_CSS: &str = include_str!("../../assets/export.css");
+
+// Sanitize the complete fragment, including raw HTML, Markdown destinations and
+// generated markup. SVG is deliberately not an allowed namespace: renderers'
+// output is embedded as an image, where scripts and external resources are inert.
+static SANITIZER: LazyLock<ammonia::Builder<'static>> = LazyLock::new(|| {
+    let mut builder = ammonia::Builder::default();
+    builder
+        .add_tags(&["input"])
+        .add_tag_attributes("input", &["type", "disabled", "checked"])
+        .add_generic_attributes(&["class", "id", "style"])
+        .filter_style_properties(["color", "text-align"].into())
+        .url_schemes(["http", "https", "mailto", "file", "data"].into())
+        .attribute_filter(|tag, attr, value| {
+            if !matches!(attr, "href" | "src" | "cite") {
+                return Some(value.into());
+            }
+            // `data:` is only useful as an image source, never as a link to an
+            // active document. Ammonia has already decoded HTML entities.
+            let normalized: String =
+                value.chars().filter(|c| !c.is_ascii_whitespace() && !c.is_ascii_control()).collect();
+            let normalized = normalized.to_ascii_lowercase();
+            if normalized.starts_with("data:")
+                && !(tag == "img" && attr == "src" && normalized.starts_with("data:image/"))
+            {
+                return None;
+            }
+            Some(value.into())
+        })
+        .set_tag_attribute_values([("input", [("type", "checkbox"), ("disabled", "")].into())].into())
+        .link_rel(None);
+    builder
+});
+
+/// Export resources: HTML may show remote images; PDF printing stays local.
+#[derive(Clone, Copy)]
+pub(super) enum Resources {
+    Html,
+    Pdf,
+}
+
+fn content_security_policy(resources: Resources) -> String {
+    let images = match resources {
+        Resources::Html => "file: data: http: https:",
+        Resources::Pdf => "file: data:",
+    };
+    format!(
+        "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src {images}; font-src file: data:; connect-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"
+    )
+}
 
 /// How math, diagrams and images are written.
 pub struct HtmlOptions<'a> {
@@ -41,7 +92,8 @@ fn escape(s: &str) -> String {
     out
 }
 
-/// The HTML of a page's blocks.
+/// The sanitized, passive HTML of a page's blocks (also safe without a CSP,
+/// as when copied to the clipboard).
 pub fn body(doc: &Document, opts: &HtmlOptions) -> String {
     let mut events: Vec<Event<'static>> = Vec::new();
     let mut toc_done = false;
@@ -72,7 +124,8 @@ pub fn body(doc: &Document, opts: &HtmlOptions) -> String {
                     })
                     .collect();
                 match (opts.mermaid)(&code) {
-                    Some(svg) => events.push(Event::Html(format!("<div class=\"mermaid\">{svg}</div>\n").into())),
+                    Some(svg) => events
+                        .push(Event::Html(format!("<div class=\"mermaid\">{}</div>\n", svg_image(&svg, &code)).into())),
                     None => events.extend(all[i..=end].iter().map(|(e, _)| e.clone())),
                 }
                 i = end + 1;
@@ -95,15 +148,26 @@ pub fn body(doc: &Document, opts: &HtmlOptions) -> String {
     let _ = toc_done;
     let mut out = String::new();
     pulldown_cmark::html::push_html(&mut out, events.into_iter());
-    out
+    SANITIZER.clean(&out).to_string()
 }
 
 /// A whole HTML document.
 pub fn page(title: &str, body: &str, css: &str) -> String {
+    page_with_resources(title, body, css, Resources::Html)
+}
+
+pub(super) fn page_with_resources(title: &str, body: &str, css: &str, resources: Resources) -> String {
+    let csp = content_security_policy(resources);
     format!(
-        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<style>\n{css}\n</style>\n</head>\n<body>\n<article class=\"markdown-body\">\n{body}</article>\n</body>\n</html>\n",
+        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{}</title>\n<style>\n{css}\n</style>\n</head>\n<body>\n<article class=\"markdown-body\">\n{body}</article>\n</body>\n</html>\n",
         escape(title)
     )
+}
+
+/// SVG in an `<img>` is passive even if a renderer emits active SVG markup.
+fn svg_image(svg: &str, alt: &str) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(svg);
+    format!("<img src=\"data:image/svg+xml;base64,{encoded}\" alt=\"{}\">", escape(alt))
 }
 
 /// Markdown source (a selection) as HTML, for the clipboard.
@@ -186,13 +250,17 @@ fn inline_events(inner: &Events, opts: &HtmlOptions, out: &mut Vec<Event<'static
             }
             Event::SoftBreak => out.push(Event::HardBreak),
             Event::InlineMath(tex) => match (opts.math)(&tex, false) {
-                Some(svg) => out.push(Event::InlineHtml(format!("<span class=\"math\">{svg}</span>").into())),
+                Some(svg) => {
+                    out.push(Event::InlineHtml(format!("<span class=\"math\">{}</span>", svg_image(&svg, &tex)).into()))
+                }
                 None => {
                     out.push(Event::InlineHtml(format!("<span class=\"math\">\\({}\\)</span>", escape(&tex)).into()))
                 }
             },
             Event::DisplayMath(tex) => match (opts.math)(tex.trim(), true) {
-                Some(svg) => out.push(Event::InlineHtml(format!("<div class=\"math\">{svg}</div>").into())),
+                Some(svg) => out.push(Event::InlineHtml(
+                    format!("<div class=\"math\">{}</div>", svg_image(&svg, tex.trim())).into(),
+                )),
                 None => out
                     .push(Event::InlineHtml(format!("<div class=\"math\">\\[{}\\]</div>", escape(tex.trim())).into())),
             },
@@ -369,7 +437,7 @@ mod tests {
         assert_eq!(html("a ==b== c"), "<p>a <mark>b</mark> c</p>\n");
         assert_eq!(html("H~2~O :smile:"), "<p>H<sub>2</sub>O 😄</p>\n");
         assert_eq!(html("see https://x.org/a."), "<p>see <a href=\"https://x.org/a\">https://x.org/a</a>.</p>\n");
-        assert_eq!(html("one\ntwo"), "<p>one<br />\ntwo</p>\n");
+        assert_eq!(html("one\ntwo"), "<p>one<br>\ntwo</p>\n");
     }
 
     #[test]
@@ -384,7 +452,7 @@ mod tests {
     fn lenient_links_tables_and_tasks() {
         let out = html("[assets](My Page.assets)\n\n| a |\n|:-:|\n| 1 |\n\n- [x] done\n");
         assert!(out.contains("<a href=\"My%20Page.assets\">assets</a>"), "{out}");
-        assert!(out.contains("<th style=\"text-align: center\">a</th>"), "{out}");
+        assert!(out.contains("<th style=\"text-align:center\">a</th>"), "{out}");
         assert!(out.contains("checked=\"\""), "{out}");
     }
 
@@ -395,9 +463,12 @@ mod tests {
         let src = |s: &str| format!("../{s}");
         let opts = HtmlOptions { math: &math, mermaid: &mermaid, image_src: &src };
         let out = body(&Document::parse("$x$\n\n$$\ny\n$$\n\n```mermaid\nA-->B\n```\n\n![i](a.png)\n"), &opts);
-        assert!(out.contains("<span class=\"math\"><svg>xfalse</svg></span>"), "{out}");
-        assert!(out.contains("<div class=\"math\"><svg>ytrue</svg></div>"), "{out}");
-        assert!(out.contains("<div class=\"mermaid\"><svg>A-->B</svg></div>"), "{out}");
+        assert!(out.contains(&format!("<span class=\"math\">{}</span>", svg_image("<svg>xfalse</svg>", "x"))), "{out}");
+        assert!(out.contains(&format!("<div class=\"math\">{}</div>", svg_image("<svg>ytrue</svg>", "y"))), "{out}");
+        assert!(
+            out.contains(&format!("<div class=\"mermaid\">{}</div>", svg_image("<svg>A-->B</svg>", "A-->B\n"))),
+            "{out}"
+        );
         assert!(out.contains("src=\"../a.png\""), "{out}");
         // Without renderers, the LaTeX is kept.
         assert!(html("$x$").contains("\\(x\\)"));
@@ -409,5 +480,98 @@ mod tests {
         assert!(p.starts_with("<!DOCTYPE html>"));
         assert!(p.contains("<title>A &lt;page&gt;</title>"));
         assert!(p.contains("<style>\nbody {}\n</style>"));
+        assert!(p.contains("script-src 'none'"));
+        assert!(p.find("Content-Security-Policy").unwrap() < p.find("<style>").unwrap());
+    }
+
+    #[test]
+    fn untrusted_html_is_passive_in_blocks_inline_content_and_containers() {
+        for md in [
+            "<script>SEC02_EXECUTED</script><p>safe</p>",
+            "safe <img src=x onerror=SEC02_EXECUTED> <b onclick=SEC02_EXECUTED>bold</b>",
+            "> safe <svg onload=SEC02_EXECUTED><script>SEC02_EXECUTED</script></svg>",
+            "- safe <a href='javascript:SEC02_EXECUTED'>link</a>",
+            "| cell |\n|---|\n| safe <img src=x onerror=SEC02_EXECUTED> |",
+            "<iframe srcdoc='<script>SEC02_EXECUTED</script>'></iframe><p>safe</p>",
+        ] {
+            let out = fragment(md);
+            assert!(out.contains("safe"), "{md}: {out}");
+            for active in ["SEC02_EXECUTED", "<script", "onerror", "onclick", "onload", "<iframe", "<svg", "<math"] {
+                assert!(!out.contains(active), "{md}: {out}");
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_foreign_content_cannot_escape_sanitization() {
+        // The trailing text is inside malformed foreign/raw-text content, not
+        // ordinary visible text. Reparse the result as a browser would do.
+        let out = fragment(
+            "<math><mtext><table><mglyph><style><!--</style><img title='--><img src=x onerror=SEC02_EXECUTED>'>",
+        );
+        assert!(!out.contains("SEC02_EXECUTED"), "{out}");
+        assert!(!out.contains("<math"), "{out}");
+        assert_eq!(SANITIZER.clean(&out).to_string(), out);
+    }
+
+    #[test]
+    fn unsafe_destinations_and_document_controls_are_removed() {
+        for md in [
+            "[safe](javascript:alert%281%29)",
+            "[safe](JaVaScRiPt:alert%281%29)",
+            "[safe](vbscript:msgbox%281%29)",
+            "[safe](data:text/html;base64,PHNjcmlwdD4=)",
+            "<a href='jav&#x61;script:alert(1)'>safe</a>",
+            "<a href='java&#9;script:alert(1)'>safe</a>",
+            "<a href='d&#97;ta:text/html,test'>safe</a>",
+        ] {
+            let out = fragment(md);
+            assert_eq!(out.trim(), "<p><a>safe</a></p>", "{md}: {out}");
+        }
+        let out = fragment(
+            "<base href='https://example.com'><meta http-equiv=refresh content='0;url=https://example.com'>\n\
+             <form action='https://example.com'><button formaction='https://example.com'>safe</button></form>\n\
+             <object data='https://example.com'><embed src='https://example.com'></object>\n\
+             <link rel=stylesheet href='https://example.com/a.css'>\n\
+             <style>@import 'https://example.com/a.css';</style>",
+        );
+        for tag in ["base", "meta", "form", "button", "object", "embed", "link", "style"] {
+            assert!(!out.contains(&format!("<{tag}")), "{out}");
+        }
+        assert!(!out.contains("https://example.com"), "{out}");
+        let out = fragment("![safe](data:text/html;base64,PHNjcmlwdD4=)");
+        assert!(!out.contains("src="), "{out}");
+    }
+
+    #[test]
+    fn passive_html_links_and_embedded_images_still_work() {
+        let out = fragment(
+            "<u>under</u><br><span style='color: red; background: url(https://example.com/track); position: fixed' onclick='alert(1)'>red</span>\n\n\
+             [web](https://example.com) [mail](mailto:a@example.com) [file](file:///d/a.pdf) [relative](../a.md) [anchor](#a)\n\n\
+             ![data:text/html](data:image/png;base64,aGVsbG8=)",
+        );
+        assert!(out.contains("<u>under</u><br><span style=\"color:red\">red</span>"), "{out}");
+        for href in ["https://example.com", "mailto:a@example.com", "file:///d/a.pdf", "../a.md", "#a"] {
+            assert!(out.contains(&format!("href=\"{href}\"")), "{out}");
+        }
+        assert!(out.contains("src=\"data:image/png;base64,aGVsbG8=\""), "{out}");
+        assert!(out.contains("alt=\"data:text/html\""), "{out}");
+        assert!(!out.contains("background"), "{out}");
+        assert!(!out.contains("onclick"), "{out}");
+    }
+
+    #[test]
+    fn renderer_output_cannot_insert_active_svg_into_the_page() {
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'><script>alert(1)</script><foreignObject><iframe src='https://example.com'></iframe></foreignObject></svg>";
+        let opts =
+            HtmlOptions { math: &|_, _| Some(svg.into()), mermaid: &|_| Some(svg.into()), image_src: &str::to_string };
+        let out = body(&Document::parse("$x$\n\n```mermaid\nA-->B\n```"), &opts);
+        assert_eq!(out.matches("src=\"data:image/svg+xml;base64,").count(), 2, "{out}");
+        assert!(!out.contains("<svg"), "{out}");
+        assert!(!out.contains("<script"), "{out}");
+        for img in out.split("data:image/svg+xml;base64,").skip(1) {
+            let encoded = img.split('"').next().unwrap();
+            assert_eq!(base64::engine::general_purpose::STANDARD.decode(encoded).unwrap(), svg.as_bytes());
+        }
     }
 }

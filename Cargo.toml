@@ -11,6 +11,8 @@ iced = { version = "0.14", features = ["tokio", "advanced", "canvas", "image-wit
 # The image formats the page editor shows (iced's own `image` feature would add every codec).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "ico", "tiff"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# HTML export and rich-text copying accept only passive document content.
+ammonia = "4.2.4"
 latex-rust = "3.0"
 mermaid-rs-renderer = { version = "0.3", default-features = false }
 syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }

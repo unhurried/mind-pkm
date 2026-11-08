@@ -21,6 +21,16 @@ const PDF_TIMEOUT: Duration = Duration::from_secs(90);
 /// as SVG, local images relative to `base_dir` (where the document will be),
 /// as absolute `file:` URIs without one.
 pub fn html_document(page: &Path, text: &str, base_dir: Option<&Path>, css: &str) -> String {
+    document_with_resources(page, text, base_dir, css, html::Resources::Html)
+}
+
+fn document_with_resources(
+    page: &Path,
+    text: &str,
+    base_dir: Option<&Path>,
+    css: &str,
+    resources: html::Resources,
+) -> String {
     let doc = Document::parse(text);
     let math = |tex: &str, display: bool| render::math_svg(tex, display, MATH_COLOR).ok();
     let mermaid = |code: &str| render::mermaid_svg(code).ok();
@@ -30,7 +40,7 @@ pub fn html_document(page: &Path, text: &str, base_dir: Option<&Path>, css: &str
     };
     let body = html::body(&doc, &HtmlOptions { math: &math, mermaid: &mermaid, image_src: &image_src });
     let title = paths::file_stem(page);
-    html::page(&title, &body, css)
+    html::page_with_resources(&title, &body, css, resources)
 }
 
 /// Writes the page as HTML to `out`.
@@ -60,13 +70,16 @@ fn browser_candidates() -> Vec<PathBuf> {
 
 /// The browser's arguments printing `html` to `out` without a header and
 /// footer (headless, it uses a temporary profile of its own).
-fn pdf_args(html: &Path, out: &Path, no_sandbox: bool) -> Vec<String> {
+fn pdf_args(html: &Path, out: &Path, profile: &Path, no_sandbox: bool) -> Vec<String> {
     let mut args = vec![
         "--headless".to_string(),
         "--disable-gpu".into(),
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
         "--no-pdf-header-footer".into(),
+        "--blink-settings=scriptEnabled=false".into(),
+        "--disable-background-networking".into(),
+        format!("--user-data-dir={}", profile.display()),
         format!("--print-to-pdf={}", out.display()),
     ];
     if no_sandbox {
@@ -93,11 +106,12 @@ pub fn export_pdf(browser: &Path, page: &Path, text: &str, out: &Path, css: &str
     let work = tempfile::tempdir().map_err(|e| fail(&e))?;
     let html_file = work.path().join("page.html");
     // Images as absolute URIs: the document is printed from a temporary folder.
-    std::fs::write(&html_file, html_document(page, text, None, css)).map_err(|e| fail(&e))?;
+    std::fs::write(&html_file, document_with_resources(page, text, None, css, html::Resources::Pdf))
+        .map_err(|e| fail(&e))?;
     let started = std::time::SystemTime::now();
     let mut command = Command::new(browser);
     command
-        .args(pdf_args(&html_file, out, running_as_root()))
+        .args(pdf_args(&html_file, out, &work.path().join("profile"), running_as_root()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -143,7 +157,7 @@ mod tests {
         assert!(html.contains("<title>Trip</title>"));
         assert!(html.contains("body { color: red }"));
         assert!(html.contains("<h1"));
-        assert!(html.contains("<svg"), "math as SVG");
+        assert!(html.contains("src=\"data:image/svg+xml;base64,"), "math as a passive SVG image");
         assert!(html.contains("src=\"Trip.assets/map%20one.png\""), "{html}");
         assert!(html.contains("src=\"https://x.org/a.png\""));
     }
@@ -173,11 +187,31 @@ mod tests {
 
     #[test]
     fn the_browser_prints_headless_without_header_and_footer() {
-        let args = pdf_args(Path::new("/t/page.html"), Path::new("/o/Trip.pdf"), false);
+        let args = pdf_args(Path::new("/t/page.html"), Path::new("/o/Trip.pdf"), Path::new("/t/profile"), false);
         assert!(args.contains(&"--headless".to_string()));
         assert!(args.contains(&"--no-pdf-header-footer".to_string()));
         assert!(args.contains(&"--print-to-pdf=/o/Trip.pdf".to_string()));
+        assert!(args.contains(&"--blink-settings=scriptEnabled=false".to_string()));
+        assert!(args.contains(&"--disable-background-networking".to_string()));
+        assert!(args.contains(&"--user-data-dir=/t/profile".to_string()));
         assert_eq!(args.last().map(String::as_str), Some("/t/page.html"));
         assert!(!args.contains(&"--no-sandbox".to_string()));
+    }
+
+    #[test]
+    fn html_and_pdf_share_sanitization_but_pdf_resources_stay_local() {
+        let text = "# safe\n\n<script>SEC02_EXECUTED</script>\n\n<img src=x onerror=SEC02_EXECUTED>\n\n[link](javascript:alert%281%29)\n\n![remote](https://example.com/image.png)";
+        for resources in [html::Resources::Html, html::Resources::Pdf] {
+            let out = document_with_resources(Path::new("/d/Test.md"), text, None, "body {}", resources);
+            assert!(out.contains("<h1"), "{out}");
+            assert!(!out.contains("SEC02_EXECUTED"), "{out}");
+            assert!(!out.contains("javascript:"), "{out}");
+            assert!(out.contains("script-src 'none'"), "{out}");
+            let images = match resources {
+                html::Resources::Html => "img-src file: data: http: https:;",
+                html::Resources::Pdf => "img-src file: data:;",
+            };
+            assert!(out.contains(images), "{out}");
+        }
     }
 }
