@@ -211,8 +211,9 @@ pub fn delete_execute(
         };
         // Checked again, whatever the targets came from: nothing outside the
         // document directory, nor the directory itself, is ever removed.
-        let inside = files.iter().all(|f| paths::is_strictly_inside(f, doc_dir));
-        let files: Vec<PathBuf> = files.into_iter().filter(|f| f.exists()).collect();
+        let resolved: Result<Vec<_>, _> = files.iter().map(|f| paths::resolve_inside(f, doc_dir)).collect();
+        let inside = resolved.is_ok();
+        let files: Vec<PathBuf> = resolved.unwrap_or_default().into_iter().filter(|f| f.exists()).collect();
         if !inside || (!files.is_empty() && remove(&files).is_err()) {
             failed.push(name);
             continue;
@@ -524,7 +525,7 @@ mod tests {
         })
         .unwrap();
         // One removal per target: a page with its assets directory, a directory.
-        let d = &f.doc_dir;
+        let d = f.doc_dir.canonicalize().unwrap();
         assert_eq!(removed, vec![vec![d.join("P.md"), d.join("P.assets")], vec![d.join("D")]]);
         assert!(!page_file(&f.doc_dir, "P").exists() && !assets_dir(&f.doc_dir, "P").exists());
         assert!(!f.doc_dir.join("D").exists());
@@ -622,6 +623,28 @@ mod tests {
                 assert!(kept.exists(), "{text:?} removed {}", kept.display());
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_rechecks_links_inserted_after_target_selection() {
+        use std::os::unix::fs::symlink;
+        let mut f = Fixture::new();
+        f.write_page("P", "page");
+        let assets = assets_dir(&f.doc_dir, "P");
+        std::fs::create_dir(&assets).unwrap();
+        let root = f.map.root();
+        let p = f.add_page_node(root, "P");
+        let targets = delete_targets(&f.map, &[p]);
+        let outside = f.dir.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), "keep").unwrap();
+        std::fs::remove_dir(&assets).unwrap();
+        symlink(&outside, &assets).unwrap();
+        assert!(delete_execute(&mut f.map, &targets, &mut |_| panic!("must not call remover")).is_err());
+        assert!(f.map.exists(p));
+        assert_eq!(std::fs::read_to_string(outside.join("keep.txt")).unwrap(), "keep");
+        assert!(page_file(&f.doc_dir, "P").exists());
     }
 
     #[test]

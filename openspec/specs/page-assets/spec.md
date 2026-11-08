@@ -35,6 +35,13 @@ The pane SHALL list the `<name>.assets/` folder next to the open file `<name>.md
 - **WHEN** the pane is shown for `Plan.md` and `Plan.assets/` does not exist
 - **THEN** the pane says `No assets folder`
 
+### Requirement: Assets link boundaries
+The assets root and its descendants SHALL NOT be followed through symbolic links or Windows reparse points, including junctions. The pane SHALL omit linked entries and show no folder for a linked assets root or parent below the document directory. Rename and delete SHALL recheck every path component at execution time and refuse linked paths, including missing destinations below linked parents.
+
+#### Scenario: Assets root links outside the document directory
+- **WHEN** `Trip.assets/` is a link to an external folder
+- **THEN** the pane shows no assets folder and rename or delete through that link is refused without passing the target to the remover
+
 ### Requirement: Keeping the assets pane current
 The pane SHALL read the folder again when it is shown, when its window is activated, after files are inserted into the page, after a rename or deletion from the pane, after the open file is renamed, and when its refresh button is pressed. Expanded folders that still exist SHALL stay expanded.
 
