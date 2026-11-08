@@ -16,9 +16,11 @@ fi
 
 cd "${CLAUDE_PROJECT_DIR:-$(dirname "$0")/../..}"
 
+. tools/cloud/common.sh
+
 # The toolchain named in rust-toolchain.toml, with clippy and rustfmt.
 step "installing the Rust toolchain"
-rustup toolchain install
+cloud_install_rust
 
 # Node.js and the OpenSpec CLI at the versions in mise.toml (the build workflow
 # uses the same file). The Rust toolchain stays with rustup.
@@ -55,5 +57,4 @@ fi
 # Crates (including the IPADIC dictionary) and a test build, so the first
 # `cargo test` of the session doesn't start from scratch.
 step "fetching crates and building the tests"
-cargo fetch --locked
-cargo test --locked --no-run
+cloud_prepare_dependencies
