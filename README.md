@@ -227,6 +227,10 @@ The benchmark `app::perf` measures the same without windows (a headless renderer
 cargo test --release --lib --config 'profile.release.package.iced_core.debug-assertions=true' perf -- --ignored --nocapture --test-threads=1
 ```
 
+### Cloud Sessions
+
+Claude Code and Codex share the dependency setup in [`tools/cloud/`](tools/cloud/README.md), with platform adapters for tool installation and session startup. See that guide for Codex environment settings and GUI startup.
+
 ### Dev Container
 
 The [devcontainer-claude-code](https://github.com/unhurried/devcontainer-claude-code) dev container has everything else this repository needs. Clone this repository under its `repos/` and, with `PROXY_MODE=open` (crates.io, npm and the IPADIC dictionary are outside its allowlist), set it up once:
