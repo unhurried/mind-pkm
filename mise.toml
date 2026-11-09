@@ -1,6 +1,7 @@
 [tools]
-node = "24"
-"npm:@fission-ai/openspec" = "1.15.0"
+# Latest LTS, pinned so local development and CI use the same runtime.
+node = "26.13.0"
+"npm:@fission-ai/openspec" = "1.16.1"
 
 [settings]
 # `mise install` also installs Rust as pinned in rust-toolchain.toml (through
