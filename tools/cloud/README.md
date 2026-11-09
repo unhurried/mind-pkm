@@ -10,10 +10,12 @@ Platform-specific setup stays in the adapters:
 
 - `.claude/hooks/session-start.sh` keeps Claude's cloud-only guard,
   `CLAUDE_ENV_FILE` integration, mise and system package installation.
-- `codex-install.sh` uses writable tool directories, the cloud runtime's Node
-  (the major version in `mise.toml`), npm and a local extraction of signed Debian
+- `codex-install.sh` uses writable tool directories, the exact Node version in
+  `mise.toml`, npm and a local extraction of signed Debian
   packages for Xvfb/xdotool. This adapter targets the current Debian trixie,
-  x86-64 Codex image. The GUI package versions are pinned; update them from
+  x86-64 Codex image. If the image's Node differs, the adapter downloads the
+  pinned runtime from nodejs.org and verifies its SHA-256 checksum before
+  extracting it. The GUI package versions are pinned; update them from
   signed Debian metadata if the mirror rotates them out.
 
 ## Codex
@@ -60,7 +62,8 @@ rendered window and verify edits saved to disk.
 Outbound access and secret bindings are managed in the cloud environment's
 settings. The scripts do not change them or publish an environment. Required
 hosts include `sh.rustup.rs`, `static.rust-lang.org`, `index.crates.io`,
-`static.crates.io`, `registry.npmjs.org`, `lindera.dev`, and `deb.debian.org`.
+`static.crates.io`, `nodejs.org`, `registry.npmjs.org`, `lindera.dev`, and
+`deb.debian.org`.
 Claude's mise bootstrap additionally uses `mise.run` and its release download
 hosts. Git access uses the platform's existing authentication; GitHub PR
 operations require `api.github.com`. No application secrets are needed.

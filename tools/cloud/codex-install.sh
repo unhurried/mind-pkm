@@ -13,10 +13,31 @@ if ! command -v rustup >/dev/null; then
   sh /tmp/mind-rustup.sh -y --no-modify-path --default-toolchain none --profile minimal --component clippy,rustfmt
 fi
 cloud_install_rust
-node_major=$(sed -n 's/^node = "\([0-9]*\)"/\1/p' mise.toml)
-node --version | grep -E "^v${node_major}\."
+node_version=$(sed -n 's/^node = "\([^"]*\)"/\1/p' mise.toml)
+test -n "$node_version"
+# The image's Node can lag behind mise.toml. Keep the pinned runtime in the
+# writable tooling directory and verify the official archive before unpacking.
+node_name="node-v$node_version-linux-x64"
+if [ "$(node --version 2>/dev/null || true)" != "v$node_version" ]; then
+  if [ ! -x "$tooling/$node_name/bin/node" ]; then
+    node_download=$(mktemp -d "$tooling/node-download.XXXXXX")
+    trap 'rm -rf "$node_download"' EXIT
+    for file in SHASUMS256.txt "$node_name.tar.xz"; do
+      curl -fsS --max-time 90 "https://nodejs.org/dist/v$node_version/$file" -o "$node_download/$file"
+    done
+    awk -v archive="$node_name.tar.xz" '$2 == archive' "$node_download/SHASUMS256.txt" > "$node_download/checksum"
+    test -s "$node_download/checksum"
+    (cd "$node_download" && sha256sum -c checksum)
+    tar -xJf "$node_download/$node_name.tar.xz" -C "$tooling"
+    rm -rf "$node_download"
+    trap - EXIT
+  fi
+  export PATH="$tooling/$node_name/bin:$PATH"
+fi
+node --version | grep -Fx "v$node_version"
+node_bin=$(dirname "$(command -v node)")
 openspec_version=$(sed -n 's/^"npm:@fission-ai\/openspec" = "\([^"]*\)"/\1/p' mise.toml)
-test -n "$node_major" && test -n "$openspec_version"
+test -n "$openspec_version"
 npm install --prefix "$tooling/openspec" --no-audit --no-fund "@fission-ai/openspec@$openspec_version"
 if [ ! -x "$tooling/x11/root/usr/bin/Xvfb" ]; then
   mkdir -p "$tooling/apt/lists/partial" "$tooling/apt/cache/archives/partial" "$tooling/x11"
@@ -35,6 +56,7 @@ fi
   printf 'export CARGO_HOME=%q\n' "$CARGO_HOME"
   printf 'export RUSTUP_HOME=%q\n' "$RUSTUP_HOME"
   printf 'export MIND_PKM_TOOLING_DIR=%q\n' "$tooling"
+  printf 'export PATH=%q:$PATH\n' "$node_bin"
   cat <<'ENV'
 export CARGO_BUILD_JOBS=5
 export OPENSPEC_TELEMETRY=0
