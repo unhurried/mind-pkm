@@ -22,6 +22,7 @@ pub mod clipboard;
 mod column;
 mod commands;
 mod copy_paste;
+mod decoration;
 mod editing;
 mod file;
 mod find;
@@ -109,6 +110,7 @@ pub struct Editor {
     /// The rendered text under the pointer and the pointer's position in it.
     pointer: Option<(Arc<HitInfo>, Point)>,
     window_size: Size,
+    decoration_grid: decoration::Grid,
     /// Ctrl+A pressed again selects all blocks.
     select_all_again: bool,
     /// The page revision and theme its math and diagrams were last requested for.
@@ -216,6 +218,7 @@ impl Editor {
             modifiers: Modifiers::default(),
             pointer: None,
             window_size: DEFAULT_WINDOW,
+            decoration_grid: decoration::Grid::default(),
             select_all_again: false,
             rendered: None,
             copied: None,
@@ -431,6 +434,10 @@ impl Editor {
         match msg {
             EditorMsg::Key(event) => self.on_key(event, prefs, effects),
             EditorMsg::Escape => self.on_escape(),
+            EditorMsg::Rescaled(scale) => {
+                self.decoration_grid.scale.set(scale);
+                Task::none()
+            }
             EditorMsg::Resized(size) => {
                 self.window_size = size;
                 if !self.fullscreen && size.width >= 200.0 && size.height >= 200.0 {

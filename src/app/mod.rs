@@ -137,6 +137,7 @@ pub enum WindowEvent {
     /// Escape (also when a text box has it).
     Escape,
     Resized(Size),
+    Rescaled(f32),
     Moved(Point),
     CloseRequested,
     FileDropped(PathBuf),
@@ -152,7 +153,7 @@ impl WindowEvent {
             WindowEvent::Resized(size) => MapMsg::WindowResized(size),
             WindowEvent::Moved(position) => MapMsg::WindowMoved(position),
             WindowEvent::CloseRequested => MapMsg::CloseRequested,
-            WindowEvent::FileDropped(_) | WindowEvent::Focused => return None,
+            WindowEvent::FileDropped(_) | WindowEvent::Focused | WindowEvent::Rescaled(_) => return None,
         })
     }
 
@@ -162,6 +163,7 @@ impl WindowEvent {
             WindowEvent::Key(event) => EditorMsg::Key(event),
             WindowEvent::Escape => EditorMsg::Escape,
             WindowEvent::Resized(size) => EditorMsg::Resized(size),
+            WindowEvent::Rescaled(scale) => EditorMsg::Rescaled(scale),
             WindowEvent::Moved(_) => return None,
             WindowEvent::CloseRequested => EditorMsg::CloseRequested,
             WindowEvent::FileDropped(path) => EditorMsg::FileDropped(path),
@@ -441,6 +443,7 @@ impl App {
                     }
                     iced::Event::Window(window::Event::Moved(position)) => Some(WindowEvent::Moved(position)),
                     iced::Event::Window(window::Event::Resized(size)) => Some(WindowEvent::Resized(size)),
+                    iced::Event::Window(window::Event::Rescaled(scale)) => Some(WindowEvent::Rescaled(scale)),
                     iced::Event::Window(window::Event::FileDropped(path)) => Some(WindowEvent::FileDropped(path)),
                     iced::Event::Window(window::Event::Focused) => Some(WindowEvent::Focused),
                     _ => None,

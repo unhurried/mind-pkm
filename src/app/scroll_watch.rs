@@ -45,6 +45,7 @@ pub struct ScrollWatch<'a, M> {
     band_x: (f32, f32),
     on_leave: Box<dyn Fn(Visible) -> M + 'a>,
     tracking: Option<Box<dyn Fn(Visible) + 'a>>,
+    track_layout: bool,
     anchor: Option<Box<dyn Fn(Visible) -> f32 + 'a>>,
 }
 
@@ -66,6 +67,7 @@ pub fn scroll_watch<'a, M>(
         band_x: (f32::NEG_INFINITY, f32::INFINITY),
         on_leave: Box::new(on_leave),
         tracking: None,
+        track_layout: false,
         anchor: None,
     }
 }
@@ -81,6 +83,14 @@ impl<'a, M> ScrollWatch<'a, M> {
     /// Tells `f` the visible part after every event, without a message.
     pub fn tracking(mut self, f: impl Fn(Visible) + 'a) -> Self {
         self.tracking = Some(Box::new(f));
+        self
+    }
+
+    /// Like `tracking`, also immediately after layout and anchoring, so
+    /// drawing can use the current offset even before the next event.
+    pub fn tracking_layout(mut self, f: impl Fn(Visible) + 'a) -> Self {
+        self.tracking = Some(Box::new(f));
+        self.track_layout = true;
         self
     }
 
@@ -189,6 +199,17 @@ impl<M> Widget<M, Theme, Renderer> for ScrollWatch<'_, M> {
                     let mut scroll = ScrollBy { id: self.id.clone(), by, done: false };
                     self.content.as_widget_mut().operate(content, layout, renderer, &mut scroll);
                 }
+            }
+        }
+        // Layout (including the anchor above) can change the actual offset
+        // without an event. Drawing must use that offset immediately too.
+        if self.track_layout
+            && let Some(tracking) = &self.tracking
+        {
+            let mut find = Find { id: self.id.clone(), found: None };
+            self.content.as_widget_mut().operate(content, Layout::new(&node), renderer, &mut find);
+            if let Some(visible) = find.found {
+                tracking(visible);
             }
         }
         node
@@ -373,5 +394,20 @@ mod tests {
         // Nothing moved: it stays.
         let mut ui = UserInterface::build(anchored(300.0, |_| 0.0), size, ui.into_cache(), &mut renderer);
         assert_eq!(scrolled(&mut ui, &renderer), 700.0);
+    }
+
+    #[test]
+    fn tracking_sees_the_anchored_offset_before_drawing_without_an_event() {
+        let mut renderer = headless_renderer();
+        let tracked = std::cell::Cell::new(None);
+        let content = scrollable(space().height(3000)).id(widget::Id::new("page")).width(400).height(300);
+        let watched = scroll_watch(content, widget::Id::new("page"), (0.0, 3000.0), |v| v)
+            .anchor(|_| 200.25)
+            .tracking_layout(|v| tracked.set(Some(v)));
+        let mut ui = UserInterface::build(watched, Size::new(400.0, 300.0), Cache::default(), &mut renderer);
+        // iced rounds the scroll translation used to draw the content;
+        // tracking needs that effective offset, not the requested one.
+        assert_eq!(scrolled(&mut ui, &renderer), 200.0);
+        assert_eq!(tracked.get(), Some(visible(200.0)));
     }
 }

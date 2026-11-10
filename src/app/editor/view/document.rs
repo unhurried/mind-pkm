@@ -327,7 +327,8 @@ impl Editor {
         // near the end of the blocks built around it: a message for every
         // step of the wheel would build every window again.
         let page = scrollable(padded).id(self.id("doc")).width(Fill).height(Fill);
-        let mut page = scroll_watch(page, self.id("doc"), band, EditorMsg::PageScrolled);
+        let mut page = scroll_watch(page, self.id("doc"), band, EditorMsg::PageScrolled)
+            .tracking_layout(|visible| self.decoration_grid.scroll.set(visible.top));
         if self.source.is_none() {
             // The blocks above the visible part change height as they are
             // measured: the one at the top stays where it is.
