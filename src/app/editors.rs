@@ -218,7 +218,8 @@ impl App {
         self.editors.insert(id, editor);
         // Opened at the start too, before any message: the assets pane it
         // opens with reads its folder now.
-        Ok(Task::batch([opened.discard(), self.request_renders(), self.read_assets()]))
+        let scale = opened.then(window::scale_factor).map(move |scale| Message::Editor(id, EditorMsg::Rescaled(scale)));
+        Ok(Task::batch([scale, self.request_renders(), self.read_assets()]))
     }
 
     /// What an open the editor window `id` asked for gives: its task, or

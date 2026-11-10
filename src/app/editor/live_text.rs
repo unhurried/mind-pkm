@@ -5,6 +5,7 @@
 //! keys and the IME into messages - offsets where the layout is needed (a
 //! click, Up/Down, Home/End), motions and insertions otherwise.
 
+use super::decoration;
 use super::flow::{self, Cluster, DECORATION_THICKNESS, Flow, Measured};
 use super::keys::Bind;
 use super::{EditorCommand, EditorMsg, RightClick};
@@ -102,6 +103,7 @@ pub struct Run {
 }
 
 pub struct LiveText<'a> {
+    grid: &'a decoration::Grid,
     id: widget::Id,
     runs: Vec<Run>,
     len: usize,
@@ -121,8 +123,15 @@ pub struct LiveText<'a> {
 }
 
 impl<'a> LiveText<'a> {
-    pub fn new(id: widget::Id, runs: Vec<Run>, len: usize, sel: (usize, usize)) -> Self {
+    pub(super) fn new(
+        id: widget::Id,
+        runs: Vec<Run>,
+        len: usize,
+        sel: (usize, usize),
+        grid: &'a decoration::Grid,
+    ) -> Self {
         LiveText {
+            grid,
             id,
             runs,
             len,
@@ -672,8 +681,10 @@ impl Widget<EditorMsg, Theme, Renderer> for LiveText<'_> {
                                 quad(
                                     renderer,
                                     Rectangle::new(
-                                        // On whole pixels, as in the rendered blocks.
-                                        Point::new(origin.x + f.x, (origin.y + y).round()),
+                                        Point::new(
+                                            origin.x + f.x,
+                                            self.grid.top(position.y, shaped.ascent, origin.y + y),
+                                        ),
                                         Size::new(f.width, DECORATION_THICKNESS),
                                     ),
                                     look.color,

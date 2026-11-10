@@ -5,6 +5,7 @@
 //! place when a block is edited. Adapted from `iced_widget::text::rich`
 //! (iced 0.14, MIT).
 
+use super::super::decoration;
 use super::super::flow::{self, DECORATION_THICKNESS};
 use iced::advanced::graphics::text::Paragraph;
 use iced::advanced::layout::{self, Layout};
@@ -16,11 +17,15 @@ use iced::widget::text::{Alignment, LineHeight, Shaping, Wrapping};
 use iced::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 /// Rich text of the spans.
-pub(super) fn rich<'a, Link, Message>(spans: Vec<Span<'static, Link, Font>>) -> Rich<'a, Link, Message>
+pub(super) fn rich<'a, Link, Message>(
+    spans: Vec<Span<'static, Link, Font>>,
+    grid: &'a decoration::Grid,
+) -> Rich<'a, Link, Message>
 where
     Link: Clone + 'static,
 {
     Rich {
+        grid,
         spans,
         size: None,
         line_height: LineHeight::default(),
@@ -33,6 +38,7 @@ where
 }
 
 pub(super) struct Rich<'a, Link, Message> {
+    grid: &'a decoration::Grid,
     spans: Vec<Span<'static, Link, Font>>,
     size: Option<Pixels>,
     line_height: LineHeight,
@@ -192,11 +198,18 @@ where
             // Each region is a part of the span on one line, from its top.
             let (underline_top, strike_top) = flow::decoration_tops(0.0, size, line_height);
             for bounds in &regions {
+                let Some(line) = state
+                    .paragraph
+                    .buffer()
+                    .layout_runs()
+                    .find(|line| bounds.y >= line.line_top && bounds.y < line.line_top + line.line_height)
+                else {
+                    continue;
+                };
                 for (drawn, y) in [(underline, underline_top), (span.strikethrough, strike_top)] {
                     if drawn {
                         let at = bounds.position() + translation + Vector::new(0.0, y);
-                        // On whole pixels: sharp, however the line falls.
-                        let at = Point::new(at.x, at.y.round());
+                        let at = Point::new(at.x, self.grid.top(translation.y, line.line_y, at.y));
                         quad(renderer, Rectangle::new(at, Size::new(bounds.width, DECORATION_THICKNESS)), color);
                     }
                 }
