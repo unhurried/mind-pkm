@@ -205,7 +205,7 @@ fn text_line<'a>(
         // An empty line keeps its height.
         return text(" ").size(base.size).line_height(LINE_HEIGHT).into();
     }
-    let mut rich = rich(spans)
+    let mut rich = rich(spans, &ctx.editor.decoration_grid)
         .size(base.size)
         .font(base.font)
         .line_height(LINE_HEIGHT)

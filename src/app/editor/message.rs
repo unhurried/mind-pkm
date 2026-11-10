@@ -17,6 +17,7 @@ pub enum EditorMsg {
     Key(keyboard::Event),
     Escape,
     Resized(Size),
+    Rescaled(f32),
     CloseRequested,
     FileDropped(PathBuf),
     Focused,

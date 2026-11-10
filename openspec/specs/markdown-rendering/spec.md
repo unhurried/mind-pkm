@@ -94,6 +94,10 @@ The editor SHALL render italic (`*a*`, `_a_`), bold (`**a**`, `__a__`), striketh
 - **WHEN** a paragraph contains `:not-an-emoji:`
 - **THEN** it is shown as written
 
+#### Scenario: Text decorations at reduced zoom
+- **WHEN** a page contains repeated underlined or struck-through text at 70%, 80% or 90% zoom
+- **THEN** each decoration keeps the same distance from its text's baseline across rows, including wrapped lines and the block being edited, after scrolling and at different display scale factors
+
 ### Requirement: Links
 Inline links (`[t](url "title")`), reference links (`[t][id]` with `[id]: url`), links to headings (`[t](#anchor)`, the anchor being the heading text in lower case with spaces as `-`), autolinks (`<url>`) and bare `http://`, `https://` and `www.` URLs SHALL be shown as links. A link destination containing spaces without angle brackets (as in `[assets](My Page.assets)`) SHALL be accepted as a link. Link reference definitions SHALL be shown dimmed as written.
 
@@ -104,6 +108,10 @@ Inline links (`[t](url "title")`), reference links (`[t][id]` with `[id]: url`),
 #### Scenario: Bare URL
 - **WHEN** a paragraph contains `see https://example.com now`
 - **THEN** `https://example.com` is shown as a link
+
+#### Scenario: Link underlines at reduced zoom
+- **WHEN** a nested list repeats the same link text at 70%, 80% or 90% zoom
+- **THEN** the underlines keep the same distance from the text's baseline in every item, including after scrolling or entering an item to edit it
 
 ### Requirement: Inline HTML
 Inline HTML SHALL be kept in the file as written. `<u>`, `<s>`, `<del>`, `<b>`, `<strong>`, `<i>`, `<em>`, `<mark>`, `<sub>`, `<sup>`, `<kbd>`, `<br>`, `<span style="color: ...">` and `<img src="..." width="...">` SHALL be rendered; `<iframe>`, `<video>`, `<audio>` and `<embed>` SHALL be shown as a placeholder naming the element with a link to its source; any other tag SHALL be shown dimmed as written.
