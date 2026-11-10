@@ -240,10 +240,13 @@ pub(super) fn image_view<'a>(inline: &Inline, ctx: &Ctx<'a>, width: f32, block: 
                 }
             }
             Some(_) => broken(format!("missing: {src}")),
-            None => rich(vec![
-                Span::new(format!("🖼 {} ", if alt.is_empty() { "image" } else { alt })).color(p.muted),
-                Span::new(src.clone()).color(p.link).underline(true).link(SpanLink { dest: src.clone(), at }),
-            ])
+            None => rich(
+                vec![
+                    Span::new(format!("🖼 {} ", if alt.is_empty() { "image" } else { alt })).color(p.muted),
+                    Span::new(src.clone()).color(p.link).underline(true).link(SpanLink { dest: src.clone(), at }),
+                ],
+                &ctx.editor.decoration_grid,
+            )
             .size(ctx.size(0.9))
             .on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at))
             .into(),
@@ -264,10 +267,14 @@ pub(super) fn embed_view<'a>(tag: &str, src: Option<&str>, p: Palette, ctx: &Ctx
             Span::new(format!(" {src}")).color(p.link).underline(true).link(SpanLink { dest: src.to_string(), at: 0 }),
         );
     }
-    container(rich(spans).size(ctx.size(0.9)).on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at)))
-        .padding(12)
-        .style(move |_| container::background(p.code_bg).border(border::color(p.border).width(1).rounded(4)))
-        .into()
+    container(
+        rich(spans, &ctx.editor.decoration_grid)
+            .size(ctx.size(0.9))
+            .on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at)),
+    )
+    .padding(12)
+    .style(move |_| container::background(p.code_bg).border(border::color(p.border).width(1).rounded(4)))
+    .into()
 }
 
 /// The base text of a table's row `r` (the header in bold).

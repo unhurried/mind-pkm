@@ -437,11 +437,17 @@ impl Editor {
         marks: Vec<(std::ops::Range<usize>, Color)>,
     ) -> LiveText<'a> {
         let p = ctx.p;
-        LiveText::new(self.id("active"), runs, live.display.text.len(), (live.sel.anchor, live.sel.head))
-            .base(base.font, base.size, LINE_HEIGHT)
-            .colors(p.selection, base.color)
-            .held(self.pressed())
-            .marks(marks)
+        LiveText::new(
+            self.id("active"),
+            runs,
+            live.display.text.len(),
+            (live.sel.anchor, live.sel.head),
+            &self.decoration_grid,
+        )
+        .base(base.font, base.size, LINE_HEIGHT)
+        .colors(p.selection, base.color)
+        .held(self.pressed())
+        .marks(marks)
     }
 
     /// The table with the cursor, as a grid of cells; the cursor's cell is a
