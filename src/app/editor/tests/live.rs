@@ -21,6 +21,23 @@ fn only_the_element_at_the_cursor_shows_its_markdown() {
 }
 
 #[test]
+fn full_width_spaces_at_the_end_stay_in_the_edited_block() {
+    for source in ["項目\n", "- 項目\n", "## 項目\n", "> - 項目\n"] {
+        let (mut app, _f, _, _) = app_with_page(source);
+        let id = open_with_f1(&mut app);
+        click_after(&mut app, id, "項目");
+        let kind = active_kind(&app, id);
+        for text in ["　", "　", "続き"] {
+            live(&mut app, id, LiveMsg::Insert(text.into()));
+            assert_eq!(std::mem::discriminant(&active_kind(&app, id)), std::mem::discriminant(&kind));
+            assert!(app.editors[&id].page.pending().is_none());
+        }
+        assert_eq!(page_text(&app, id), source.replace("項目", "項目　　続き"));
+        assert_eq!(shown(&app, id), "項目　　続き");
+    }
+}
+
+#[test]
 fn headings_and_list_items_are_edited_without_their_markers() {
     let (mut app, _f, _, _) = app_with_page("## Plan\n\n- [ ] task\n");
     let id = open_with_f1(&mut app);
