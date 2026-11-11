@@ -253,6 +253,10 @@ Edit → Select Word SHALL select the word at the cursor (it has no shortcut; a 
 ### Requirement: Editing rendered text
 Paragraphs, headings, list items, quotes and footnote definitions SHALL be edited in their rendered form, with a blinking text cursor and the selection drawn over the rendered text, rendered images and math included. Deleting part of a formatted text SHALL keep its formatting, and deleting all of it SHALL remove its Markdown markers too. Text typed at the cursor SHALL go where the source shown at the cursor puts it.
 
+#### Scenario: Full-width spaces at the end of a block
+- **WHEN** full-width spaces (U+3000) and more text are typed at the end of a paragraph, heading or list item, including an item inside a quote
+- **THEN** the spaces and the following text stay in the same block, with no added line break or paragraph
+
 #### Scenario: Deleting the start of a bold word
 - **WHEN** `bo` is selected in the rendered `**bold**` and deleted
 - **THEN** the source reads `**ld**` and `ld` is shown in bold
