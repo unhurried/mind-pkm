@@ -660,17 +660,20 @@ fn is_blank(s: &str, inside: bool) -> bool {
     s.chars().all(|c| c.is_whitespace() || (inside && c == '>'))
 }
 
-/// `range` without trailing whitespace, nor trailing lines holding nothing
+/// `range` without trailing Markdown whitespace, nor trailing lines holding nothing
 /// but the prefixes of the containers `kinds` around it.
 fn trim_end(text: &str, range: Range<usize>, kinds: &[ContainerKind]) -> Range<usize> {
-    let mut end = range.start + text[range.clone()].trim_end().len();
+    // Unicode spaces (e.g. U+3000) are text in CommonMark. Removing them
+    // would leave a cursor after one outside the block's editing region.
+    let whitespace = [' ', '\t', '\r', '\n'];
+    let mut end = range.start + text[range.clone()].trim_end_matches(whitespace).len();
     while !kinds.is_empty() {
         let Some(nl) = text[range.start..end].rfind('\n') else { break };
         let line = &text[range.start + nl + 1..end];
-        if !line[prefix_len(line, kinds.iter().copied())..].trim().is_empty() {
+        if !line[prefix_len(line, kinds.iter().copied())..].trim_matches(whitespace).is_empty() {
             break;
         }
-        end = range.start + text[range.start..range.start + nl].trim_end().len();
+        end = range.start + text[range.start..range.start + nl].trim_end_matches(whitespace).len();
     }
     range.start..end
 }
