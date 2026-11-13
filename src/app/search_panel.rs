@@ -16,6 +16,10 @@ pub const UPDATING_INDEX_STATUS: &str = "Updating search index...";
 pub const SEARCH_INPUT_ID: &str = "search-input";
 pub const RESULTS_SCROLL_ID: &str = "search-results";
 pub const ROW_HEIGHT: f32 = 22.0;
+/// Room for the controls, column headings, footer, gaps and padding.
+const CHROME_HEIGHT: f32 = 100.0;
+pub const MIN_HEIGHT: f32 = CHROME_HEIGHT + 4.0 * ROW_HEIGHT;
+pub const MAX_HEIGHT: f32 = CHROME_HEIGHT + 10.0 * ROW_HEIGHT;
 
 /// The orders and scopes the panel offers.
 pub const SORTS: [SearchSort; 2] = [SearchSort::Modified, SearchSort::Relevance];

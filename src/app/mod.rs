@@ -342,7 +342,8 @@ impl App {
     /// preferences say); else the map window (`window`) with the map
     /// `initial`, or the last opened one - also when the Markdown file can't
     /// be opened, which the map window then says.
-    fn start(&mut self, initial: Option<PathBuf>, window: WindowGeometry) -> Task<Message> {
+    fn start(&mut self, initial: Option<PathBuf>, mut window: WindowGeometry) -> Task<Message> {
+        window.size.height = window.size.height.max(viewport::MIN_WINDOW_HEIGHT);
         self.window_size = window.size;
         self.window_position = window.position;
         self.window = window;
@@ -359,7 +360,10 @@ impl App {
             },
             initial => initial,
         };
-        let (id, opened) = window::open(window_settings(window.size, window.position, window.maximized));
+        let (id, opened) = window::open(window::Settings {
+            min_size: Some(Size::new(0.0, viewport::MIN_WINDOW_HEIGHT)),
+            ..window_settings(window.size, window.position, window.maximized)
+        });
         self.main_window = id;
         let explicit = initial.is_some();
         let task = match initial.or_else(settings::last_file) {
