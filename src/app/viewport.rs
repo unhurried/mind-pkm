@@ -1,7 +1,7 @@
 //! The visible part of the map: relayout, scrolling, panning, zooming.
 
 use super::scroll_watch::Visible;
-use super::search_panel::ROW_HEIGHT;
+use super::search_panel::{MAX_HEIGHT, MIN_HEIGHT, ROW_HEIGHT};
 use super::ui::zoom_step;
 use super::view;
 use super::{App, MAP_SCROLL_ID, MapMsg, Message};
@@ -17,6 +17,8 @@ const REVEAL_PADDING: f32 = 24.0;
 const MAP_MARGIN: f32 = 40.0;
 /// The height of the menu and status bars, for a viewport not measured yet.
 const BARS_HEIGHT: f32 = 64.0;
+/// Keep room for the map above the search panel even at its minimum height.
+pub(super) const MIN_WINDOW_HEIGHT: f32 = BARS_HEIGHT + MIN_HEIGHT + 160.0;
 /// The room around the visible part of the map whose nodes are built as
 /// widgets too (`near_view`), in screen pixels. The map is told where it is
 /// scrolled when the visible part comes within half of it of the edge of the
@@ -142,10 +144,10 @@ pub enum Pan {
 
 impl App {
     /// The height of the search panel: two fifths of the room between the
-    /// bars, less two result rows.
+    /// bars, less two result rows, bounded to show about four to ten rows.
     pub(super) fn search_panel_height(&self) -> f32 {
         let body = (self.window_size.height - BARS_HEIGHT).max(0.0);
-        (body * 0.4 - 2.0 * ROW_HEIGHT).max(0.0)
+        (body * 0.4 - 2.0 * ROW_HEIGHT).clamp(MIN_HEIGHT, MAX_HEIGHT)
     }
 
     /// The size of the map's scrollable: as last measured, else estimated

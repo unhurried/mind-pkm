@@ -1040,6 +1040,47 @@ mod tests {
     use super::super::viewport::ZOOM_STEPS;
     use super::*;
 
+    #[test]
+    fn search_results_keep_four_to_ten_rows_when_the_window_is_resized() {
+        use super::super::test_support::{headless_renderer, remove_in_temp};
+        use iced::advanced::widget::{Id, Operation, operation::Scrollable};
+        use iced_runtime::user_interface::{Cache, UserInterface};
+
+        #[derive(Default)]
+        struct ResultsHeight(Option<f32>);
+        impl Operation for ResultsHeight {
+            fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+                operate(self);
+            }
+
+            fn scrollable(
+                &mut self,
+                id: Option<&Id>,
+                bounds: Rectangle,
+                _content_bounds: Rectangle,
+                _translation: Vector,
+                _state: &mut dyn Scrollable,
+            ) {
+                if id == Some(&Id::new(RESULTS_SCROLL_ID)) {
+                    self.0 = Some(bounds.height);
+                }
+            }
+        }
+
+        let mut app = App::new(remove_in_temp);
+        let _ = app.set_doc(crate::mindmap::MindMap::new("root"), None);
+        app.search.open = true;
+        let mut renderer = headless_renderer();
+        for (height, rows) in [(super::super::viewport::MIN_WINDOW_HEIGHT, 4.0), (2000.0, 10.0)] {
+            app.window_size = Size::new(1280.0, height);
+            let mut ui = UserInterface::build(app.map_window(), app.window_size, Cache::new(), &mut renderer);
+            let mut results = ResultsHeight::default();
+            ui.operate(&renderer, &mut results);
+            let shown = results.0.expect("search results are visible") / ROW_HEIGHT;
+            assert!(shown >= rows && shown < rows + 1.0, "window height {height}: {shown} rows");
+        }
+    }
+
     /// What zooming relies on: a text measured at 100% takes the same lines
     /// at every zoom step, its sizes grown with the font size.
     #[test]
