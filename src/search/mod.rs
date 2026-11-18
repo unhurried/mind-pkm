@@ -1,12 +1,11 @@
-//! Full-text search over the document directory: [`update_index`] builds or
-//! updates an index under `<docDir>/.search-index/`, [`search`] queries it.
+//! Full-text search over the document directory. [`update_index`] builds or
+//! updates its cache under the user's settings directory. [`search`] queries it.
 //!
-//! The index lives in `.search-index/tantivy/`; next to it, `tantivy.meta`
+//! Each document directory gets its own subdirectory under `.search-index/`.
+//! Inside it, Tantivy uses `tantivy/`. The sibling file `tantivy.meta`
 //! records the schema version on its first line, then one
 //! "<mtime>\t<relative path>" line per indexed file. That file is what makes
-//! [`update_index`] incremental. (The Lucene index the former Freeplane add-on
-//! kept in `.search-index/lucene/` + `files.meta` is left alone, so both can
-//! coexist on the same document directory.)
+//! [`update_index`] incremental.
 
 pub mod analyzer;
 pub mod extract;
@@ -14,7 +13,10 @@ pub mod extract;
 use crate::paths;
 use crate::pkm::{self, INDEX_DIR_NAME};
 use analyzer::{CONTENT_TOKENIZER, FILENAME_TOKENIZER, JapaneseTokenizer};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fs::{self, File, TryLockError};
+use std::io::ErrorKind;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -36,6 +38,7 @@ const META_FILE_NAME: &str = "tantivy.meta";
 const META_VERSION_PREFIX: &str = "version=";
 const OWNER_FILE_NAME: &str = ".mind-pkm-index";
 const OWNER_CONTENT: &str = "Mind PKM Tantivy cache\n";
+const UPDATE_LOCK_NAME: &str = "update.lock";
 
 // As far into the content as a snippet is looked for.
 const PREVIEW_CHARS: usize = 50 * 1024;
@@ -146,18 +149,24 @@ fn register_tokenizers(index: &Index) {
     index.tokenizers().register(FILENAME_TOKENIZER, JapaneseTokenizer::filename());
 }
 
-fn tantivy_dir(doc_dir: &Path) -> PathBuf {
-    doc_dir.join(INDEX_DIR_NAME).join(TANTIVY_SUBDIR_NAME)
-}
-
-fn meta_file(doc_dir: &Path) -> PathBuf {
-    doc_dir.join(INDEX_DIR_NAME).join(META_FILE_NAME)
+/// A stable, fixed-length filename derived from the canonical OS path.
+fn cache_dir(config_dir: &Path, doc_dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStrExt;
+    #[cfg(unix)]
+    let path_bytes = doc_dir.as_os_str().as_bytes();
+    #[cfg(windows)]
+    use std::os::windows::ffi::OsStrExt;
+    #[cfg(windows)]
+    let path_bytes: Vec<u8> = doc_dir.as_os_str().encode_wide().flat_map(u16::to_le_bytes).collect();
+    let id = Sha256::digest(path_bytes);
+    config_dir.join(INDEX_DIR_NAME).join(format!("{id:x}"))
 }
 
 /// Check both the cache's ancestors and its contents before Tantivy gets any
 /// paths. In particular, checking only `tantivy/` misses a linked cache root,
-/// metadata file, segment, or lock file. The add-on's Lucene cache is untouched.
-fn checked_cache(doc_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+/// metadata file, segment, or lock file.
+fn checked_cache(config_dir: &Path, cache_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
     fn check_tree(path: &Path, root: &Path) -> Result<(), String> {
         let path = paths::resolve_inside(path, root).map_err(|e| e.to_string())?;
         let metadata = match std::fs::symlink_metadata(&path) {
@@ -177,17 +186,34 @@ fn checked_cache(doc_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
         }
         Ok(())
     }
-    let dir = paths::resolve_inside(&tantivy_dir(doc_dir), doc_dir).map_err(|e| e.to_string())?;
-    let meta = paths::resolve_inside(&meta_file(doc_dir), doc_dir).map_err(|e| e.to_string())?;
-    check_tree(&dir, doc_dir)?;
+    let resolve = |name| paths::resolve_inside(&cache_dir.join(name), config_dir).map_err(|e| e.to_string());
+    let dir = resolve(TANTIVY_SUBDIR_NAME)?;
+    let meta = resolve(META_FILE_NAME)?;
+    check_tree(&dir, config_dir)?;
     if meta.exists() && !meta.is_file() {
         return Err("search metadata is not a regular file".into());
     }
     Ok((dir, meta))
 }
 
+/// Hold the lock outside `tantivy/` so it spans rebuilds and metadata writes.
+fn lock_cache(config_dir: &Path, cache_dir: &Path) -> Result<Option<File>, String> {
+    let path = paths::resolve_inside(&cache_dir.join(UPDATE_LOCK_NAME), config_dir).map_err(|e| e.to_string())?;
+    if path.exists() && !path.is_file() {
+        return Err("search cache lock is not a regular file".into());
+    }
+    fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    let file =
+        File::options().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| e.to_string())?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(e)) => Err(e.to_string()),
+    }
+}
+
 /// A fixed cache name is not evidence of ownership. Old app indexes can be
-/// migrated when their schema matches; an unrelated nonempty folder is kept.
+/// rebuilt when their schema matches. Keep an unrelated nonempty folder.
 fn owns_cache(dir: &Path) -> bool {
     if std::fs::read_to_string(dir.join(OWNER_FILE_NAME)).is_ok_and(|s| s == OWNER_CONTENT) {
         return true;
@@ -289,10 +315,22 @@ static UPDATE_LOCK: Mutex<()> = Mutex::new(());
 /// the index itself is missing. The file walk and the diff come first, so the
 /// common "nothing changed" run never opens the index for writing.
 pub fn update_index(doc_dir: &Path) -> Result<(), String> {
+    let config_dir = paths::user_config_dir().ok_or("user settings directory is unavailable")?;
+    update_index_in(&config_dir, doc_dir)
+}
+
+pub(crate) fn update_index_in(config_dir: &Path, doc_dir: &Path) -> Result<(), String> {
     let _guard = UPDATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let root = doc_dir.canonicalize().map_err(|e| e.to_string())?;
     let doc_dir = root.as_path();
-    let (dir, meta_path) = checked_cache(doc_dir)?;
+    if !doc_dir.is_dir() {
+        return Err("search document directory is not a directory".into());
+    }
+    fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
+    let config_dir = config_dir.canonicalize().map_err(|e| e.to_string())?;
+    let cache_dir = cache_dir(&config_dir, doc_dir);
+    let Some(_cache_lock) = lock_cache(&config_dir, &cache_dir)? else { return Ok(()) };
+    let (dir, meta_path) = checked_cache(&config_dir, &cache_dir)?;
     let meta = load_meta(&meta_path);
     let rebuild = meta.version != Some(INDEX_SCHEMA_VERSION) || !index_exists(&dir);
     let known = if rebuild { HashMap::new() } else { meta.mtimes };
@@ -308,32 +346,37 @@ pub fn update_index(doc_dir: &Path) -> Result<(), String> {
     }
     let deleted: Vec<&String> = known.keys().filter(|k| !current.contains_key(*k)).collect();
     // Recheck after the potentially long document walk, including a no-op run.
-    checked_cache(doc_dir)?;
+    checked_cache(&config_dir, &cache_dir)?;
     if !rebuild && changed.is_empty() && deleted.is_empty() {
         return Ok(());
     }
 
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let index = if rebuild {
-        if std::fs::read_dir(&dir).map_err(|e| e.to_string())?.next().is_some() {
-            if !owns_cache(&dir) {
-                return Err("refusing to replace a search cache not owned by Mind PKM".into());
-            }
-            checked_cache(doc_dir)?;
-            std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let nonempty =
+            fs::read_dir(&dir).map_err(|e| e.to_string())?.next().transpose().map_err(|e| e.to_string())?.is_some();
+        if nonempty && !owns_cache(&dir) {
+            return Err("refusing to replace a search cache not owned by Mind PKM".into());
         }
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        std::fs::write(dir.join(OWNER_FILE_NAME), OWNER_CONTENT).map_err(|e| e.to_string())?;
+        checked_cache(&config_dir, &cache_dir)?;
+        // An interrupted rebuild must leave no metadata that validates the new index.
+        match fs::remove_file(&meta_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        if nonempty {
+            fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+            fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        }
+        fs::write(dir.join(OWNER_FILE_NAME), OWNER_CONTENT).map_err(|e| e.to_string())?;
         Index::create_in_dir(&dir, schema()).map_err(|e| e.to_string())?
     } else {
         Index::open_in_dir(&dir).map_err(|e| e.to_string())?
     };
     register_tokenizers(&index);
     let f = fields_of(&index)?;
-    let Ok(mut writer) = index.writer::<TantivyDocument>(WRITER_MEMORY) else {
-        // Another process is updating the index.
-        return Ok(());
-    };
+    let mut writer = index.writer::<TantivyDocument>(WRITER_MEMORY).map_err(|e| e.to_string())?;
     for (path, rel) in &changed {
         writer.delete_term(Term::from_field_text(f.path, rel));
         // A file/parent may have changed since enumeration; do not use it then.
@@ -360,8 +403,8 @@ pub fn update_index(doc_dir: &Path) -> Result<(), String> {
     }
     writer.commit().map_err(|e| e.to_string())?;
     writer.wait_merging_threads().map_err(|e| e.to_string())?;
-    // After the commit only, so an interrupted run is redone in full next time.
-    checked_cache(doc_dir)?;
+    // After the commit only, so an interrupted update can retry.
+    checked_cache(&config_dir, &cache_dir)?;
     save_meta(&meta_path, &current).map_err(|e| e.to_string())
 }
 
@@ -412,10 +455,30 @@ pub fn search(
     scope: SearchScope,
     max_results: usize,
 ) -> Result<Vec<SearchHit>, String> {
+    let config_dir = paths::user_config_dir().ok_or("user settings directory is unavailable")?;
+    search_in(&config_dir, doc_dir, query_text, sort, scope, max_results)
+}
+
+fn search_in(
+    config_dir: &Path,
+    doc_dir: &Path,
+    query_text: &str,
+    sort: SearchSort,
+    scope: SearchScope,
+    max_results: usize,
+) -> Result<Vec<SearchHit>, String> {
     let keywords: Vec<&str> =
         query_text.split(|c: char| c.is_whitespace() || c == '\u{3000}').filter(|k| !k.is_empty()).collect();
     let root = doc_dir.canonicalize().map_err(|e| e.to_string())?;
-    let (dir, meta_path) = checked_cache(&root)?;
+    if !root.is_dir() {
+        return Err("search document directory is not a directory".into());
+    }
+    let config_dir = match config_dir.canonicalize() {
+        Ok(path) => path,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let (dir, meta_path) = checked_cache(&config_dir, &cache_dir(&config_dir, &root))?;
     if keywords.is_empty() || load_meta(&meta_path).version != Some(INDEX_SCHEMA_VERSION) || !index_exists(&dir) {
         return Ok(Vec::new());
     }
@@ -541,37 +604,43 @@ mod tests {
         v
     }
 
-    fn find(dir: &Path, q: &str, scope: SearchScope) -> Vec<SearchHit> {
-        search(dir, q, SearchSort::Relevance, scope, DEFAULT_MAX_RESULTS).unwrap()
+    fn test_cache(config: &Path, dir: &Path) -> PathBuf {
+        cache_dir(config, &dir.canonicalize().unwrap())
+    }
+
+    fn find(config: &Path, dir: &Path, q: &str, scope: SearchScope) -> Vec<SearchHit> {
+        search_in(config, dir, q, SearchSort::Relevance, scope, DEFAULT_MAX_RESULTS).unwrap()
     }
 
     #[test]
     fn indexes_and_searches_incrementally() {
         let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        assert!(find(d, "anything", SearchScope::All).is_empty());
+        let (d, config) = (&tmp.path().join("docs"), &tmp.path().join("config/mind-pkm"));
         write(d, "Rust入門.md", "\u{feff}# メモ\n\n東京都の関西国際空港について書いた本を読んだ。");
         write(d, "Rust入門.assets/notes.txt", "attachment about tokyo");
         write(d, "QuarterlyReport2024.txt", "numbers");
         write(d, ".git/config", "secret tokyo");
-        update_index(d).unwrap();
+        assert!(find(config, d, "anything", SearchScope::All).is_empty());
+        assert!(!config.exists());
+        update_index_in(config, d).unwrap();
+        assert!(!d.join(INDEX_DIR_NAME).exists());
 
-        assert_eq!(paths(&find(d, "空港", SearchScope::All)), vec!["Rust入門.md"]);
-        assert!(find(d, "京都", SearchScope::All).is_empty());
-        assert_eq!(paths(&find(d, "読む", SearchScope::All)), vec!["Rust入門.md"]);
+        assert_eq!(paths(&find(config, d, "空港", SearchScope::All)), vec!["Rust入門.md"]);
+        assert!(find(config, d, "京都", SearchScope::All).is_empty());
+        assert_eq!(paths(&find(config, d, "読む", SearchScope::All)), vec!["Rust入門.md"]);
         // AND across keywords, full-width space too.
-        assert_eq!(paths(&find(d, "東京　空港", SearchScope::All)), vec!["Rust入門.md"]);
-        assert!(find(d, "空港 numbers", SearchScope::All).is_empty());
+        assert_eq!(paths(&find(config, d, "東京　空港", SearchScope::All)), vec!["Rust入門.md"]);
+        assert!(find(config, d, "空港 numbers", SearchScope::All).is_empty());
         // File names, split into word parts.
-        assert_eq!(paths(&find(d, "report", SearchScope::All)), vec!["QuarterlyReport2024.txt"]);
-        assert_eq!(paths(&find(d, "rust", SearchScope::All)), vec!["Rust入門.md"]);
+        assert_eq!(paths(&find(config, d, "report", SearchScope::All)), vec!["QuarterlyReport2024.txt"]);
+        assert_eq!(paths(&find(config, d, "rust", SearchScope::All)), vec!["Rust入門.md"]);
         // Scopes.
-        assert_eq!(paths(&find(d, "tokyo", SearchScope::All)), vec!["Rust入門.assets/notes.txt"]);
-        assert!(find(d, "tokyo", SearchScope::Pages).is_empty());
-        assert_eq!(paths(&find(d, "tokyo", SearchScope::Assets)), vec!["Rust入門.assets/notes.txt"]);
+        assert_eq!(paths(&find(config, d, "tokyo", SearchScope::All)), vec!["Rust入門.assets/notes.txt"]);
+        assert!(find(config, d, "tokyo", SearchScope::Pages).is_empty());
+        assert_eq!(paths(&find(config, d, "tokyo", SearchScope::Assets)), vec!["Rust入門.assets/notes.txt"]);
 
         // Snippet with highlights.
-        let hit = &find(d, "空港", SearchScope::All)[0];
+        let hit = &find(config, d, "空港", SearchScope::All)[0];
         let s = &hit.snippet;
         assert!(!s.highlights.is_empty(), "{s:?}");
         assert!(s.highlights.iter().all(|r| s.text[r.clone()].contains("空港")), "{s:?}");
@@ -579,9 +648,9 @@ mod tests {
         // Incremental: a deleted file disappears, a new one appears.
         std::fs::remove_file(d.join("QuarterlyReport2024.txt")).unwrap();
         write(d, "sub/new page.md", "numbers again");
-        update_index(d).unwrap();
-        assert_eq!(paths(&find(d, "numbers", SearchScope::All)), vec!["sub/new page.md"]);
-        let meta = std::fs::read_to_string(meta_file(d)).unwrap();
+        update_index_in(config, d).unwrap();
+        assert_eq!(paths(&find(config, d, "numbers", SearchScope::All)), vec!["sub/new page.md"]);
+        let meta = fs::read_to_string(test_cache(config, d).join(META_FILE_NAME)).unwrap();
         assert!(meta.starts_with(&format!("version={INDEX_SCHEMA_VERSION}\n")));
         assert!(!meta.contains(".git"));
     }
@@ -589,12 +658,77 @@ mod tests {
     #[test]
     fn rebuilds_when_index_is_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
+        let (d, config) = (&tmp.path().join("docs"), &tmp.path().join("config/mind-pkm"));
         write(d, "a.md", "hello world");
-        update_index(d).unwrap();
-        std::fs::remove_dir_all(tantivy_dir(d)).unwrap();
-        update_index(d).unwrap();
-        assert_eq!(paths(&find(d, "hello", SearchScope::All)), vec!["a.md"]);
+        update_index_in(config, d).unwrap();
+        fs::remove_dir_all(test_cache(config, d).join(TANTIVY_SUBDIR_NAME)).unwrap();
+        update_index_in(config, d).unwrap();
+        assert_eq!(paths(&find(config, d, "hello", SearchScope::All)), vec!["a.md"]);
+    }
+
+    #[test]
+    fn separates_document_directories_with_the_same_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tmp.path().join("config/mind-pkm");
+        let first = tmp.path().join("first/docs");
+        let second = tmp.path().join("second/docs");
+        write(&first, "Page.md", "apple");
+        write(&second, "Page.md", "banana");
+        update_index_in(&config, &first).unwrap();
+        update_index_in(&config, &second).unwrap();
+
+        assert_eq!(paths(&find(&config, &first, "apple", SearchScope::All)), vec!["Page.md"]);
+        assert!(find(&config, &first, "banana", SearchScope::All).is_empty());
+        assert_eq!(paths(&find(&config, &second, "banana", SearchScope::All)), vec!["Page.md"]);
+        assert!(find(&config, &second, "apple", SearchScope::All).is_empty());
+        let caches = fs::read_dir(config.join(INDEX_DIR_NAME)).unwrap().count();
+        assert_eq!(caches, 2);
+    }
+
+    #[test]
+    fn builds_from_documents_and_preserves_old_tantivy_and_lucene_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("docs");
+        let config = tmp.path().join("config/mind-pkm");
+        let previous_config = tmp.path().join("previous");
+        let page = write(&d, "Page.md", "original");
+        update_index_in(&previous_config, &d).unwrap();
+        let previous_cache = test_cache(&previous_config, &d);
+        let old_path = d.join(INDEX_DIR_NAME);
+        let lucene = write(&old_path, "lucene/segments", "lucene");
+        let lucene_meta = write(&old_path, "files.meta", "freeplane");
+        for name in [TANTIVY_SUBDIR_NAME, META_FILE_NAME] {
+            fs::rename(previous_cache.join(name), old_path.join(name)).unwrap();
+        }
+        let old_meta = old_path.join(META_FILE_NAME);
+        let old_index = old_path.join(TANTIVY_SUBDIR_NAME).join("meta.json");
+        let old_meta_contents = fs::read(&old_meta).unwrap();
+        let old_index_contents = fs::read(&old_index).unwrap();
+        fs::write(page, "revised").unwrap();
+
+        assert!(find(&config, &d, "original", SearchScope::All).is_empty());
+        update_index_in(&config, &d).unwrap();
+        assert!(find(&config, &d, "original", SearchScope::All).is_empty());
+        assert_eq!(paths(&find(&config, &d, "revised", SearchScope::All)), vec!["Page.md"]);
+        assert_eq!(fs::read(old_meta).unwrap(), old_meta_contents);
+        assert_eq!(fs::read(old_index).unwrap(), old_index_contents);
+        assert_eq!(fs::read_to_string(lucene).unwrap(), "lucene");
+        assert_eq!(fs::read_to_string(lucene_meta).unwrap(), "freeplane");
+    }
+
+    #[test]
+    fn leaves_an_active_update_alone_and_retries_after_the_lock_is_released() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (d, config) = (&tmp.path().join("docs"), &tmp.path().join("config/mind-pkm"));
+        write(d, "a.md", "hello");
+        fs::create_dir_all(config).unwrap();
+        let cache = test_cache(config, d);
+        let lock = lock_cache(config, &cache).unwrap().unwrap();
+        update_index_in(config, d).unwrap();
+        assert!(!cache.join(TANTIVY_SUBDIR_NAME).exists());
+        drop(lock);
+        update_index_in(config, d).unwrap();
+        assert_eq!(paths(&find(config, d, "hello", SearchScope::All)), vec!["a.md"]);
     }
 
     #[cfg(unix)]
@@ -603,6 +737,7 @@ mod tests {
         use std::os::unix::fs::symlink;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("docs");
+        let config = tmp.path().join("config/mind-pkm");
         let outside = tmp.path().join("outside");
         let secret = write(&outside, "secret.txt", "confidential");
         let page = write(&root, "page.md", "ordinary");
@@ -610,52 +745,59 @@ mod tests {
         symlink(&secret, root.join("external.txt")).unwrap();
         symlink(outside.join("missing"), root.join("dangling.txt")).unwrap();
         symlink(&root, root.join("cycle")).unwrap();
-        update_index(&root).unwrap();
-        assert_eq!(paths(&find(&root, "ordinary", SearchScope::All)), vec!["page.md"]);
-        assert!(find(&root, "confidential", SearchScope::All).is_empty());
-        assert_eq!(load_meta(&meta_file(&root)).mtimes.len(), 1);
+        symlink(&outside, root.join(INDEX_DIR_NAME)).unwrap();
+        update_index_in(&config, &root).unwrap();
+        let alias = tmp.path().join("alias");
+        symlink(&root, &alias).unwrap();
+        assert_eq!(paths(&find(&config, &alias, "ordinary", SearchScope::All)), vec!["page.md"]);
+        assert!(find(&config, &root, "confidential", SearchScope::All).is_empty());
+        let meta = test_cache(&config, &root).join(META_FILE_NAME);
+        assert_eq!(load_meta(&meta).mtimes.len(), 1);
+        assert_eq!(fs::read_dir(&outside).unwrap().count(), 1);
 
         std::fs::remove_file(&page).unwrap();
         symlink(&secret, &page).unwrap();
         // Even before the next update, the stale result cannot open a link.
-        assert!(find(&root, "ordinary", SearchScope::All).is_empty());
-        update_index(&root).unwrap();
-        assert!(find(&root, "ordinary", SearchScope::All).is_empty());
-        assert!(find(&root, "confidential", SearchScope::All).is_empty());
-        assert!(load_meta(&meta_file(&root)).mtimes.is_empty());
+        assert!(find(&config, &root, "ordinary", SearchScope::All).is_empty());
+        update_index_in(&config, &root).unwrap();
+        assert!(find(&config, &root, "ordinary", SearchScope::All).is_empty());
+        assert!(find(&config, &root, "confidential", SearchScope::All).is_empty());
+        assert!(load_meta(&meta).mtimes.is_empty());
     }
 
     #[cfg(unix)]
     #[test]
     fn refuses_linked_cache_roots_metadata_and_segments_without_touching_targets() {
         use std::os::unix::fs::symlink;
-        for rel in [
-            ".search-index",
-            ".search-index/tantivy",
-            ".search-index/tantivy.meta",
-            ".search-index/tantivy/meta.json",
-            ".search-index/tantivy/.mind-pkm-index",
-        ] {
+        for component in
+            [INDEX_DIR_NAME, "", TANTIVY_SUBDIR_NAME, META_FILE_NAME, "tantivy/meta.json", "tantivy/.mind-pkm-index"]
+        {
             let tmp = tempfile::tempdir().unwrap();
             let root = tmp.path().join("docs");
+            let config = tmp.path().join("config/mind-pkm");
             let outside = tmp.path().join("outside");
             write(&root, "a.md", "hello");
             let keep = write(&outside, "tantivy/keep.txt", "keep");
-            let target = root.join(rel);
+            let cache = test_cache(&config, &root);
+            let target = match component {
+                INDEX_DIR_NAME => config.join(INDEX_DIR_NAME),
+                "" => cache,
+                name => cache.join(name),
+            };
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-            // The cache root and Tantivy directory are directory links. The
-            // remaining entries cover file links and dangling file links.
-            let source = if rel.ends_with(".search-index") {
-                outside.clone()
-            } else if rel.ends_with("/tantivy") {
-                outside.join("tantivy")
-            } else {
-                outside.join("missing.txt")
+            let source = match component {
+                INDEX_DIR_NAME | "" => outside.clone(),
+                TANTIVY_SUBDIR_NAME => outside.join("tantivy"),
+                _ => outside.join("missing.txt"),
             };
             symlink(&source, &target).unwrap();
-            assert!(update_index(&root).is_err(), "{rel}");
-            assert!(search(&root, "hello", SearchSort::Relevance, SearchScope::All, 10).is_err(), "{rel}");
-            assert_eq!(std::fs::read_to_string(&keep).unwrap(), "keep", "{rel}");
+            assert!(update_index_in(&config, &root).is_err(), "{}", target.display());
+            assert!(
+                search_in(&config, &root, "hello", SearchSort::Relevance, SearchScope::All, 10).is_err(),
+                "{}",
+                target.display()
+            );
+            assert_eq!(std::fs::read_to_string(&keep).unwrap(), "keep", "{}", target.display());
             assert!(!outside.join("missing.txt").exists());
             assert!(target.symlink_metadata().unwrap().file_type().is_symlink());
         }
@@ -664,47 +806,48 @@ mod tests {
     #[test]
     fn refuses_to_remove_an_unowned_nonempty_cache() {
         let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        let keep = write(d, ".search-index/tantivy/keep.txt", "keep");
-        write(d, ".search-index/lucene/keep.txt", "lucene");
+        let (d, config) = (&tmp.path().join("docs"), &tmp.path().join("config/mind-pkm"));
         write(d, "a.md", "hello");
-        assert!(update_index(d).unwrap_err().contains("not owned"));
+        let keep = write(&test_cache(config, d), "tantivy/keep.txt", "keep");
+        assert!(update_index_in(config, d).unwrap_err().contains("not owned"));
         assert_eq!(std::fs::read_to_string(keep).unwrap(), "keep");
-        assert_eq!(std::fs::read_to_string(d.join(".search-index/lucene/keep.txt")).unwrap(), "lucene");
     }
 
     #[test]
     fn rebuilds_legacy_indexes_and_discards_previously_indexed_external_content() {
         let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
+        let (d, config) = (&tmp.path().join("docs"), &tmp.path().join("config/mind-pkm"));
         let page = write(d, "a.md", "confidential");
-        update_index(d).unwrap();
+        update_index_in(config, d).unwrap();
+        let cache = test_cache(config, d);
+        let owner = cache.join(TANTIVY_SUBDIR_NAME).join(OWNER_FILE_NAME);
+        let meta = cache.join(META_FILE_NAME);
         // Simulate the old cache format, including a retained preview that a
         // previous version could have collected through a link.
-        std::fs::remove_file(tantivy_dir(d).join(OWNER_FILE_NAME)).unwrap();
-        std::fs::write(meta_file(d), "version=1\n").unwrap();
+        std::fs::remove_file(&owner).unwrap();
+        std::fs::write(&meta, "version=1\n").unwrap();
         std::fs::write(page, "ordinary").unwrap();
-        assert!(find(d, "confidential", SearchScope::All).is_empty());
-        update_index(d).unwrap();
-        assert!(find(d, "confidential", SearchScope::All).is_empty());
-        assert_eq!(paths(&find(d, "ordinary", SearchScope::All)), vec!["a.md"]);
-        assert!(tantivy_dir(d).join(OWNER_FILE_NAME).is_file());
+        assert!(find(config, d, "confidential", SearchScope::All).is_empty());
+        update_index_in(config, d).unwrap();
+        assert!(find(config, d, "confidential", SearchScope::All).is_empty());
+        assert_eq!(paths(&find(config, d, "ordinary", SearchScope::All)), vec!["a.md"]);
+        assert!(owner.is_file());
         // An owned cache with corrupt metadata also recovers normally.
-        std::fs::write(meta_file(d), "broken").unwrap();
-        update_index(d).unwrap();
-        assert_eq!(paths(&find(d, "ordinary", SearchScope::All)), vec!["a.md"]);
+        std::fs::write(meta, "broken").unwrap();
+        update_index_in(config, d).unwrap();
+        assert_eq!(paths(&find(config, d, "ordinary", SearchScope::All)), vec!["a.md"]);
     }
 
     #[test]
     fn sorts_by_modified_time() {
         let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
+        let (d, config) = (&tmp.path().join("docs"), &tmp.path().join("config/mind-pkm"));
         let old = write(d, "old.md", "shared");
         write(d, "new.md", "shared shared shared");
         let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
         std::fs::File::options().write(true).open(&old).unwrap().set_modified(past).unwrap();
-        update_index(d).unwrap();
-        let hits = search(d, "shared", SearchSort::Modified, SearchScope::All, 10).unwrap();
+        update_index_in(config, d).unwrap();
+        let hits = search_in(config, d, "shared", SearchSort::Modified, SearchScope::All, 10).unwrap();
         assert_eq!(hits.iter().map(|h| h.relative_path.as_str()).collect::<Vec<_>>(), vec!["new.md", "old.md"]);
     }
 

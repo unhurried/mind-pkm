@@ -12,7 +12,6 @@ use crate::pkm::commands::DEFAULT_TEMPLATE;
 use iced::{Point, Size};
 use std::path::{Path, PathBuf};
 
-const APP_DIR_NAME: &str = "mind-pkm";
 const LEGACY_APP_DIR_NAME: &str = "freeplane-pkm";
 const SETTINGS_FILE_NAME: &str = "settings.txt";
 const TEMPLATE_FILE_NAME: &str = "template.md";
@@ -37,20 +36,17 @@ const MIN_WINDOW_SIDE: f32 = 200.0;
 /// How many maps `views.txt` remembers, the most recently shown first.
 const MAX_VIEWS: usize = 50;
 
-/// The user's configuration directory; none in tests, so that they never
-/// read or write the real settings.
-fn base_dir() -> Option<PathBuf> {
-    if cfg!(test) { None } else { dirs::config_dir() }
-}
-
+/// The application's per-user settings directory, disabled in unit tests.
 pub fn config_dir() -> Option<PathBuf> {
-    base_dir().map(|d| d.join(APP_DIR_NAME))
+    if cfg!(test) { None } else { paths::user_config_dir() }
 }
 
 /// Reads a settings file, falling back to the former name's directory.
 fn read(file_name: &str) -> Option<Vec<u8>> {
-    let base = base_dir()?;
-    [APP_DIR_NAME, LEGACY_APP_DIR_NAME].iter().find_map(|dir| std::fs::read(base.join(dir).join(file_name)).ok())
+    let dir = config_dir()?;
+    std::fs::read(dir.join(file_name))
+        .or_else(|_| std::fs::read(dir.with_file_name(LEGACY_APP_DIR_NAME).join(file_name)))
+        .ok()
 }
 
 /// Reads a settings file as UTF-8 text.
