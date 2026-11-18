@@ -3,6 +3,11 @@
 
 use std::path::{Component, Path, PathBuf};
 
+/// The per-user directory for Mind PKM's settings and generated data.
+pub(crate) fn user_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("mind-pkm"))
+}
+
 /// Absolute path with `.` and `..` folded away - pure path arithmetic, no file
 /// system access, symlinks are not resolved.
 pub fn normalize(path: &Path) -> PathBuf {
@@ -386,7 +391,7 @@ mod tests {
         assert!(status.success());
         assert!(resolve_inside(&junction.join("new.txt"), &root).is_err());
         assert!(crate::pkm::assets::read_tree(&junction, &root).is_none());
-        assert!(crate::search::update_index(&root).is_ok());
+        assert!(crate::search::update_index_in(&tmp.path().join("config"), &root).is_ok());
         std::fs::remove_dir(&junction).unwrap();
     }
 
