@@ -2925,6 +2925,7 @@ dependencies = [
  "pulldown-cmark",
  "quick-xml 0.42.0",
  "rfd",
+ "sha2",
  "syntect",
  "tantivy",
  "tempfile",
