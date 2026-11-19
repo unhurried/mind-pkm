@@ -609,11 +609,15 @@ Ctrl+/ SHALL switch between the live preview and a source mode that shows the wh
 - **THEN** the clipboard holds the Markdown of exactly the selected text
 
 ### Requirement: Outline
-Ctrl+O SHALL show and hide an outline beside the document listing the headings, indented by level; clicking one SHALL scroll to that heading. Each editor window SHALL show or hide its own outline; a window that opens SHALL show the outline if it was last shown in any editor window and hide it if it was last hidden, remembered across starts.
+Ctrl+O SHALL show and hide an outline beside the document listing only top-level headings, indented by level. Clicking an entry SHALL scroll to that heading. Each editor window SHALL show or hide its own outline. A window that opens SHALL show the outline if it was last shown in any editor window and hide it if it was last hidden, remembered across starts.
 
 #### Scenario: Jumping to a heading
 - **WHEN** the outline is shown and `Journal` is clicked in it
 - **THEN** the document scrolls so that the heading `Journal` is at the top
+
+#### Scenario: Headings inside blocks
+- **WHEN** the outline is shown on a page with a top-level heading and headings inside a list item and a quote
+- **THEN** the outline lists only the top-level heading
 
 #### Scenario: The next window shows the outline
 - **WHEN** Ctrl+O shows the outline in the editor of `Trip.md` and `Plan.md` is opened

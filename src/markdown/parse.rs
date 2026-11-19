@@ -390,6 +390,11 @@ impl Document {
         &self.events[self.blocks[block].events.clone()]
     }
 
+    /// The top-level headings and their indices in `headings`.
+    pub(crate) fn top_level_headings(&self) -> impl Iterator<Item = (usize, &HeadingInfo)> {
+        self.headings.iter().enumerate().filter(|(_, heading)| self.blocks[heading.block].outer.is_empty())
+    }
+
     /// The heading an anchor (`#anchor`, already without `#`) refers to.
     pub fn heading_for_anchor(&self, anchor: &str) -> Option<&HeadingInfo> {
         let decoded = percent_encoding::percent_decode_str(anchor).decode_utf8_lossy();

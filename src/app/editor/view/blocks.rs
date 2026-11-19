@@ -428,7 +428,7 @@ impl Editor {
             }
             BlockKind::Toc => {
                 let mut list = Column::new().spacing(2);
-                for (h, info) in doc.headings.iter().enumerate() {
+                for (h, info) in doc.top_level_headings() {
                     list = list.push(
                         button(text(info.text.clone()).size(ctx.size(0.95)).color(p.link))
                             .padding(iced::Padding {

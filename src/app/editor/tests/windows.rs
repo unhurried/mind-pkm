@@ -276,8 +276,8 @@ fn a_page_that_is_not_utf8_is_reported() {
 /// The headings the outline lists, `+` before a folded one, `-` before an unfolded one.
 fn outline_listed(app: &App, id: window::Id) -> Vec<String> {
     let e = &app.editors[&id];
-    let headings = &e.page.doc().headings;
-    crate::app::editor::outline::entries(headings, &e.outline_toggled)
+    let doc = e.page.doc();
+    crate::app::editor::outline::entries(doc, &e.outline_toggled)
         .into_iter()
         .map(|x| {
             let mark = match x.folded {
@@ -285,9 +285,26 @@ fn outline_listed(app: &App, id: window::Id) -> Vec<String> {
                 Some(true) => "+",
                 Some(false) => "-",
             };
-            format!("{mark}{}", headings[x.index].text)
+            format!("{mark}{}", doc.headings[x.index].text)
         })
         .collect()
+}
+
+#[test]
+fn outline_uses_only_top_level_headings() {
+    let page = "### A\n\n- Item\n\n  # List heading\n\n#### B\n\n> ##### Quote heading\n";
+    let (mut app, _f, _, _) = app_with_page(page);
+    let id = open_with_f1(&mut app);
+    press(&mut app, id, "o", Modifiers::CTRL);
+    assert_eq!(outline_listed(&app, id), ["+A"]);
+    editor(&mut app, id, EditorMsg::OutlineFoldToggled(0));
+    assert_eq!(outline_listed(&app, id), ["-A", "B"]);
+
+    let e = &app.editors[&id];
+    let doc = e.page.doc();
+    let entries = crate::app::editor::outline::entries(doc, &e.outline_toggled);
+    editor(&mut app, id, EditorMsg::HeadingClicked(entries[1].index));
+    assert_eq!(app.editors[&id].page.sel().head, page.find("#### B").unwrap());
 }
 
 #[test]
