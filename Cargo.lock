@@ -2902,7 +2902,7 @@ dependencies = [
 
 [[package]]
 name = "mind-pkm"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "ammonia",
  "arboard",
