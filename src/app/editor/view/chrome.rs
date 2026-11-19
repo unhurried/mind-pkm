@@ -177,10 +177,10 @@ impl Editor {
 
     pub(super) fn outline_view<'a>(&'a self, ctx: &Ctx<'a>) -> Element<'a, EditorMsg> {
         let p = ctx.p;
-        let headings = &self.page.doc().headings;
+        let doc = self.page.doc();
         let mut list = Column::new().spacing(2).padding(10);
-        for entry in outline::entries(headings, &self.outline_toggled) {
-            let h = &headings[entry.index];
+        for entry in outline::entries(doc, &self.outline_toggled) {
+            let h = &doc.headings[entry.index];
             let arrow: Element<EditorMsg> = match entry.folded {
                 Some(folded) => button(text(if folded { "▸" } else { "▾" }).size(11).color(p.muted))
                     .padding([2, 2])

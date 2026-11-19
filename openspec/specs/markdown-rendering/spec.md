@@ -77,11 +77,11 @@ Each column of a table SHALL be as wide as its widest cell on one line when that
 - **THEN** the table keeps its column widths, a horizontal scroll bar is shown under it, and scrolling it sideways shows the columns beyond the page's edge while the rest of the page does not move
 
 ### Requirement: Front matter and table of contents
-YAML front matter (`---` ... `---` at the start of the file) SHALL be shown as a code-styled box. A paragraph consisting of `[toc]` (any case) SHALL be shown as a table of contents listing the document's headings, each clickable to scroll to it.
+YAML front matter (`---` ... `---` at the start of the file) SHALL be shown as a code-styled box. A paragraph consisting of `[toc]` (any case) SHALL be shown as a table of contents listing only the document's top-level headings, each clickable to scroll to it.
 
 #### Scenario: Table of contents
-- **WHEN** a page contains `[toc]` and the headings `A` and `B`
-- **THEN** a list of `A` and `B` is shown where `[toc]` is
+- **WHEN** a page contains `[toc]`, the top-level headings `A` and `B`, and headings inside a list item and a quote
+- **THEN** a list containing only `A` and `B` is shown where `[toc]` is
 
 ### Requirement: Span elements
 The editor SHALL render italic (`*a*`, `_a_`), bold (`**a**`, `__a__`), strikethrough (`~~a~~`), inline code and underline (`<u>a</u>`) in their styles; subscript (`~a~`) and superscript (`^a^`) as smaller text; highlight (`==a==`) with a highlight background; emoji shortcodes (`:smile:`, GitHub's names) as the emoji; footnote references as superscript numbers linked to their definition; and line breaks inside a paragraph (a single newline included) as line breaks.
