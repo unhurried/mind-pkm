@@ -7,7 +7,7 @@
 //! window keeps the headings toggled from that default by their anchors, which
 //! stay the same while other parts of the page are edited.
 
-use crate::markdown::HeadingInfo;
+use crate::markdown::{Document, HeadingInfo};
 use std::collections::HashSet;
 
 /// Headings of this level and below are folded by default.
@@ -23,16 +23,17 @@ pub(super) struct Entry {
 }
 
 /// The entries listed, in order.
-pub(super) fn entries(headings: &[HeadingInfo], toggled: &HashSet<String>) -> Vec<Entry> {
+pub(super) fn entries(doc: &Document, toggled: &HashSet<String>) -> Vec<Entry> {
     let mut out = Vec::new();
+    let mut headings = doc.top_level_headings().peekable();
     // The level of the folded heading whose entries are being skipped.
     let mut skipping: Option<u8> = None;
-    for (index, h) in headings.iter().enumerate() {
+    while let Some((index, h)) = headings.next() {
         match skipping {
             Some(level) if h.level > level => continue,
             _ => skipping = None,
         }
-        let has_entries = headings.get(index + 1).is_some_and(|next| next.level > h.level);
+        let has_entries = headings.peek().is_some_and(|(_, next)| next.level > h.level);
         let folded = has_entries.then(|| (h.level >= FOLDED_FROM_LEVEL) != toggled.contains(&h.anchor));
         if folded == Some(true) {
             skipping = Some(h.level);
@@ -52,12 +53,11 @@ pub(super) fn toggle(toggled: &mut HashSet<String>, heading: &HeadingInfo) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::markdown::Document;
 
     /// The listed headings' texts, with `+` before a folded one and `-` before an unfolded one.
     fn listed(page: &str, toggled: &HashSet<String>) -> Vec<String> {
         let doc = Document::parse(page);
-        entries(&doc.headings, toggled)
+        entries(&doc, toggled)
             .into_iter()
             .map(|e| {
                 let mark = match e.folded {
