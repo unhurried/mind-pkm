@@ -138,7 +138,7 @@ impl MindMap {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let text = String::from_utf8_lossy(&bytes);
         let mut map = Self::parse(&text)?;
-        map.path = Some(path.to_path_buf());
+        map.set_path(path);
         Ok(map)
     }
 
@@ -257,12 +257,16 @@ impl MindMap {
         let tmp = path.with_extension("mm.tmp");
         std::fs::write(&tmp, self.to_xml()).map_err(|e| format!("{}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self.path = Some(path.to_path_buf());
+        self.set_path(path);
         Ok(())
     }
 
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
+    }
+
+    pub(crate) fn set_path(&mut self, path: &Path) {
+        self.path = Some(path.to_path_buf());
     }
 
     /// The directory relative links are resolved against.

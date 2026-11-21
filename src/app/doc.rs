@@ -167,7 +167,17 @@ impl Doc {
 
     /// Saves the map to `path`; it has no unsaved changes then.
     pub(super) fn save(&mut self, path: &Path) -> Result<(), String> {
+        let path_changed = self.map.path() != Some(path);
         self.map.save(path)?;
+        if path_changed {
+            // A background refresh can resolve links in these maps before
+            // Undo or Redo restores them.
+            let undo_maps = self.undo.iter_mut().map(|checkpoint| &mut checkpoint.state.map);
+            let redo_maps = self.redo.iter_mut().map(|state| &mut state.map);
+            for map in undo_maps.chain(redo_maps) {
+                map.set_path(path);
+            }
+        }
         self.dirty = false;
         Ok(())
     }
