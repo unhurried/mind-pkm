@@ -267,6 +267,51 @@ fn saving_a_new_map_from_the_unsaved_changes_question_goes_on_once_saved() {
     assert_eq!(root_texts(&app), vec!["config", "ToDo"]);
 }
 
+#[test]
+fn undo_after_save_as_saves_the_copy_and_preserves_the_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = dir.path().join("Original.mm");
+    let copy = dir.path().join("Copy.mm");
+    let mut original_map = MindMap::new("root");
+    original_map.save(&original).unwrap();
+    let original_xml = std::fs::read_to_string(&original).unwrap();
+    let mut app = app_with(original_map);
+
+    press(&mut app, Named::Tab);
+    type_node_text(&mut app, "child");
+    press(&mut app, Named::Enter);
+    let first_edit = map(&app).to_xml();
+    press(&mut app, Named::F7);
+    let second_edit = map(&app).to_xml();
+    assert_ne!(first_edit, second_edit);
+    send(&mut app, MapMsg::FileChosen(FileAction::SaveAs(None), Some(copy.clone())));
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), second_edit);
+
+    send(&mut app, MapMsg::Command(Command::Undo));
+    send(&mut app, MapMsg::Command(Command::Save));
+
+    assert_eq!(std::fs::read_to_string(&original).unwrap(), original_xml);
+    assert_eq!(std::fs::read_to_string(&copy).unwrap(), first_edit);
+    assert_eq!(map(&app).path(), Some(copy.as_path()));
+}
+
+#[test]
+fn redo_after_the_first_save_uses_the_chosen_file() {
+    let mut app = edited_app();
+    let edited_xml = map(&app).to_xml();
+    send(&mut app, MapMsg::Command(Command::Undo));
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Plan.mm");
+    send(&mut app, MapMsg::FileChosen(FileAction::SaveAs(None), Some(path.clone())));
+    assert_ne!(std::fs::read_to_string(&path).unwrap(), edited_xml);
+
+    send(&mut app, MapMsg::Command(Command::Redo));
+    send(&mut app, MapMsg::Command(Command::Save));
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), edited_xml);
+    assert_eq!(map(&app).path(), Some(path.as_path()));
+}
+
 /// A Markdown file `Notes.md` in a temporary directory.
 fn markdown_file() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
