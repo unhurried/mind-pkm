@@ -482,6 +482,9 @@ impl Editor {
                     Some((live, runs)) => {
                         let editor = self
                             .live_widget(live, runs, base(r), ctx, Vec::new())
+                            // The cell frame handles a press that activated
+                            // this cell and any resulting cell range drag.
+                            .held(false)
                             .key_binding(move |k| keys::binding(k, bind));
                         mouse_area(editor)
                             .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
@@ -489,7 +492,7 @@ impl Editor {
                             .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)))
                             .into()
                     }
-                    None => inline_text(inlines, base(r), ctx, None, usize::MAX),
+                    None => inline_text(inlines, base(r), ctx, None, None),
                 };
                 let align_x = match align {
                     table::Align::Center => Alignment::Center,

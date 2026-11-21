@@ -48,7 +48,9 @@ fn nodes_view<'a>(nodes: &[Node], ctx: &Ctx<'a>, width: f32, block: usize) -> El
                 let scale = HEADING_SCALE[usize::from((*level).clamp(1, 6)) - 1];
                 let level = (*level).clamp(1, 6);
                 let b = TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: heading::text_color(level, p) };
-                heading::framed(level, b.size, width, ctx.zoom, p, |w| inline_text(inlines, b, ctx, Some(w), block))
+                heading::framed(level, b.size, width, ctx.zoom, p, |w| {
+                    inline_text(inlines, b, ctx, Some(w), Some(block))
+                })
             }
             Node::Code { lang, text: code } => code_text_view(code, lang.as_deref(), None, ctx, width, block),
             Node::Math(tex) => math_view(tex, true, ctx),
@@ -318,7 +320,7 @@ fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize, width: f32) -> Ele
                 _ => Alignment::Start,
             };
             contents = contents.push(
-                container(inline_text(&inlines, base(r), ctx, None, block))
+                container(inline_text(&inlines, base(r), ctx, None, Some(block)))
                     .width(w)
                     .padding(CELL_PADDING)
                     .align_x(align_x),
@@ -387,7 +389,9 @@ impl Editor {
                 let inlines = content::inlines(doc, doc.block_events(i));
                 let base =
                     TextBase { size: ctx.size(scale), font: bold(APP_FONT), color: heading::text_color(level, p) };
-                heading::framed(level, base.size, width, ctx.zoom, p, |w| inline_text(&inlines, base, ctx, Some(w), i))
+                heading::framed(level, base.size, width, ctx.zoom, p, |w| {
+                    inline_text(&inlines, base, ctx, Some(w), Some(i))
+                })
             }
             BlockKind::ThematicBreak => container(rule::horizontal(2).style(move |_| rule::Style {
                 color: p.border,

@@ -7,7 +7,7 @@ use super::rich::rich;
 use super::table_widths::Piece;
 use super::theme::{LINE_HEIGHT, bold, code_font, italic};
 use super::{Ctx, SpanLink, TextBase};
-use crate::app::editor::{EditorMsg, RightClick};
+use crate::app::editor::{EditorMsg, RightClick, TableMsg};
 use crate::app::press_point::press_in;
 use crate::markdown::content::{Inline, Link, SourceMap, Style};
 use iced::advanced::text::Wrapping;
@@ -27,7 +27,7 @@ pub(super) fn paragraph_view<'a>(
     let p = ctx.p;
     let is_text = |i: &Inline| matches!(i, Inline::Text { .. } | Inline::Break { .. } | Inline::FootnoteRef { .. });
     if inlines.iter().all(is_text) {
-        return inline_text(inlines, base, ctx, Some(width), block);
+        return inline_text(inlines, base, ctx, Some(width), Some(block));
     }
     // Lines (split at breaks) of flowing pieces.
     let mut col = Column::new().spacing(4);
@@ -48,7 +48,7 @@ pub(super) fn paragraph_view<'a>(
         let flush = |texts: &mut Vec<Inline>, flow: Row<'a, EditorMsg>| -> Row<'a, EditorMsg> {
             let mut flow = flow;
             for word in split_words(texts) {
-                flow = flow.push(inline_text(&word, base, ctx, None, block));
+                flow = flow.push(inline_text(&word, base, ctx, None, Some(block)));
             }
             texts.clear();
             flow
@@ -121,14 +121,14 @@ fn map_slice(map: &SourceMap, range: std::ops::Range<usize>) -> SourceMap {
     map.slice(range)
 }
 
-/// The spans of text runs (no images), as one text per line; each reports
-/// the pointer for mapping clicks.
+/// The spans of text runs (no images), as one text per line. With a page
+/// block index, each reports the pointer for mapping clicks to page offsets.
 pub(super) fn inline_text<'a>(
     inlines: &[Inline],
     base: TextBase,
     ctx: &Ctx<'a>,
     width: Option<f32>,
-    block: usize,
+    block: Option<usize>,
 ) -> Element<'a, EditorMsg> {
     let mut lines: Vec<Element<'a, EditorMsg>> = Vec::new();
     for line in inlines.split(|i| matches!(i, Inline::Break { .. })) {
@@ -146,7 +146,7 @@ fn text_line<'a>(
     base: TextBase,
     ctx: &Ctx<'a>,
     width: Option<f32>,
-    block: usize,
+    block: Option<usize>,
 ) -> Element<'a, EditorMsg> {
     let p = ctx.p;
     let mut spans: Vec<Span<'static, SpanLink, Font>> = Vec::new();
@@ -209,11 +209,19 @@ fn text_line<'a>(
         .size(base.size)
         .font(base.font)
         .line_height(LINE_HEIGHT)
-        .wrapping(Wrapping::WordOrGlyph)
-        .on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at));
+        .wrapping(Wrapping::WordOrGlyph);
     if let Some(w) = width {
         rich = rich.width(w);
     }
+    let Some(block) = block else {
+        // The offsets in this text are local to the cell. Its frame takes
+        // ordinary presses, and following a link needs only the destination.
+        if ctx.editor.modifiers.control() || ctx.editor.modifiers.command() {
+            rich = rich.on_link_click(|l: SpanLink| EditorMsg::Table(TableMsg::Link(l.dest)));
+        }
+        return rich.into();
+    };
+    let rich = rich.on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at));
     let info = Arc::new(HitInfo { block, runs: hits, width: width.unwrap_or(f32::INFINITY) });
     // Where an item dragged from the assets pane would go, in this text.
     let mark = ctx.editor.drop_mark_in(&info);

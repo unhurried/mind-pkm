@@ -111,6 +111,11 @@ Ctrl+L SHALL select the cursor's row and Ctrl+E its cell. Dragging over cells, o
 - **WHEN** a 2×2 range is selected and Delete is pressed
 - **THEN** the four cells are empty and the table keeps its size
 
+#### Scenario: Clicking another cell
+- **WHEN** a cell has the caret and another cell is clicked without a selection modifier
+- **THEN** the caret moves into the clicked cell and any selection is cleared
+- **AND** slight pointer movement within the clicked cell during the press leaves the selection clear
+
 ### Requirement: Copying and pasting cells
 Copying a cell range, row or column (also from the right-click menu) SHALL put it on the clipboard as tab-separated text and as an HTML table, and Copy as Markdown as a Markdown table. Pasting tab-separated text or an HTML table into a table SHALL overwrite the cells from the cursor's cell to the right and down, adding rows and columns as needed. Pasting either outside a table SHALL insert a new table.
 
