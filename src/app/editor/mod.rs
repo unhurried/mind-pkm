@@ -531,7 +531,7 @@ impl Editor {
                 self.page.place(Sel::caret(offset));
                 self.focus()
             }
-            EditorMsg::Link(dest, at) => self.link_clicked(&dest, at, effects),
+            EditorMsg::Link(dest, at) => self.link_clicked(&dest, Some(at), effects),
             EditorMsg::TaskToggled(block) => {
                 let start = self.page.doc().blocks.get(block).map(|b| b.range.start);
                 if let Some(e) = start.and_then(|s| format::toggle_task(self.page.text(), s)) {

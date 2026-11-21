@@ -138,7 +138,7 @@ impl Editor {
         true
     }
 
-    pub(super) fn link_clicked(&mut self, dest: &str, at: usize, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
+    pub(super) fn link_clicked(&mut self, dest: &str, at: Option<usize>, effects: &mut Vec<Effect>) -> Task<EditorMsg> {
         // A footnote reference goes to its definition.
         if let Some(label) = dest.strip_prefix('^') {
             let block = self
@@ -153,8 +153,11 @@ impl Editor {
             });
         }
         if !(self.modifiers.control() || self.modifiers.command()) {
-            self.page.place(Sel::caret(at));
-            return self.focus();
+            if let Some(at) = at {
+                self.page.place(Sel::caret(at));
+                return self.focus();
+            }
+            return Task::none();
         }
         if let Some(anchor) = dest.strip_prefix('#') {
             if let Some(h) = self.page.doc().heading_for_anchor(anchor) {

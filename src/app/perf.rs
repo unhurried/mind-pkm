@@ -164,10 +164,14 @@ fn long_page(sections: usize) -> String {
 
 impl Bench {
     fn new(fanout: usize, sections: usize) -> Bench {
+        Self::with_page(fanout, &long_page(sections))
+    }
+
+    fn with_page(fanout: usize, page: &str) -> Bench {
         let mut f = Fixture::new();
         let nodes = large_map(&mut f, fanout);
         let root = f.map.root();
-        f.write_page("Bench", &long_page(sections));
+        f.write_page("Bench", page);
         let page = f.add_page_node(root, "Bench");
         let mut app = App::new(remove_in_temp);
         let _ = app.set_doc(f.map.clone(), None);
@@ -961,6 +965,51 @@ fn the_fold_buttons_near_the_view_take_presses() {
 fn page_container(b: &mut Bench, shown: &Shown, name: &str) -> Option<Rectangle> {
     let id = b.app.editors[&b.editor].id(name);
     shown.containers.iter().find(|(i, _)| *i == id).map(|(_, bounds)| *bounds)
+}
+
+#[test]
+fn clicking_between_table_cells_keeps_the_caret_in_the_table() {
+    let mut b = Bench::with_page(
+        1,
+        "Paragraph above the table.\n\n| Alpha | Bravo |\n| --- | --- |\n| Delta | Echo |\n| Golf | Hotel |\n\nParagraph below.",
+    );
+    let editor = b.editor;
+    let table = block_of(&b, "| Alpha");
+    let shown = b.shown(editor);
+    let bounds = page_container(&mut b, &shown, &format!("block-{table}")).unwrap();
+    let row_height = bounds.height / 3.0;
+    let at = |row: f32| Point::new(bounds.x + 14.0, bounds.y + (row + 0.5) * row_height);
+    let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
+    let release = Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left));
+    let first = at(1.0);
+    b.deliver(editor, moved(first), first);
+    b.deliver(editor, press.clone(), first);
+    b.deliver(editor, release.clone(), first);
+
+    let second = at(2.0);
+    b.deliver(editor, moved(second), second);
+    b.deliver(editor, press.clone(), second);
+    let near = second + Vector::new(2.0, 1.0);
+    b.deliver(editor, moved(near), near);
+    b.deliver(editor, release.clone(), near);
+    let below = Point::new(bounds.x + 14.0, bounds.y + bounds.height + 20.0);
+    b.deliver(editor, moved(below), below);
+
+    let page = &b.app.editors[&editor].page;
+    assert_eq!(page.selected_blocks(), None);
+    assert_eq!(page.active_block(), Some(table));
+    let state = page.active().unwrap().table().unwrap();
+    assert_eq!(state.cell, (2, 0));
+    assert!(state.cell_sel.is_empty());
+    assert_eq!(state.range, None);
+
+    // Holding a new press and moving into another cell still selects cells.
+    b.deliver(editor, moved(first), first);
+    b.deliver(editor, press, first);
+    b.deliver(editor, moved(second), second);
+    b.deliver(editor, release, second);
+    let state = b.app.editors[&editor].page.active().unwrap().table().unwrap();
+    assert_eq!(state.range, Some(crate::markdown::table::CellRange::new((1, 0), (2, 0))));
 }
 
 /// Going into a table moves neither the table nor the block after it: its

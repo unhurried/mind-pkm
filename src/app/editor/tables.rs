@@ -16,6 +16,8 @@ pub enum TableMsg {
     Released,
     /// A right click on a cell: its menu.
     Menu(usize, usize),
+    /// A link followed from another cell of the table being edited.
+    Link(String),
     MenuItem(TableMenuItem),
     /// The toolbar's size fields.
     Rows(String),
@@ -325,7 +327,7 @@ impl Editor {
             }
             return self.focus();
         }
-        self.page.go_to_cell(cell);
+        self.page.go_to_cell_at(cell, true);
         self.table_ui.drag = true;
         self.focus()
     }
@@ -364,6 +366,7 @@ impl Editor {
                 self.table_ui.drag = false;
                 Task::none()
             }
+            TableMsg::Link(dest) => self.link_clicked(&dest, None, effects),
             TableMsg::Menu(r, c) => {
                 let inside = self.cells().is_some_and(|range| range.contains((r, c)));
                 if !inside {
