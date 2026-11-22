@@ -923,7 +923,8 @@ fn enter_block(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Op
 fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) -> Edited {
     let first = line_range(text, region.start);
     let Some(m) = line_marker(&text[first.clone()]) else { return Edited::new(splice(text, c..c, "\n"), c + 1) };
-    let content = first.start + m.end;
+    let content = (first.start + m.end).min(region.end);
+    let c = c.max(content);
     let empty = text[content..region.end].trim().is_empty();
     if empty {
         if m.indent > 0 {
@@ -950,8 +951,11 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) 
     };
     let indent = " ".repeat(m.indent);
     let separator = if item.loose { "\n\n" } else { "\n" };
-    // Text after the cursor moves into the new item, without leading spaces.
-    let rest_start = c + (text[c..region.end].len() - text[c..region.end].trim_start_matches(' ').len());
+    // Carry a continuation onto the new item's first line when the split is
+    // at the end of a line. A lazy continuation cannot follow an empty marker.
+    let rest = text[c..region.end].trim_start_matches(' ');
+    let rest = rest.strip_prefix('\n').map_or(rest, |line| line.trim_start_matches([' ', '\t']));
+    let rest_start = region.end - rest.len();
     let task = match item.task {
         Some(true) if rest_start < region.end => "[x] ",
         Some(_) => "[ ] ",
@@ -968,9 +972,13 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) 
             edited.replace_range(check..check + 1, " ");
         }
         let edited = Edited::new(edited, cursor);
-        if item.number.is_some() { renumber_split_list(edited) } else { edited }
+        if matches!(m.kind, MarkerKind::Ordered(..)) && item.number.is_some() {
+            renumber_split_list(edited)
+        } else {
+            edited
+        }
     };
-    let end = match below_item_text(text, region.end, m.indent) {
+    let end = match below_item_text(text, region.end, item.subtree_end, m.indent) {
         _ if rest_start < region.end => rest_start,
         // Nested items stay nested, in the new item: an empty item can't have
         // a blank line before its first block, so the blank lines go.
@@ -1023,10 +1031,13 @@ fn renumber_split_list(edited: Edited) -> Edited {
 /// The first block an item has below its text ending at `end` (its marker
 /// indented by `indent`): where the blank lines before it start, and whether
 /// it is a nested list item.
-fn below_item_text(text: &str, end: usize, indent: usize) -> Option<(usize, bool)> {
+fn below_item_text(text: &str, end: usize, subtree_end: usize, indent: usize) -> Option<(usize, bool)> {
     let mut pos = end;
     while text[pos..].starts_with('\n') {
         let next = line_range(text, pos + 1);
+        if next.start >= subtree_end {
+            break;
+        }
         let line = &text[next.clone()];
         if !line.trim().is_empty() {
             let nested = line.len() - line.trim_start().len() > indent;

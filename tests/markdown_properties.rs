@@ -1,12 +1,13 @@
 //! Property tests of the page editor's Markdown handling for any page made of
 //! common Markdown lines.
 
-use mind_pkm::markdown::edit::{self, Sel};
+use mind_pkm::markdown::edit::{self, MarkerKind, Sel};
 use mind_pkm::markdown::live;
-use mind_pkm::markdown::parse::ContainerKind;
+use mind_pkm::markdown::parse::{ContainerKind, List};
 use mind_pkm::markdown::table::{self, Align, Table};
 use mind_pkm::markdown::{BlockKind, Document};
 use proptest::prelude::*;
+use std::ops::Range;
 
 /// Lines that make up pages: every kind of block, nesting, and stray syntax.
 const LINES: &[&str] = &[
@@ -60,16 +61,66 @@ fn page() -> impl Strategy<Value = String> {
     prop::collection::vec(prop::sample::select(LINES), 0..25).prop_map(|lines| lines.join("\n"))
 }
 
-/// Enter (or Shift+Enter) at `c` in the block `region` of `text` leaves the
-/// page before and after the block as it was. The one exception is specified:
-/// Enter in a list item puts the new item among the blocks the item has below
-/// its text (above its nested items, after its other blocks), and the blank
-/// lines between them go where an empty item allows. There, what is below the
-/// text stays line by line, in order, with at most the new item added.
+/// The ordered list and containers of an item whose marker is at `start`.
+fn ordered_list_at(doc: &Document, start: usize) -> Option<(&List, &[usize])> {
+    let block = doc.blocks.iter().find(|b| b.range.start == start)?;
+    let BlockKind::ListItem(item) = &block.kind else { return None };
+    item.number?;
+    let marker = edit::line_marker(&doc.text[edit::line_range(&doc.text, start)])?;
+    if !matches!(marker.kind, MarkerKind::Ordered(..)) {
+        return None;
+    }
+    let list = doc.lists.iter().rev().find(|l| l.depth == item.depth && l.range.contains(&start))?;
+    Some((list, &block.outer))
+}
+
+/// Compares item source independently of its number. Only the ordered markers
+/// in the affected list and their corresponding continuation indent can change.
+fn with_normalized_ordinals(doc: &Document, list: &List, outer: &[usize], range: Range<usize>) -> String {
+    let mut replacements = Vec::new();
+    for block in &doc.blocks {
+        let BlockKind::ListItem(item) = &block.kind else { continue };
+        if item.depth != list.depth
+            || item.number.is_none()
+            || block.outer != outer
+            || !list.range.contains(&block.range.start)
+        {
+            continue;
+        }
+        let first = edit::line_range(&doc.text, block.range.start);
+        let marker = edit::line_marker(&doc.text[first.clone()]).unwrap();
+        let start = first.start + marker.indent;
+        let width = doc.text[start..first.end].bytes().take_while(u8::is_ascii_digit).count();
+        replacements.push((start..start + width, "0"));
+        let mut at = (first.end + 1).min(doc.text.len());
+        for line in doc.text[at..item.subtree_end.max(at)].split_inclusive('\n') {
+            let indent = line.bytes().take(width.saturating_sub(1)).take_while(|&b| b == b' ').count();
+            if indent > 0 {
+                replacements.push((at..at + indent, ""));
+            }
+            at += line.len();
+        }
+    }
+    let mut out = String::new();
+    let mut at = range.start;
+    for (replace, with) in replacements {
+        if range.start <= replace.start && replace.end <= range.end {
+            out.push_str(&doc.text[at..replace.start]);
+            out.push_str(with);
+            at = replace.end;
+        }
+    }
+    out.push_str(&doc.text[at..range.end]);
+    out
+}
+
+/// Enter leaves the text around the block intact. List continuation can move
+/// blank lines, insert the new item among subordinate blocks, and renumber
+/// siblings in the same ordered list.
 fn enter_changes_only_the_block(
     text: &str,
     doc: &Document,
-    region: std::ops::Range<usize>,
+    region: Range<usize>,
     c: usize,
     shift: bool,
 ) -> Result<(), TestCaseError> {
@@ -79,19 +130,44 @@ fn enter_changes_only_the_block(
         edit::enter(text, doc, region.clone(), Sel::caret(c))
     };
     if let Some(e) = result {
-        prop_assert_eq!(&e.text[..region.start], &text[..region.start], "before the block of {:?}", text);
         let list_item = doc.blocks.iter().any(|b| b.range == region && matches!(b.kind, BlockKind::ListItem(_)));
         if list_item && !shift {
+            let ordered = ordered_list_at(doc, region.start);
+            let (before, below, output) = if let Some((list, outer)) = ordered
+                && edit::content_start(text, region.start) < region.end
+                && e.pending.is_none()
+            {
+                let edited = Document::parse(&e.text);
+                if let Some((new_list, new_outer)) = ordered_list_at(&edited, list.range.start) {
+                    prop_assert!(
+                        e.text.starts_with(&text[..list.range.start]),
+                        "before the ordered list of {:?}",
+                        text
+                    );
+                    prop_assert!(e.text.ends_with(&text[list.range.end..]), "after the ordered list of {:?}", text);
+                    (
+                        with_normalized_ordinals(doc, list, outer, 0..region.start),
+                        with_normalized_ordinals(doc, list, outer, region.end..text.len()),
+                        with_normalized_ordinals(&edited, new_list, new_outer, 0..e.text.len()),
+                    )
+                } else {
+                    (text[..region.start].into(), text[region.end..].into(), e.text.clone())
+                }
+            } else {
+                (text[..region.start].into(), text[region.end..].into(), e.text.clone())
+            };
+            prop_assert!(output.starts_with(&before), "before the block of {:?}", text);
             let lines =
                 |t: &str| t.lines().map(|l| l.trim_end().to_string()).filter(|l| !l.is_empty()).collect::<Vec<_>>();
-            let below = lines(&text[region.end..]);
-            let got = lines(&e.text[region.start..]);
+            let below = lines(&below);
+            let got = lines(&output[before.len()..]);
             let mut rest = got.iter();
             for line in &below {
                 prop_assert!(rest.any(|l| l == line), "below the item {:?} lost {:?}: {:?}", text, line, e.text);
             }
             prop_assert!(got.len() <= lines(&text[region.start..]).len() + 1, "{:?} -> {:?}", text, e.text);
         } else {
+            prop_assert!(e.text.starts_with(&text[..region.start]), "before the block of {:?}", text);
             let tail = text.len() - region.end;
             prop_assert_eq!(&e.text[e.text.len() - tail..], &text[region.end..], "after the block of {:?}", text);
         }
@@ -291,4 +367,50 @@ fn enter_at_the_end_of_an_item_with_a_nested_item_below_a_blank_line() {
     let doc = Document::parse(text);
     let region = doc.blocks[0].range.clone();
     enter_changes_only_the_block(text, &doc, region.clone(), region.end, false).unwrap();
+}
+
+#[test]
+fn enter_before_an_ordered_marker_splits_before_the_text_and_renumbers() {
+    let text = "# Heading\n1. one\n1. one";
+    let doc = Document::parse(text);
+    let region = doc.blocks[1].range.clone();
+    enter_changes_only_the_block(text, &doc, region.clone(), region.start, false).unwrap();
+    let at = region.start;
+    let edited = edit::enter(text, &doc, region, Sel::caret(at)).unwrap();
+    assert_eq!(edited.text, "# Heading\n1. \n2. one\n3. one");
+    assert_eq!(edited.sel.head, edited.text.find("2. one").unwrap() + 3);
+}
+
+#[test]
+fn splitting_later_in_an_ordered_list_keeps_text_above_and_below() {
+    let text = "Before\n\n4. first\n4. second\n4. third\n4. fourth\n\nAfter";
+    let doc = Document::parse(text);
+    let region = doc.blocks[3].range.clone();
+    let at = text.find("third").unwrap();
+    enter_changes_only_the_block(text, &doc, region.clone(), at, false).unwrap();
+    let edited = edit::enter(text, &doc, region, Sel::caret(at)).unwrap();
+    assert_eq!(edited.text, "Before\n\n4. first\n5. second\n6. \n7. third\n8. fourth\n\nAfter");
+}
+
+#[test]
+fn splitting_before_a_lazy_continuation_keeps_it_in_the_ordered_list() {
+    let text = "1. one\nfn main() {}\n2. two";
+    let doc = Document::parse(text);
+    let region = doc.blocks[0].range.clone();
+    let at = text.find('\n').unwrap();
+    enter_changes_only_the_block(text, &doc, region.clone(), at, false).unwrap();
+    let edited = edit::enter(text, &doc, region, Sel::caret(at)).unwrap();
+    assert_eq!(edited.text, "1. one\n2. fn main() {}\n3. two");
+    assert_eq!(edited.sel.head, edited.text.find("fn main").unwrap());
+}
+
+#[test]
+fn continuing_an_ordered_list_preserves_the_gap_before_a_separate_list() {
+    let text = "Before\n1. one\n\n  - separate\n";
+    let doc = Document::parse(text);
+    let region = doc.blocks[1].range.clone();
+    enter_changes_only_the_block(text, &doc, region.clone(), region.end, false).unwrap();
+    let at = region.end;
+    let edited = edit::enter(text, &doc, region, Sel::caret(at)).unwrap();
+    assert_eq!(edited.text, "Before\n1. one\n2. \n\n  - separate\n");
 }
