@@ -462,7 +462,14 @@ pub fn gap_pending(text: &str, doc: &Document, at: usize, depth: Option<usize>) 
     }
     let Some(&innermost) = around.last() else { return Pending::gap(text, at) };
     let inner = Inner::within(text, doc, &around, innermost);
-    let p = Pending::gap(&inner.text, inner.to_inner(at));
+    let mut p = Pending::gap(&inner.text, inner.to_inner(at));
+    if p.at == 0
+        && matches!(doc.containers[innermost].kind, ContainerKind::Item { .. })
+        && inner.text.trim_start_matches([' ', '\t']).starts_with('\n')
+    {
+        // The item's first line is outside Inner. Separate the new paragraph from it.
+        p.prefix.push('\n');
+    }
     // The text stays as it is: a prefix the line it goes on lacks comes with it.
     let (_, map) = inner.put_back(text, &inner.text, None);
     let at = map(p.at);
@@ -764,16 +771,66 @@ pub fn content_start(text: &str, block_start: usize) -> usize {
     }
 }
 
+/// The editable empty paragraphs before a heading, from top to bottom.
+/// A pair of blank source lines leaves room for a paragraph between blocks.
+pub fn heading_blanks(doc: &Document, index: usize) -> Vec<usize> {
+    let block = &doc.blocks[index];
+    if !matches!(block.kind, BlockKind::Heading(_)) {
+        return Vec::new();
+    }
+
+    let text = &doc.text;
+    let after_previous = index.checked_sub(1).map_or(0, |i| doc.blocks[i].range.end);
+    let container_start = block.outer.last().map_or(0, |&i| doc.containers[i].range.start);
+    let lower_bound = after_previous.max(container_start);
+    let kinds = block.outer.iter().map(|&i| doc.containers[i].kind);
+    let mut end = line_range(text, block.range.start).start;
+    let mut second = false;
+    let mut blanks = Vec::new();
+    while end > lower_bound {
+        let line = line_range(text, end - 1);
+        let source = &text[line.clone()];
+        let prefix = prefix_len(source, kinds.clone());
+        if line.start < lower_bound || !source[prefix..].trim_matches([' ', '\t']).is_empty() {
+            break;
+        }
+        if second {
+            blanks.push(line.start + prefix);
+        }
+        second = !second;
+        end = line.start;
+    }
+    blanks.reverse();
+    blanks
+}
+
 /// Enter at the cursor of the active `region`. None when the text editor's
 /// own line break is wanted (tables are edited elsewhere).
 pub fn enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Option<Edited> {
+    if sel.is_empty() && sel.head < region.end {
+        let line = line_range(text, region.start);
+        let source = &text[line.clone()];
+        let marker = line_marker(source).filter(|m| matches!(m.kind, MarkerKind::Heading(_))).map_or(0, |m| m.end);
+        let content = line.end - source[marker..].trim_start_matches([' ', '\t']).len();
+        if sel.head <= content
+            && let Some(index) = doc.block_at(region.start)
+            && matches!(doc.blocks[index].kind, BlockKind::Heading(_))
+            && !doc.block_events(index).is_empty()
+        {
+            return Some(Edited::new(splice(text, line.start..line.start, "\n\n"), content + 2));
+        }
+    }
+    enter_block(text, doc, region, sel)
+}
+
+fn enter_block(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Option<Edited> {
     if !sel.is_empty() {
         // Replace the selection, then break there.
         let r = sel.range();
         let cut = splice(text, r.clone(), "");
         let region = region.start..region.end - (r.end.min(region.end) - r.start.max(region.start).min(region.end));
         let cut_doc = Document::parse(&cut);
-        return enter(&cut, &cut_doc, region, Sel::caret(r.start)).or_else(|| Some(Edited::new(cut, r.start)));
+        return enter_block(&cut, &cut_doc, region, Sel::caret(r.start)).or_else(|| Some(Edited::new(cut, r.start)));
     }
     let c = sel.head;
     let src = &text[region.clone()];
@@ -938,7 +995,7 @@ pub fn shift_enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -
     let c = r.start;
     match region_kind(doc, text, &region) {
         BlockKind::Table => None,
-        BlockKind::Heading(_) => enter(text, doc, region, sel),
+        BlockKind::Heading(_) => enter_block(text, doc, region, sel),
         BlockKind::Code { .. } | BlockKind::Math | BlockKind::FrontMatter | BlockKind::Html => {
             enter(text, doc, region, sel)
         }
@@ -1350,6 +1407,18 @@ mod tests {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
         show(&nested(&text, &doc, region, Sel::caret(c), enter).expect("handled"))
+    }
+
+    #[test]
+    fn a_heading_start_splits_before_the_heading() {
+        assert_eq!(enter_at("## ‸見出し"), "\n\n## ‸見出し");
+        assert_eq!(enter_at("before\n  ## ‸Plan ##"), "before\n\n\n  ## ‸Plan ##");
+        assert_eq!(enter_at("##      ‸Plan"), "\n\n##      ‸Plan");
+        assert_eq!(enter_at("‸Plan\n===="), "\n\n‸Plan\n====");
+        assert_eq!(enter_at("‸　Plan\n===="), "\n\n‸　Plan\n====");
+        assert_eq!(enter_at("> > ## ‸Plan"), "> >\n> >\n> > ## ‸Plan");
+        assert_eq!(enter_at("- item\n  ## ‸Plan"), "- item\n\n\n  ## ‸Plan");
+        assert_eq!(shift_enter_at("## ‸Plan"), "¶\n\n## Plan");
     }
 
     fn shift_enter_at(marked: &str) -> String {

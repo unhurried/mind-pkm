@@ -543,6 +543,73 @@ fn typing_at_the_start_of_a_heading_goes_after_its_marker() {
 }
 
 #[test]
+fn enter_at_a_heading_start_keeps_the_caret_in_the_heading() {
+    for (before, after) in [
+        ("## Plan\n", "\n\n## Plan\n"),
+        ("Before\n\n## Plan\n", "Before\n\n\n\n## Plan\n"),
+        ("> ## Plan\n", ">\n>\n> ## Plan\n"),
+        ("* List\n  ## Plan\n* next\n", "* List\n\n\n  ## Plan\n\n* next\n"),
+    ] {
+        let (mut app, _f, _, _) = app_with_page(before);
+        let id = open_with_f1(&mut app);
+        click_after(&mut app, id, "## ");
+        bind(&mut app, id, Bind::Enter);
+        let page = &app.editors[&id].page;
+        assert_eq!(page.text(), after);
+        assert_eq!(page.sel().head, after.find("Plan").unwrap());
+        assert!(matches!(active_kind(&app, id), crate::markdown::BlockKind::Heading(2)));
+
+        editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
+        let page = &app.editors[&id].page;
+        assert_eq!(page.text(), before);
+        assert_eq!(page.sel().head, before.find("Plan").unwrap());
+
+        editor(&mut app, id, EditorMsg::Command(EditorCommand::Redo));
+        type_keys(&mut app, id, "New ");
+        assert_eq!(page_text(&app, id), after.replace("Plan", "New Plan"));
+    }
+}
+
+#[test]
+fn an_empty_paragraph_above_a_heading_can_be_entered_and_typed_into() {
+    for (source, expected) in [
+        ("## Plan\n", "Intro\n\n## Plan\n"),
+        ("> ## Plan\n", "> Intro\n>\n> ## Plan\n"),
+        ("* List\n  ## Plan\n* next\n", "* List\n\n  Intro\n\n  ## Plan\n\n* next\n"),
+    ] {
+        let (mut app, _f, _, _) = app_with_page(source);
+        let id = open_with_f1(&mut app);
+        click_after(&mut app, id, "## ");
+        bind(&mut app, id, Bind::Enter);
+        bind(&mut app, id, Bind::Up);
+        assert!(app.editors[&id].page.pending().is_some());
+        bind(&mut app, id, Bind::Down);
+        assert!(matches!(active_kind(&app, id), crate::markdown::BlockKind::Heading(2)));
+        bind(&mut app, id, Bind::Up);
+        type_keys(&mut app, id, "Intro");
+        assert_eq!(page_text(&app, id), expected);
+    }
+}
+
+#[test]
+fn clicking_an_empty_paragraph_replaces_its_row_with_the_active_editor() {
+    use super::super::column::{Shown, entries};
+
+    let (mut app, _f, _, _) = app_with_page("\n\n\n\n## Plan\n");
+    let id = open_with_f1(&mut app);
+    let shown = |app: &App| entries(&app.editors[&id].page).into_iter().map(|e| e.shown).collect::<Vec<_>>();
+    let first = Shown::Blank { heading: 0, at: 0 };
+    let second = Shown::Blank { heading: 0, at: 2 };
+    assert_eq!(shown(&app), [first, second, Shown::Block(0)]);
+    editor(&mut app, id, EditorMsg::PressedAt(2));
+    assert_eq!(shown(&app), [first, Shown::Active, Shown::Block(0)]);
+    bind(&mut app, id, Bind::Up);
+    assert_eq!(shown(&app), [Shown::Active, second, Shown::Block(0)]);
+    type_keys(&mut app, id, "Intro");
+    assert_eq!(page_text(&app, id), "Intro\n\n\n\n## Plan\n");
+}
+
+#[test]
 fn a_paragraph_typed_into_a_math_block_keeps_the_cursor() {
     let (mut app, _f, _, _) = app_with_page("Intro\n\n$$\n\\frac{1}{0\n$$\n");
     let id = open_with_f1(&mut app);
