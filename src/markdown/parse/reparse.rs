@@ -17,8 +17,8 @@
 //! In debug builds every result is checked against the whole parse.
 
 use super::{
-    Block, BlockKind, CodeBlockKind, Container, Document, Event, Events, List, Tag, headings, line_start,
-    number_footnotes, usable_mask,
+    Block, BlockKind, CodeBlockKind, Container, Document, Event, Events, List, Tag, headings, indented_code_start,
+    line_start, number_footnotes, usable_mask,
 };
 
 /// How many times the part parsed again grows to the next element before the
@@ -43,6 +43,11 @@ fn top_level(events: &Events, text: &str) -> Vec<Top> {
         if depth == 0 && !matches!(event, Event::End(_)) {
             let line = line_start(text, range.start);
             let clean = text[line..range.start].bytes().all(|c| c == b' ' || c == b'\t');
+            let line = if matches!(event, Event::Start(Tag::CodeBlock(CodeBlockKind::Indented))) {
+                indented_code_start(text, line, std::iter::empty())
+            } else {
+                line
+            };
             out.push(Top { event: i, line, clean });
         }
         match event {
@@ -137,7 +142,7 @@ impl Document {
     }
 
     fn reparse_in_part(self, text: &str, mask: Option<usize>) -> Option<Document> {
-        if self.whole {
+        if self.whole || super::display_math::has_delimiter(text) {
             return None;
         }
         if self.text == text && self.mask == mask {

@@ -1286,6 +1286,22 @@ impl Page {
         }
     }
 
+    /// Moves to an empty paragraph adjacent to the active block or paragraph.
+    pub fn enter_blank_paragraph(&mut self, after: bool) -> bool {
+        let Some(active) = &self.active else { return false };
+        let block = if after || self.pending.is_some() { self.neighbor(true) } else { self.active_block() };
+        let Some(block) = block else { return false };
+        let mut blanks = edit::blank_paragraphs_before(&self.doc, block).into_iter();
+        let at = if after {
+            blanks.find(|&at| at >= active.region.end && self.pending().is_none_or(|p| at > p.at))
+        } else {
+            blanks.rfind(|&at| at < active.region.start)
+        };
+        let Some(at) = at else { return false };
+        self.place(Sel::caret(at));
+        true
+    }
+
     /// The cursor's column on its line within the active region.
     pub fn column(&self) -> usize {
         let line_start = self.text[..self.sel.head].rfind('\n').map_or(0, |i| i + 1);

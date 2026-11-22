@@ -304,7 +304,7 @@ A line making a code fence (with an optional info string), a thematic break (`--
 - **THEN** `---` is shown as text until Enter, and then a thematic break is shown with the cursor in a new paragraph after it
 
 ### Requirement: Enter and Shift+Enter
-Enter SHALL end the paragraph and start a new one after it (in a heading, a new paragraph after the heading). Shift+Enter SHALL break the line inside the paragraph.
+At the start of a nonempty rendered paragraph or heading with a collapsed selection, Enter SHALL insert an empty paragraph above it and keep the caret with the text. Elsewhere in a paragraph, Enter SHALL split it at the caret and activate the second paragraph. Enter at the end of a heading SHALL start a new paragraph below it. Shift+Enter SHALL break the line inside a paragraph.
 
 #### Scenario: New paragraph
 - **WHEN** the cursor is in the middle of `onetwo` (after `one`) and Enter is pressed
@@ -314,8 +314,34 @@ Enter SHALL end the paragraph and start a new one after it (in a heading, a new 
 - **WHEN** Shift+Enter is pressed after `one` in `onetwo`
 - **THEN** the paragraph's source reads `one` and `two` on two lines and it is shown with a line break
 
+#### Scenario: Enter at the start of a heading
+- **WHEN** the caret is before the first character of `## Plan` and Enter is pressed
+- **THEN** an empty paragraph appears above the heading, which keeps its level and text
+- **AND** the caret stays before `Plan`, so typing `New ` makes the heading read `## New Plan`
+
+#### Scenario: Typing in the empty paragraph above a heading
+- **WHEN** Enter is pressed at the start of a heading and the user presses Up or clicks the empty paragraph above it
+- **THEN** the caret enters the empty paragraph and typing adds text there
+
+#### Scenario: Saving an empty paragraph above a heading
+- **WHEN** an empty paragraph is created with Enter at the start of a heading and the page is saved and reopened
+- **THEN** the empty paragraph is visible above the heading
+
+#### Scenario: Undoing an empty paragraph above a heading
+- **WHEN** Enter is pressed at the start of a heading and is immediately undone
+- **THEN** the empty paragraph disappears and the caret returns to its original position
+
+#### Scenario: Enter at the end of a heading
+- **WHEN** Enter is pressed after `Plan` in the rendered heading `## Plan`
+- **THEN** the caret is in a new empty paragraph below the heading
+
+#### Scenario: Enter at the start of a paragraph or quote
+- **WHEN** Enter is pressed before the first character of a nonempty paragraph, including one in a quote or a list item
+- **THEN** an editable empty paragraph appears above it in the same container
+- **AND** the caret stays before the original text and the empty paragraph stays visible when the page is saved and reopened
+
 ### Requirement: Enter in lists, quotes and code
-In a list item, Enter SHALL start a new item of the same kind (the next number, an unchecked box for a task item); Enter in an empty item SHALL end the list, or outdent the item when it is nested. In a quote, Enter SHALL continue the quote with a new paragraph, and Enter in that paragraph while it is empty SHALL leave the quote. In code, math and front matter blocks Enter SHALL insert a line break keeping the indentation.
+Enter SHALL split a list item at the caret and activate the second item. New empty task items SHALL be unchecked. The parts of a completed task that contain its text SHALL stay checked. Ordered items SHALL be written sequentially from the list's first number. Enter in an empty item SHALL end the list or outdent a nested item. A quote SHALL keep added paragraphs inside it until Enter is pressed in an empty one. Enter SHALL keep indentation when breaking a line in a code or source block.
 
 #### Scenario: Next task item
 - **WHEN** Enter is pressed at the end of `- [x] done`
@@ -328,6 +354,29 @@ In a list item, Enter SHALL start a new item of the same kind (the next number, 
 #### Scenario: Leaving a quote
 - **WHEN** Enter is pressed twice at the end of the quote `> one` and `after` is typed
 - **THEN** the source reads `> one`, a blank line and `after`
+
+#### Scenario: Splitting a completed task
+- **WHEN** Enter is pressed at the start of `- [x] Done`
+- **THEN** an unchecked empty task appears before `- [x] Done` and the caret stays before `Done`
+- **AND** splitting a completed task in the middle leaves both text parts checked
+
+#### Scenario: Splitting an ordered item
+- **WHEN** Enter is pressed at the start of the first item in a list starting with `3. First` followed by `3. Next`
+- **THEN** the source reads `3. `, `4. First`, and `5. Next`, with the caret before `First`
+
+#### Scenario: Enter at the start of a code block
+- **WHEN** Enter is pressed before the first character in a fenced or indented code block
+- **THEN** the code box shows a new blank first line and the caret stays before the original code
+- **AND** the saved code keeps its fenced or indented form, with the leading blank line visible when reopened
+
+#### Scenario: Enter inside front matter or display math
+- **WHEN** Enter is pressed at the start of the first body line inside existing YAML front matter or a standalone display math block
+- **THEN** a blank line is added inside the delimiters and the block keeps its kind
+- **AND** the opening delimiter stays intact if Enter is pressed on its own line
+
+#### Scenario: Enter in legacy front matter without a mapping
+- **WHEN** Enter is pressed at the start of the first body line of a front matter block whose body is a YAML scalar
+- **THEN** the blank line is added after the first body line and the page keeps the front matter block
 
 ### Requirement: Enter at the end of a list item with blocks below
 Enter at the end of the text of a list item that has blocks below its text SHALL decide by the first of them:
@@ -384,7 +433,7 @@ Backspace at the start of the text of a task item with text SHALL remove only it
 - **THEN** the page holds an empty paragraph
 
 ### Requirement: Blank lines in edited lists
-A list changed by an edit SHALL be written in one form for all of its items: tight, with no blank line between its items nor before the blocks inside its items, or loose, with exactly one blank line in each of these places. A nested list SHALL take its own form. The form SHALL be applied after an editing command and when the cursor leaves a block whose text was edited; lists no edit changed, and pages only opened or saved, SHALL keep their source.
+An edited list SHALL use one form for all its items: tight, with no blank lines between items or before blocks inside items, or loose, with one blank line in each place except where blank lines represent an empty paragraph. A nested list SHALL take its own form. The form SHALL be applied after an editing command and when the caret leaves a block whose text was edited. Lists no edit changed, and pages only opened or saved, SHALL keep their source.
 
 #### Scenario: A new item in a list with mixed blank lines
 - **WHEN** the source is `* a`, a blank line, `* b`, `* c`, the list holds only single-line items, and Enter is pressed at the end of `c` and `d` is typed
@@ -402,8 +451,12 @@ A list changed by an edit SHALL be written in one form for all of its items: tig
 - **WHEN** a list inside a quote is written loose
 - **THEN** each blank line between its items keeps the quote's `>`
 
+#### Scenario: An empty paragraph before a heading inside an item
+- **WHEN** Enter is pressed at the start of a rendered heading under a list item's text
+- **THEN** the empty paragraph and the heading are inside the same item, and the caret stays at the start of the heading
+
 ### Requirement: Loose only where blank lines are needed
-An edited list SHALL be written loose only when a block inside one of its items would not stay that block without a blank line before it - a paragraph, an image or math on lines of its own, a `---` rule - and tight otherwise: code blocks, tables, quotes, headings and nested lists inside items SHALL keep a list tight. A list SHALL become tight again when its last such block goes.
+An edited list SHALL be loose when an item contains an empty paragraph or when a block needs a preceding blank line to stay distinct, such as a paragraph, an image or math on its own lines, or a `---` rule. It SHALL otherwise be tight, including when code blocks, tables, quotes, headings or nested lists can remain distinct without blank lines.
 
 #### Scenario: A code block under an item keeps the list tight
 - **WHEN** in the list `* a` / `* b` / `* c` Enter is pressed at the end of `b`, then Backspace, then ```` ``` ```` is typed and Enter is pressed, and `x` is typed in the code block

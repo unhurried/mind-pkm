@@ -77,11 +77,15 @@ Each column of a table SHALL be as wide as its widest cell on one line when that
 - **THEN** the table keeps its column widths, a horizontal scroll bar is shown under it, and scrolling it sideways shows the columns beyond the page's edge while the rest of the page does not move
 
 ### Requirement: Front matter and table of contents
-YAML front matter (`---` ... `---` at the start of the file) SHALL be shown as a code-styled box. A paragraph consisting of `[toc]` (any case) SHALL be shown as a table of contents listing only the document's top-level headings, each clickable to scroll to it.
+YAML front matter (`---` ... `---` at the start of the file) SHALL be shown as a code-styled box. Blank lines before a YAML mapping inside the delimiters SHALL be part of the front matter. A paragraph consisting of `[toc]` (any case) SHALL be shown as a table of contents listing only the document's top-level headings, each clickable to scroll to it.
 
 #### Scenario: Table of contents
 - **WHEN** a page contains `[toc]`, the top-level headings `A` and `B`, and headings inside a list item and a quote
 - **THEN** a list containing only `A` and `B` is shown where `[toc]` is
+
+#### Scenario: Leading blank line inside YAML front matter
+- **WHEN** the file starts with `---`, a blank line, `title: Plan`, and `---`
+- **THEN** the delimiters, blank line, and mapping are shown together as one front matter block
 
 ### Requirement: Span elements
 The editor SHALL render italic (`*a*`, `_a_`), bold (`**a**`, `__a__`), strikethrough (`~~a~~`), inline code and underline (`<u>a</u>`) in their styles; subscript (`~a~`) and superscript (`^a^`) as smaller text; highlight (`==a==`) with a highlight background; emoji shortcodes (`:smile:`, GitHub's names) as the emoji; footnote references as superscript numbers linked to their definition; and line breaks inside a paragraph (a single newline included) as line breaks.
@@ -140,11 +144,15 @@ A ` ```mermaid ` code block SHALL be shown as the diagram it describes. A diagra
 - **THEN** the diagram with A and B is shown below the source being edited
 
 ### Requirement: Math
-Inline math (`$...$`) and math blocks (`$$` ... `$$`) SHALL be typeset from their LaTeX. An expression that cannot be typeset SHALL show its source with the error, inline as code-styled text and for blocks below the source.
+Inline math (`$...$`) and math blocks (`$$` ... `$$`) SHALL be typeset from their LaTeX. Blank lines in the body of a standalone display math block SHALL stay inside its delimiters. An expression that cannot be typeset SHALL show its source with the error, inline as code-styled text and for blocks below the source.
 
 #### Scenario: Math block
 - **WHEN** a math block contains `\frac{1}{2}`
 - **THEN** a fraction with 1 over 2 is shown
+
+#### Scenario: Blank lines inside a math block
+- **WHEN** two standalone `$$` lines enclose a LaTeX expression with an empty line before or inside it
+- **THEN** the expression is displayed as one math block
 
 ### Requirement: Images
 `![alt](src "title")` and `<img src>` SHALL show the image file (PNG, JPEG, GIF, BMP, WebP, ICO, TIFF, SVG), scaled down to the width of the document when wider. A missing file SHALL show the alt text with a broken-image mark; `http`/`https` images SHALL NOT be downloaded but shown as their alt text with a link to the URL.

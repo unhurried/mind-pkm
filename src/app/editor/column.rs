@@ -5,7 +5,7 @@
 
 use super::page::Page;
 use crate::markdown::BlockKind;
-use crate::markdown::edit::Pending;
+use crate::markdown::edit::{Pending, blank_paragraphs_before};
 use crate::markdown::parse::ContainerKind;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -17,6 +17,8 @@ use std::rc::Rc;
 pub enum Shown {
     /// A block of the page's parse, rendered.
     Block(usize),
+    /// An empty paragraph at a source offset before the given block.
+    Blank { before: usize, at: usize },
     /// The active region.
     Active,
 }
@@ -28,7 +30,11 @@ pub enum EntryKey {
     /// A rendered block, by its source alone (no offset, which changes with
     /// every edit above it): the `n`th block (from 0) whose source has this
     /// hash.
-    Block { source: u64, n: usize },
+    Block {
+        source: u64,
+        n: usize,
+    },
+    Blank(usize),
     /// The region being edited, by its place among the entries: its widgets
     /// (the text being edited, its focus) keep their state while it stays
     /// there, and get a new one when it moves to another block.
@@ -75,14 +81,26 @@ impl Entry {
 pub fn entries(page: &Page) -> Vec<Entry> {
     let doc = &page.doc();
     let active = page.active();
+    let pending = page.pending();
+    let empty_active_at = active.filter(|region| region.region.is_empty()).map(|region| region.region.start);
     let mut shown = Vec::with_capacity(doc.blocks.len() + 1);
     let mut active_block = None;
     // Whether the active region is among them yet.
     let mut placed = false;
     for (i, block) in doc.blocks.iter().enumerate() {
+        for at in blank_paragraphs_before(doc, i) {
+            if !placed && let Some(offset) = empty_active_at.filter(|&offset| offset <= at) {
+                shown.push(Shown::Active);
+                placed = true;
+                if offset == at {
+                    continue;
+                }
+            }
+            shown.push(Shown::Blank { before: i, at });
+        }
         if let Some(a) = active {
             let overlaps = block.range.end >= a.region.start && block.range.start <= a.region.end;
-            if page.pending().is_none() && overlaps {
+            if pending.is_none() && overlaps {
                 if !placed {
                     shown.push(Shown::Active);
                     (placed, active_block) = (true, Some(i));
@@ -91,7 +109,7 @@ pub fn entries(page: &Page) -> Vec<Entry> {
             }
             // A new paragraph, or a block typed empty that covers none of
             // the parse: before the block after it.
-            let before = match page.pending() {
+            let before = match pending {
                 Some(pd) => pd.at <= block.range.start,
                 None => a.region.end < block.range.start,
             };
@@ -113,14 +131,16 @@ pub fn entries(page: &Page) -> Vec<Entry> {
     // How many blocks with a source of each hash came before.
     let mut sources: HashMap<u64, usize> = HashMap::new();
     for s in shown {
-        let (kind, outer) = match (s, &page.pending(), active_block) {
+        let (kind, outer) = match (s, pending, active_block) {
             (Shown::Block(i), _, _) => of_block(i),
+            (Shown::Blank { before, .. }, _, _) => (BlockKind::Paragraph, of_block(before).1),
             (Shown::Active, Some(pd), _) => (BlockKind::Paragraph, pd.outer.iter().map(|&k| (k, None)).collect()),
             (Shown::Active, None, Some(i)) => (active.map_or(BlockKind::Paragraph, |a| a.kind.clone()), of_block(i).1),
             (Shown::Active, None, None) => (BlockKind::Paragraph, Vec::new()),
         };
-        let covers = match (s, &page.pending(), active) {
+        let covers = match (s, pending, active) {
             (Shown::Block(i), _, _) => doc.blocks[i].range.clone(),
+            (Shown::Blank { at, .. }, _, _) => at..at,
             (Shown::Active, Some(pd), _) => pd.at..pd.at,
             (Shown::Active, None, Some(a)) => a.region.clone(),
             (Shown::Active, None, None) => 0..0,
@@ -137,6 +157,7 @@ pub fn entries(page: &Page) -> Vec<Entry> {
                 *n += 1;
                 EntryKey::Block { source, n: *n - 1 }
             }
+            Shown::Blank { at, .. } => EntryKey::Blank(at),
             Shown::Active => EntryKey::Active(entries.len()),
         };
         entries.push(Entry { shown: s, kind, outer, covers, gap, shared, key });

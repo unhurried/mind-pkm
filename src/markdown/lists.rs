@@ -3,12 +3,11 @@
 //! an item, makes every item a paragraph with room around it. The editor
 //! writes a list it edits in one of two forms - tight, without blank lines
 //! between its items and before the blocks of its items, or loose, with one
-//! blank line in each of these places - and loose only when tight would make
-//! some of its blocks something else (a paragraph would join the text above
-//! it, `---` would make that text a heading). The parser itself decides
-//! that: the tight form is parsed and kept when it has the same blocks.
+//! blank line in each of these places. Empty paragraphs between text blocks are
+//! kept in a loose list. The parser otherwise decides when a list can be
+//! tight: the tight form is parsed and kept when it has the same blocks.
 
-use super::edit::container_prefix;
+use super::edit::{blank_paragraphs_before, container_prefix};
 use super::parse::{BlockKind, Document, List, ListItem};
 use std::ops::Range;
 
@@ -84,12 +83,15 @@ pub fn changed(old: &str, new: &str) -> Range<usize> {
     start..new.len() - end
 }
 
-/// The separators of `list` in `doc`: the byte ranges from the line break
-/// ending a block's last line to the start of the line of the block after
-/// it, with whether that block is one of the list's items (rather than a
-/// block inside an item), and whether the block before it is an empty
-/// item. Separators holding anything but blank lines are left out.
-fn separators(doc: &Document, list: &List) -> Vec<(Range<usize>, bool, bool)> {
+struct Separator {
+    range: Range<usize>,
+    before_item: bool,
+    after_empty_item: bool,
+    has_empty_paragraph: bool,
+}
+
+/// The blank lines from the end of a block to the start of the next line of text.
+fn separators(doc: &Document, list: &List) -> Vec<Separator> {
     let text = doc.text.as_str();
     let mut out = Vec::new();
     for &at in &list.separators {
@@ -107,23 +109,35 @@ fn separators(doc: &Document, list: &List) -> Vec<(Range<usize>, bool, bool)> {
         let empty_item = matches!(prev.kind, BlockKind::ListItem(_))
             && crate::markdown::edit::line_marker(&text[prev.range.clone()])
                 .is_some_and(|m| text[prev.range.start + m.end..prev.range.end].trim().is_empty());
-        out.push((nl..end, item, empty_item));
+        out.push(Separator {
+            range: nl..end,
+            before_item: item,
+            after_empty_item: empty_item,
+            has_empty_paragraph: !blank_paragraphs_before(doc, next).is_empty(),
+        });
     }
     out
 }
 
 /// `doc`'s text with the separators of `list` written in `form`, and the
 /// splices that makes.
-fn rewrite(doc: &Document, list: &List, form: Form) -> (String, Vec<Splice>) {
+fn rewrite(doc: &Document, list: &List, separators: &[Separator], form: Form) -> (String, Vec<Splice>) {
     let text = doc.text.as_str();
     let blank = container_prefix(&list.outer, true);
     let mut out = String::with_capacity(text.len() + 64);
     let mut splices = Vec::new();
     let mut pos = 0;
-    for (range, item, after_empty_item) in separators(doc, list) {
+    for separator in separators {
+        if separator.has_empty_paragraph {
+            continue;
+        }
+        let range = &separator.range;
         // An empty item cannot have a blank line before its first block.
-        let with =
-            if form == Form::Tight || (after_empty_item && !item) { "\n".to_string() } else { format!("\n{blank}\n") };
+        let with = if form == Form::Tight || (separator.after_empty_item && !separator.before_item) {
+            "\n".to_string()
+        } else {
+            format!("\n{blank}\n")
+        };
         if text[range.clone()] == with {
             continue;
         }
@@ -158,8 +172,11 @@ fn same_blocks(a: &Document, b: &Document) -> bool {
 /// keeps every block, else loose when that does (else none: it stays as it
 /// is), with the text and the splices.
 fn tidy_list(doc: &Document, list: &List) -> Option<(String, Vec<Splice>, Document)> {
-    for form in [Form::Tight, Form::Loose] {
-        let (text, splices) = rewrite(doc, list, form);
+    let separators = separators(doc, list);
+    let forms =
+        if separators.iter().any(|s| s.has_empty_paragraph) { &[Form::Loose][..] } else { &[Form::Tight, Form::Loose] };
+    for &form in forms {
+        let (text, splices) = rewrite(doc, list, &separators, form);
         if splices.is_empty() {
             return None;
         }
@@ -235,8 +252,13 @@ mod tests {
             let mixed = format!("* a\n* b\n\n  {block}\n* c\n");
             assert_eq!(tidied(&mixed), format!("* a\n\n* b\n\n  {block}\n\n* c\n"), "{block}");
         }
-        // Several blank lines become one.
-        assert_eq!(tidied("* a\n\n\n  p\n\n\n* b\n"), "* a\n\n  p\n\n* b\n");
+        // The blank paragraph above text remains. Extra space between items is normalized.
+        assert_eq!(tidied("* a\n\n\n  p\n\n\n* b\n"), "* a\n\n\n  p\n\n* b\n");
+    }
+
+    #[test]
+    fn a_list_keeps_the_empty_paragraph_before_a_heading() {
+        assert_eq!(tidied("* a\n\n\n  ## Plan\n* b\n"), "* a\n\n\n  ## Plan\n\n* b\n");
     }
 
     #[test]

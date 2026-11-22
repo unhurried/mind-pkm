@@ -4,8 +4,8 @@
 use super::Ctx;
 use super::blocks::quote_view;
 use super::theme::{
-    BLOCK_GAP, LINE_HEIGHT, LIST_INDENT, OUTLINE_WIDTH, PAGE_PADDING, PAGE_WIDTH, Palette, QUOTE_BAR, QUOTE_PADDING,
-    editor_style,
+    BLOCK_GAP, BODY_SIZE, LINE_HEIGHT, LIST_INDENT, OUTLINE_WIDTH, PAGE_PADDING, PAGE_WIDTH, Palette, QUOTE_BAR,
+    QUOTE_PADDING, editor_style,
 };
 use crate::app::after_draw::after_draw;
 use crate::app::editor::assets::{DropTarget, content_end};
@@ -124,7 +124,10 @@ impl Editor {
             .iter()
             .map(|e| {
                 let source = &text[e.covers.clone()];
-                let height = heights.get(e.key, near::may_render(e, source));
+                let height = match e.shown {
+                    Shown::Blank { .. } => Some(BODY_SIZE * LINE_HEIGHT * zoom),
+                    _ => heights.get(e.key, near::may_render(e, source)),
+                };
                 let room = height.unwrap_or_else(|| heights.guess(e.key, source));
                 near::Room { height: gap_height(e.gap, zoom) + room, known: height.is_some(), cost: source.len() }
             })
@@ -142,6 +145,7 @@ impl Editor {
         let keep = |i: usize| match entries[i].shown {
             Shown::Active => true,
             Shown::Block(b) => Some(b) == self.scroll_target,
+            Shown::Blank { .. } => false,
         };
         let plan = near::plan(&rooms, top..top + visible.height, margin, keep, near::MEASURE_BUDGET);
         // Another batch while blocks are left - as long as the last one
@@ -219,16 +223,19 @@ impl Editor {
                     stack![container(content).width(Fill), layer].into()
                 };
                 let mut previous_end = None;
-                let mut previous_block = None;
+                let mut previous_selected = false;
                 for (n, entry) in entries.iter().enumerate() {
-                    let block = match entry.shown {
-                        Shown::Block(i) => Some(i),
-                        Shown::Active => None,
+                    let selected_entry = match entry.shown {
+                        Shown::Block(i) => is_selected(i),
+                        Shown::Blank { before, .. } => {
+                            before.checked_sub(1).is_some_and(is_selected) && is_selected(before)
+                        }
+                        Shown::Active => false,
                     };
                     if !plan.built[n] {
                         far.get_or_insert((n, 0.0)).1 += rooms[n];
                         previous_end = Some(entry.covers.end);
-                        previous_block = block;
+                        previous_selected = selected_entry;
                         continue;
                     }
                     if let Some((first, room)) = far.take() {
@@ -256,11 +263,9 @@ impl Editor {
                         // Inside the containers both sides share: a quote's bar goes on.
                         let gap_view = in_containers(gap_view, &entry.shared, p, ctx.zoom);
                         // Between two selected blocks the highlight goes on too.
-                        let between_selected =
-                            previous_block.zip(block).is_some_and(|(a, b)| is_selected(a) && is_selected(b));
                         col = col.push(
                             Part::Gap(entry.key),
-                            if between_selected { highlighted(gap_view) } else { gap_view },
+                            if previous_selected && selected_entry { highlighted(gap_view) } else { gap_view },
                         );
                     }
                     let kinds = entry.kinds();
@@ -269,9 +274,16 @@ impl Editor {
                         (Shown::Active, Some(a)) => {
                             in_containers(self.active_view(a, ctx, prefs, inner), &kinds, p, ctx.zoom)
                         }
+                        (Shown::Blank { at, .. }, _) => {
+                            let blank = mouse_area(space().width(Fill).height(BODY_SIZE * LINE_HEIGHT * ctx.zoom))
+                                .on_press(EditorMsg::PressedAt(at))
+                                .on_right_press(EditorMsg::RightClicked(RightClick::At(at)));
+                            let blank = in_containers(blank.into(), &kinds, p, ctx.zoom);
+                            if selected_entry { highlighted(blank) } else { blank }
+                        }
                         (Shown::Block(i), _) => {
                             let rendered = in_containers(self.block_view(i, ctx, inner), &kinds, p, ctx.zoom);
-                            let rendered = if is_selected(i) { highlighted(rendered) } else { rendered };
+                            let rendered = if selected_entry { highlighted(rendered) } else { rendered };
                             // As wide as the page, so that a click beside the block's
                             // content (an empty item, a line of math) reaches it too.
                             let boxed = container(rendered).width(Fill).id(self.id(&format!("block-{i}")));
@@ -301,7 +313,7 @@ impl Editor {
                         );
                     }
                     previous_end = Some(entry.covers.end);
-                    previous_block = block;
+                    previous_selected = selected_entry;
                 }
                 if let Some((first, room)) = far.take() {
                     col = col.push(Part::Far(first), far_view(room));
