@@ -227,8 +227,8 @@ impl Editor {
                 for (n, entry) in entries.iter().enumerate() {
                     let selected_entry = match entry.shown {
                         Shown::Block(i) => is_selected(i),
-                        Shown::Blank { heading, .. } => {
-                            heading.checked_sub(1).is_some_and(is_selected) && is_selected(heading)
+                        Shown::Blank { before, .. } => {
+                            before.checked_sub(1).is_some_and(is_selected) && is_selected(before)
                         }
                         Shown::Active => false,
                     };

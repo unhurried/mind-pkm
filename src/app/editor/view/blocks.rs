@@ -88,6 +88,12 @@ fn code_view<'a>(
     ctx: &Ctx<'a>,
     width: f32,
 ) -> Element<'a, EditorMsg> {
+    if matches!(doc.blocks[block].kind, BlockKind::Code { fenced: false, .. })
+        && let Some(body) = crate::markdown::edit::CodeBody::of(&doc.text, doc, block)
+    {
+        let starts: Vec<_> = body.line_starts().collect();
+        return code_text_view(body.text(), lang, Some(&starts), ctx, width, block);
+    }
     // The code with where each line starts in the source.
     let mut code = String::new();
     let mut starts = Vec::new();

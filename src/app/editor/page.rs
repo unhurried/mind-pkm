@@ -1287,11 +1287,11 @@ impl Page {
     }
 
     /// Moves to an empty paragraph adjacent to the active block or paragraph.
-    pub fn enter_heading_blank(&mut self, after: bool) -> bool {
+    pub fn enter_blank_paragraph(&mut self, after: bool) -> bool {
         let Some(active) = &self.active else { return false };
-        let heading = if after || self.pending.is_some() { self.neighbor(true) } else { self.active_block() };
-        let Some(heading) = heading else { return false };
-        let mut blanks = edit::heading_blanks(&self.doc, heading).into_iter();
+        let block = if after || self.pending.is_some() { self.neighbor(true) } else { self.active_block() };
+        let Some(block) = block else { return false };
+        let mut blanks = edit::blank_paragraphs_before(&self.doc, block).into_iter();
         let at = if after {
             blanks.find(|&at| at >= active.region.end && self.pending().is_none_or(|p| at > p.at))
         } else {

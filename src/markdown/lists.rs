@@ -3,11 +3,11 @@
 //! an item, makes every item a paragraph with room around it. The editor
 //! writes a list it edits in one of two forms - tight, without blank lines
 //! between its items and before the blocks of its items, or loose, with one
-//! blank line in each of these places. Empty paragraphs before headings are
+//! blank line in each of these places. Empty paragraphs between text blocks are
 //! kept in a loose list. The parser otherwise decides when a list can be
 //! tight: the tight form is parsed and kept when it has the same blocks.
 
-use super::edit::{container_prefix, heading_blanks};
+use super::edit::{blank_paragraphs_before, container_prefix};
 use super::parse::{BlockKind, Document, List, ListItem};
 use std::ops::Range;
 
@@ -113,7 +113,7 @@ fn separators(doc: &Document, list: &List) -> Vec<Separator> {
             range: nl..end,
             before_item: item,
             after_empty_item: empty_item,
-            has_empty_paragraph: !heading_blanks(doc, next).is_empty(),
+            has_empty_paragraph: !blank_paragraphs_before(doc, next).is_empty(),
         });
     }
     out
@@ -252,8 +252,8 @@ mod tests {
             let mixed = format!("* a\n* b\n\n  {block}\n* c\n");
             assert_eq!(tidied(&mixed), format!("* a\n\n* b\n\n  {block}\n\n* c\n"), "{block}");
         }
-        // Several blank lines become one.
-        assert_eq!(tidied("* a\n\n\n  p\n\n\n* b\n"), "* a\n\n  p\n\n* b\n");
+        // The blank paragraph above text remains. Extra space between items is normalized.
+        assert_eq!(tidied("* a\n\n\n  p\n\n\n* b\n"), "* a\n\n\n  p\n\n* b\n");
     }
 
     #[test]

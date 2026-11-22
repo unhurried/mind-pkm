@@ -281,7 +281,7 @@ impl Editor {
                 Some(_) if down && self.page.pending().is_none() && self.page.ends_container() => {
                     self.page.new_paragraph_after()
                 }
-                _ if self.page.enter_heading_blank(down) => {}
+                _ if self.page.enter_blank_paragraph(down) => {}
                 Some(b) => self.page.enter_block(b, down, Some(column)),
                 // Below the last block, when it is code: a new paragraph.
                 None if down && self.page.pending().is_none() => self.page.new_paragraph_after(),
@@ -316,7 +316,7 @@ impl Editor {
         }
         if self.page.at_edge(right) || self.page.pending().is_some() {
             match self.page.neighbor(right) {
-                _ if self.page.enter_heading_blank(right) => {}
+                _ if self.page.enter_blank_paragraph(right) => {}
                 Some(b) => self.page.enter_block(b, right, None),
                 None if right && self.page.pending().is_none() => self.page.new_paragraph_after(),
                 None => {}

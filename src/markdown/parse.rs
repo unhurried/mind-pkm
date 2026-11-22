@@ -12,9 +12,10 @@
 //! `Other` block, so that every non-blank byte of the page outside container
 //! syntax belongs to exactly one block.
 
+mod display_math;
 mod reparse;
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, MetadataBlockKind, Options, Parser, Tag, TagEnd};
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -39,23 +40,35 @@ pub fn options() -> Options {
 /// pulldown-cmark takes `---` lines as the start of a metadata block wherever
 /// a block may start (when a closing line follows, anywhere further down).
 fn parse_events(text: &str) -> Vec<(Event<'_>, Range<usize>)> {
-    let rest = front_matter_end(text).unwrap_or(0);
-    let front = Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
-    let mut events: Vec<(Event, Range<usize>)> = if rest > 0 {
-        Parser::new_ext(&text[..rest], options() | front).into_offset_iter().collect()
-    } else {
-        Vec::new()
+    let (rest, mut events) = match front_matter(text) {
+        Some((body, close, rest, true)) => {
+            let yaml = MetadataBlockKind::YamlStyle;
+            (
+                rest,
+                vec![
+                    (Event::Start(Tag::MetadataBlock(yaml)), 0..close),
+                    (Event::Text(text[body.clone()].into()), body),
+                    (Event::End(TagEnd::MetadataBlock(yaml)), 0..close),
+                ],
+            )
+        }
+        Some((_, _, rest, false)) => (
+            rest,
+            Parser::new_ext(&text[..rest], options() | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS)
+                .into_offset_iter()
+                .collect(),
+        ),
+        None => (0, Vec::new()),
     };
     let after = Parser::new_ext(&text[rest..], options()).into_offset_iter();
     events.extend(after.map(|(e, r)| (e, r.start + rest..r.end + rest)));
     events
 }
 
-/// Where front matter at the start of `text` ends, with the line break after
-/// its closing line, if the text starts with it - as pulldown-cmark takes it:
-/// `---` alone on the first line, a first line after it that is neither
-/// blank nor a closing line, and a closing `---` or `...` line.
-fn front_matter_end(text: &str) -> Option<usize> {
+/// The YAML body, end of its closing delimiter, and start of the next line.
+/// With a leading blank line, require a mapping to distinguish metadata from
+/// a thematic break followed by ordinary text.
+fn front_matter(text: &str) -> Option<(Range<usize>, usize, usize, bool)> {
     let b = text.as_bytes();
     let next_line = |at: usize| b[at..].iter().position(|&c| c == b'\n').map_or(b.len(), |i| at + i + 1);
     let eol = |at: usize| match &b[at..] {
@@ -82,21 +95,27 @@ fn front_matter_end(text: &str) -> Option<usize> {
         return None;
     }
     let mut at = first;
-    let mut first_line = true;
+    let leading_blank = blank(first).is_some();
     while at < b.len() {
-        let closed = closing(at);
-        if first_line {
-            if closed.is_some() || blank(at).is_some() {
+        if let Some(end) = closing(at) {
+            let body = first..at;
+            if at == first || (leading_blank && !looks_like_yaml_mapping(&text[body.clone()])) {
                 return None;
             }
-            first_line = false;
-        }
-        if let Some(end) = closed {
-            return Some(end + blank(end).unwrap_or(0));
+            return Some((body, end, end + blank(end).unwrap_or(0), leading_blank));
         }
         at = next_line(at);
     }
     None
+}
+
+pub(super) fn looks_like_yaml_mapping(body: &str) -> bool {
+    body.lines().map(str::trim).find(|line| !line.is_empty() && !line.starts_with(['#', '%'])).is_some_and(|line| {
+        line.starts_with('{')
+            || line
+                .split_once(':')
+                .is_some_and(|(key, value)| !key.is_empty() && (value.is_empty() || value.starts_with([' ', '\t'])))
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -354,6 +373,7 @@ impl Document {
                 }
             }
         }
+        let display_delimiters = display_math::has_delimiter(text);
         let mut doc = Document {
             text: text.to_string(),
             events,
@@ -363,9 +383,12 @@ impl Document {
             footnotes: HashMap::new(),
             headings: Vec::new(),
             mask,
-            whole: may_define(text),
+            whole: may_define(text) || display_delimiters,
         };
         (doc.blocks, doc.containers, doc.lists) = segment(&doc.text, &doc.events);
+        if display_delimiters && display_math::restore(&mut doc) {
+            (doc.blocks, doc.containers, doc.lists) = segment(&doc.text, &doc.events);
+        }
         doc.footnotes = number_footnotes(&doc.events);
         doc.headings = headings(&doc);
         doc
@@ -665,6 +688,29 @@ fn is_blank(s: &str, inside: bool) -> bool {
     s.chars().all(|c| c.is_whitespace() || (inside && c == '>'))
 }
 
+/// The bytes that provide the first four columns of indentation in code.
+pub(super) fn code_indent_len(line: &str) -> usize {
+    let spaces = line.bytes().take(4).take_while(|&byte| byte == b' ').count();
+    spaces + usize::from(spaces < 4 && line.as_bytes().get(spaces) == Some(&b'\t'))
+}
+
+/// Leading indented blank lines are editable in the code box. Pulldown-cmark
+/// leaves them out of the code events, as required for CommonMark output.
+fn indented_code_start(text: &str, mut start: usize, kinds: impl Iterator<Item = ContainerKind> + Clone) -> usize {
+    while start > 0 {
+        let end = start - 1;
+        let previous = line_start(text, end);
+        let line = &text[previous..end];
+        let content = &line[prefix_len(line, kinds.clone())..];
+        let indent = code_indent_len(content);
+        if (indent < 4 && !content[..indent].ends_with('\t')) || !content.trim_matches([' ', '\t', '\r']).is_empty() {
+            break;
+        }
+        start = previous;
+    }
+    start
+}
+
 /// `range` without trailing Markdown whitespace, nor trailing lines holding nothing
 /// but the prefixes of the containers `kinds` around it.
 fn trim_end(text: &str, range: Range<usize>, kinds: &[ContainerKind]) -> Range<usize> {
@@ -767,7 +813,12 @@ impl Segmenter<'_> {
             Event::Start(tag) => (block_kind(tag, &self.events[start + 1..end], self.text, range), start + 1..end),
             _ => (BlockKind::ThematicBreak, start..start),
         };
-        let range = trim_end(self.text, self.start(range.start, outer)..range.end, &self.kinds(outer));
+        let kinds = self.kinds(outer);
+        let mut start = self.start(range.start, outer);
+        if matches!(kind, BlockKind::Code { fenced: false, .. }) {
+            start = indented_code_start(self.text, start, kinds.iter().copied());
+        }
+        let range = trim_end(self.text, start..range.end, &kinds);
         self.blocks.push(Block { range, kind, events, outer: outer.to_vec() });
     }
 
@@ -1379,6 +1430,28 @@ mod tests {
         // Not front matter: a blank first line, nothing closing it.
         assert!(!kinds("---\n\nx\n---\n").contains(&BlockKind::FrontMatter));
         assert!(!kinds("---\nx\ny\n").contains(&BlockKind::FrontMatter));
+        let text = "---\n \n# comment\n\n日本語: Plan\n...  \n\nFollowing\n";
+        let doc = Document::parse(text);
+        assert_eq!(doc.blocks[0].kind, BlockKind::FrontMatter);
+        assert_eq!(doc.source(0), "---\n \n# comment\n\n日本語: Plan\n...");
+        assert_eq!(doc.blocks[1].kind, BlockKind::Paragraph);
+    }
+
+    #[test]
+    fn standalone_display_math_keeps_blank_lines_and_the_original_source() {
+        for (text, tex) in [
+            ("$$\n\nx^2\n$$\n\nFollowing", "\n\nx^2\n"),
+            ("> $$\n>\n> x^2\n>\n> y\n> $$\n\nFollowing", "\n\nx^2\n\ny\n"),
+            ("- Item\n\n  $$\n\n  x^2\n  $$\n", "\n\nx^2\n"),
+            ("$$\n\n    x^2\n$$\n", "\n\n    x^2\n"),
+        ] {
+            let doc = Document::parse(text);
+            let math = doc.blocks.iter().position(|b| b.kind == BlockKind::Math).expect(text);
+            assert!(matches!(doc.block_events(math), [(Event::DisplayMath(t), _)] if t.as_ref() == tex), "{text:?}");
+            assert_eq!(doc.text, text);
+        }
+        let outside = Document::parse("> $$\n\n$$\n\n~~~\n$$\n\nx\n$$\n~~~\n");
+        assert!(!outside.blocks.iter().any(|b| b.kind == BlockKind::Math));
     }
 
     #[test]

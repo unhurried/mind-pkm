@@ -5,7 +5,7 @@
 
 use super::page::Page;
 use crate::markdown::BlockKind;
-use crate::markdown::edit::{Pending, heading_blanks};
+use crate::markdown::edit::{Pending, blank_paragraphs_before};
 use crate::markdown::parse::ContainerKind;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -17,8 +17,8 @@ use std::rc::Rc;
 pub enum Shown {
     /// A block of the page's parse, rendered.
     Block(usize),
-    /// An empty paragraph at a source offset before the given heading block.
-    Blank { heading: usize, at: usize },
+    /// An empty paragraph at a source offset before the given block.
+    Blank { before: usize, at: usize },
     /// The active region.
     Active,
 }
@@ -82,20 +82,21 @@ pub fn entries(page: &Page) -> Vec<Entry> {
     let doc = &page.doc();
     let active = page.active();
     let pending = page.pending();
+    let empty_active_at = active.filter(|region| region.region.is_empty()).map(|region| region.region.start);
     let mut shown = Vec::with_capacity(doc.blocks.len() + 1);
     let mut active_block = None;
     // Whether the active region is among them yet.
     let mut placed = false;
     for (i, block) in doc.blocks.iter().enumerate() {
-        for at in heading_blanks(doc, i) {
-            if !placed && let Some(p) = pending.filter(|p| p.at <= at) {
+        for at in blank_paragraphs_before(doc, i) {
+            if !placed && let Some(offset) = empty_active_at.filter(|&offset| offset <= at) {
                 shown.push(Shown::Active);
                 placed = true;
-                if p.at == at {
+                if offset == at {
                     continue;
                 }
             }
-            shown.push(Shown::Blank { heading: i, at });
+            shown.push(Shown::Blank { before: i, at });
         }
         if let Some(a) = active {
             let overlaps = block.range.end >= a.region.start && block.range.start <= a.region.end;
@@ -132,7 +133,7 @@ pub fn entries(page: &Page) -> Vec<Entry> {
     for s in shown {
         let (kind, outer) = match (s, pending, active_block) {
             (Shown::Block(i), _, _) => of_block(i),
-            (Shown::Blank { heading, .. }, _, _) => (BlockKind::Paragraph, of_block(heading).1),
+            (Shown::Blank { before, .. }, _, _) => (BlockKind::Paragraph, of_block(before).1),
             (Shown::Active, Some(pd), _) => (BlockKind::Paragraph, pd.outer.iter().map(|&k| (k, None)).collect()),
             (Shown::Active, None, Some(i)) => (active.map_or(BlockKind::Paragraph, |a| a.kind.clone()), of_block(i).1),
             (Shown::Active, None, None) => (BlockKind::Paragraph, Vec::new()),

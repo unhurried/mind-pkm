@@ -7,7 +7,9 @@
 //! a block (or a few, while text is pasted or typed). A new empty paragraph
 //! has no source until something is typed into it; it is `Pending`.
 
-use super::parse::{BlockKind, ContainerKind, Document, ListItem, prefix_len};
+use super::parse::{
+    BlockKind, ContainerKind, Document, ListItem, code_indent_len, looks_like_yaml_mapping, prefix_len,
+};
 use std::ops::Range;
 
 /// A selection in the page text: `anchor` stays, `head` is the cursor.
@@ -190,11 +192,21 @@ impl Inner {
 
     /// The lines `span` of the page without the prefixes of the containers `kinds`.
     fn new(text: &str, span: Range<usize>, kinds: Vec<ContainerKind>, exact: bool) -> Inner {
+        Self::with_prefix(text, span, kinds, exact, |line, kinds| prefix_len(line, kinds.iter().copied()))
+    }
+
+    fn with_prefix(
+        text: &str,
+        span: Range<usize>,
+        kinds: Vec<ContainerKind>,
+        exact: bool,
+        prefix_len: impl Fn(&str, &[ContainerKind]) -> usize,
+    ) -> Inner {
         let mut lines = Vec::new();
         let mut inner = String::with_capacity(span.len());
         let mut pos = span.start;
         for line in text[span.clone()].split('\n') {
-            let prefix = prefix_len(line, kinds.iter().copied());
+            let prefix = prefix_len(line, &kinds);
             if !lines.is_empty() {
                 inner.push('\n');
             }
@@ -514,7 +526,10 @@ impl CodeBody {
         let prefix = prefix_len(line, kinds.iter().copied());
         if !fenced {
             kinds.push(ContainerKind::Item { depth: 0, indent: 4 });
-            let lines = Inner::new(text, first.start..last.end, kinds, true);
+            let lines = Inner::with_prefix(text, first.start..last.end, kinds, true, |line, kinds| {
+                let outer = prefix_len(line, kinds[..kinds.len() - 1].iter().copied());
+                outer + code_indent_len(&line[outer..])
+            });
             return Some(CodeBody { lines, empty_at: None, info: String::new(), info_range: first.end..first.end });
         }
         let rest = &line[prefix..];
@@ -547,6 +562,11 @@ impl CodeBody {
 
     pub fn text(&self) -> &str {
         &self.lines.text
+    }
+
+    /// The source offset of the start of each displayed code line.
+    pub fn line_starts(&self) -> impl Iterator<Item = usize> + '_ {
+        self.lines.lines.iter().map(|&(start, prefix)| start + prefix)
     }
 
     /// The offset in the code of a page offset (on a fence: the code's start or end).
@@ -771,11 +791,11 @@ pub fn content_start(text: &str, block_start: usize) -> usize {
     }
 }
 
-/// The editable empty paragraphs before a heading, from top to bottom.
+/// The editable empty paragraphs before text, from top to bottom.
 /// A pair of blank source lines leaves room for a paragraph between blocks.
-pub fn heading_blanks(doc: &Document, index: usize) -> Vec<usize> {
+pub fn blank_paragraphs_before(doc: &Document, index: usize) -> Vec<usize> {
     let block = &doc.blocks[index];
-    if !matches!(block.kind, BlockKind::Heading(_)) {
+    if !matches!(block.kind, BlockKind::Heading(_) | BlockKind::Paragraph) {
         return Vec::new();
     }
 
@@ -810,14 +830,19 @@ pub fn enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Opti
     if sel.is_empty() && sel.head < region.end {
         let line = line_range(text, region.start);
         let source = &text[line.clone()];
-        let marker = line_marker(source).filter(|m| matches!(m.kind, MarkerKind::Heading(_))).map_or(0, |m| m.end);
-        let content = line.end - source[marker..].trim_start_matches([' ', '\t']).len();
-        if sel.head <= content
-            && let Some(index) = doc.block_at(region.start)
-            && matches!(doc.blocks[index].kind, BlockKind::Heading(_))
+        if let Some(index) = doc.block_at(region.start)
+            && matches!(doc.blocks[index].kind, BlockKind::Heading(_) | BlockKind::Paragraph)
             && !doc.block_events(index).is_empty()
         {
-            return Some(Edited::new(splice(text, line.start..line.start, "\n\n"), content + 2));
+            let marker = if matches!(doc.blocks[index].kind, BlockKind::Heading(_)) {
+                line_marker(source).filter(|m| matches!(m.kind, MarkerKind::Heading(_))).map_or(0, |m| m.end)
+            } else {
+                0
+            };
+            let content = line.end - source[marker..].trim_start_matches([' ', '\t']).len();
+            if sel.head <= content {
+                return Some(Edited::new(splice(text, line.start..line.start, "\n\n"), content + 2));
+            }
         }
     }
     enter_block(text, doc, region, sel)
@@ -863,6 +888,19 @@ fn enter_block(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Op
     match kind {
         BlockKind::Table => None,
         BlockKind::Code { .. } | BlockKind::Math | BlockKind::FrontMatter | BlockKind::Html => {
+            let first = line_range(text, region.start);
+            let marker = text[first.clone()].trim_matches([' ', '\t']);
+            let opening = matches!((&kind, marker), (BlockKind::FrontMatter, "---") | (BlockKind::Math, "$$"));
+            let c = if opening && c <= first.end && first.end < region.end { first.end + 1 } else { c };
+            let line = line_range(text, c);
+            if kind == BlockKind::FrontMatter
+                && line.start == first.end + 1
+                && text[line.start..c].trim().is_empty()
+                && !looks_like_yaml_mapping(&text[line.start..region.end])
+            {
+                // An empty first line makes a non-mapping body ambiguous with a rule.
+                return Some(Edited::new(splice(text, line.end..line.end, "\n"), line.end + 1));
+            }
             let indent: String = text[line.start..c].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
             Some(Edited::new(splice(text, c..c, &format!("\n{indent}")), c + 1 + indent.len()))
         }
@@ -903,15 +941,35 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) 
     }
     let marker = match &m.kind {
         MarkerKind::Bullet(b) => format!("{b} "),
-        MarkerKind::Ordered(n, d) => format!("{}{d} ", n + 1),
+        // Keep the width of the item's marker until the newly split list has been parsed.
+        MarkerKind::Ordered(_, d) => {
+            let (digits, _) = text[first.start + m.indent..content].split_once(*d).unwrap();
+            format!("{digits}{d} ")
+        }
         _ => String::new(),
     };
-    let task = if m.task.is_some() { "[ ] " } else { "" };
     let indent = " ".repeat(m.indent);
     let separator = if item.loose { "\n\n" } else { "\n" };
     // Text after the cursor moves into the new item, without leading spaces.
     let rest_start = c + (text[c..region.end].len() - text[c..region.end].trim_start_matches(' ').len());
+    let task = match item.task {
+        Some(true) if rest_start < region.end => "[x] ",
+        Some(_) => "[ ] ",
+        None => "",
+    };
     let insert = format!("{separator}{indent}{marker}{task}");
+    let finish = |mut edited: String, cursor: usize| {
+        let starts_item = text.get(content..c).is_some_and(|part| part.trim_matches([' ', '\t']).is_empty());
+        if item.task == Some(true)
+            && starts_item
+            && let Some(task) = &m.task
+        {
+            let check = first.start + task.start + 1;
+            edited.replace_range(check..check + 1, " ");
+        }
+        let edited = Edited::new(edited, cursor);
+        if item.number.is_some() { renumber_split_list(edited) } else { edited }
+    };
     let end = match below_item_text(text, region.end, m.indent) {
         _ if rest_start < region.end => rest_start,
         // Nested items stay nested, in the new item: an empty item can't have
@@ -921,13 +979,45 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) 
         // be typed before: they stay the item's, and the new one follows them.
         Some((_, false)) => {
             let at = text[..item.subtree_end.max(region.end)].trim_end().len();
-            let t = splice(text, at..at, &insert);
-            return Edited::new(t, at + insert.len());
+            return finish(splice(text, at..at, &insert), at + insert.len());
         }
         None => rest_start,
     };
-    let t = splice(text, c..end, &insert);
-    Edited::new(t, c + insert.len())
+    finish(splice(text, c..end, &insert), c + insert.len())
+}
+
+/// Writes the displayed numbers of the ordered list that received the split.
+fn renumber_split_list(edited: Edited) -> Edited {
+    let doc = Document::parse(&edited.text);
+    let text = &doc.text;
+    let line = line_range(text, edited.sel.head);
+    let Some(block) = doc.blocks.iter().find(|b| b.range.start == line.start) else { return edited };
+    let BlockKind::ListItem(item) = &block.kind else { return edited };
+    let Some(list) = doc.lists.iter().rev().find(|l| l.depth == item.depth && l.range.contains(&line.start)) else {
+        return edited;
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut pos = 0;
+    let mut caret = edited.sel.head;
+    for sibling in &doc.blocks {
+        if !list.range.contains(&sibling.range.start) || sibling.outer != block.outer {
+            continue;
+        }
+        let BlockKind::ListItem(item) = &sibling.kind else { continue };
+        let Some(number) = item.number.filter(|_| item.depth == list.depth) else { continue };
+        // CommonMark markers accept at most nine digits.
+        let number = number.min(999_999_999).to_string();
+        let span = item_span(text, sibling, item);
+        let (replacement, map) = renumber(&text[span.clone()], &number);
+        out.push_str(&text[pos..span.start]);
+        if span.contains(&edited.sel.head) || span.end == edited.sel.head {
+            caret = out.len() + map(edited.sel.head - span.start);
+        }
+        out.push_str(&replacement);
+        pos = span.end;
+    }
+    out.push_str(&text[pos..]);
+    Edited::new(out, caret)
 }
 
 /// The first block an item has below its text ending at `end` (its marker
@@ -1292,8 +1382,7 @@ pub fn move_item(text: &str, doc: &Document, region: Range<usize>, sel: Sel, dow
     let span = |i: usize| {
         let b = &doc.blocks[i];
         let BlockKind::ListItem(p) = &b.kind else { return b.range.clone() };
-        let end = text[..p.subtree_end.max(b.range.end)].trim_end().len().max(b.range.end);
-        b.range.start..line_range(text, end).end
+        item_span(text, b, p)
     };
     let (a, b) = if down { (span(index), span(other)) } else { (span(other), span(index)) };
     let digits = |r: &Range<usize>| -> Option<&str> {
@@ -1331,6 +1420,14 @@ pub fn move_item(text: &str, doc: &Document, region: Range<usize>, sel: Sel, dow
     Some(Edited { sel: Sel { anchor: map(sel.anchor), head: map(sel.head) }, text: out, pending: None })
 }
 
+fn item_span(text: &str, block: &super::Block, item: &ListItem) -> Range<usize> {
+    let end = text[..item.subtree_end.max(block.range.end)]
+        .trim_end_matches([' ', '\t', '\r', '\n'])
+        .len()
+        .max(block.range.end);
+    block.range.start..line_range(text, end).end
+}
+
 /// A list item's lines `sub` with the number of its marker replaced by
 /// `number` (nothing changes when it is empty), its further lines indented
 /// as much more or less as the marker got wider or narrower; and where each
@@ -1353,7 +1450,7 @@ fn renumber(sub: &str, number: &str) -> (String, impl Fn(usize) -> usize + use<>
             out.push_str(&line[..indent]);
             out.push_str(number);
             (indent + old, indent + number.len())
-        } else if line.trim().is_empty() {
+        } else if line.trim_matches([' ', '\t', '\r']).is_empty() {
             (0, 0)
         } else if wider >= 0 {
             out.push_str(&" ".repeat(wider as usize));
@@ -1475,7 +1572,8 @@ mod tests {
         // At the end or the start: an empty paragraph, without source yet.
         assert_eq!(enter_at("one‸\n\nthree"), "one\n\n¶\n\nthree");
         assert_eq!(enter_at("one‸"), "one\n\n¶");
-        assert_eq!(enter_at("‸one"), "¶\n\none");
+        assert_eq!(enter_at("‸one"), "\n\n‸one");
+        assert_eq!(enter_at("> ‸one\n>\n> two"), ">\n>\n> ‸one\n>\n> two");
         assert_eq!(enter_at("# Plan‸"), "# Plan\n\n¶");
         assert_eq!(enter_at("# Pl‸an"), "# Pl\n\n‸an");
     }
@@ -1501,12 +1599,21 @@ mod tests {
     }
 
     #[test]
+    fn enter_preserves_legacy_front_matter_with_a_scalar_body() {
+        let text = enter_at("---\n‸title\n---");
+        assert_eq!(text, "---\ntitle\n‸\n---");
+        assert_eq!(Document::parse(&text.replace('‸', "")).blocks[0].kind, BlockKind::FrontMatter);
+    }
+
+    #[test]
     fn enter_continues_lists() {
         assert_eq!(enter_at("- one‸"), "- one\n- ‸");
         assert_eq!(enter_at("* one‸"), "* one\n* ‸");
         assert_eq!(enter_at("3. one‸"), "3. one\n4. ‸");
         assert_eq!(enter_at("1) one‸"), "1) one\n2) ‸");
         assert_eq!(enter_at("- [x] done‸"), "- [x] done\n- [ ] ‸");
+        assert_eq!(enter_at("- [x] ‸done"), "- [ ] \n- [x] ‸done");
+        assert_eq!(enter_at("- [x] do‸ne"), "- [x] do\n- [x] ‸ne");
         assert_eq!(enter_at("- on‸e"), "- on\n- ‸e");
         assert_eq!(enter_at("- a\n  - b‸"), "- a\n  - b\n  - ‸");
         assert_eq!(enter_at("- a\n\n- b‸"), "- a\n\n- b\n\n- ‸");
@@ -1528,7 +1635,7 @@ mod tests {
             enter_at("* aaa‸\n\n  \n  ```json\n  aaa\n  ```\n"),
             "* aaa\n\n  \n  ```json\n  aaa\n  ```\n\n* ‸\n"
         );
-        assert_eq!(enter_at("1. a‸\n   ```\n   x\n   ```\n2. b"), "1. a\n   ```\n   x\n   ```\n2. ‸\n2. b");
+        assert_eq!(enter_at("1. a‸\n   ```\n   x\n   ```\n2. b"), "1. a\n   ```\n   x\n   ```\n2. ‸\n3. b");
         assert_eq!(enter_at("> - a‸\n>\n>   > q"), "> - a\n>\n>   > q\n>\n> - ‸");
         // With text moving into the new item, the blank line stays.
         assert_eq!(enter_at("* a‸b\n\n  * c"), "* a\n\n* ‸b\n\n  * c");
@@ -1552,13 +1659,20 @@ mod tests {
         assert_eq!(enter_at("> one‸two"), "> one\n>\n> ‸two");
         // Lists in a quote.
         assert_eq!(enter_at("> - a‸"), "> - a\n> - ‸");
-        assert_eq!(enter_at("> 1. a‸\n> 2. b"), "> 1. a\n> 2. ‸\n> 2. b");
+        assert_eq!(enter_at("> 1. a‸\n> 2. b"), "> 1. a\n> 2. ‸\n> 3. b");
         assert_eq!(enter_at("> - a\n> - ‸"), "> - a\n>\n> ¶");
         assert_eq!(enter_at("> - ‸"), "> ¶");
         // A heading in a quote.
         assert_eq!(enter_at("> # H‸\n>\n> p"), "> # H\n>\n> ¶\n>\n> p");
         // A quote in a list item.
         assert_eq!(enter_at("- a\n\n  > q‸"), "- a\n\n  > q\n  >\n  > ¶");
+    }
+
+    #[test]
+    fn splitting_an_ordered_item_renumbers_its_siblings_and_keeps_children() {
+        assert_eq!(enter_at("3. ‸one\n3. two\n9. three"), "3. \n4. ‸one\n5. two\n6. three");
+        assert_eq!(enter_at("9. ‸one\n   - child\n9. two"), "9. \n10. ‸one\n    - child\n11. two");
+        assert_eq!(enter_at("999999999. ‸one"), "999999999. \n999999999. ‸one");
     }
 
     #[test]
