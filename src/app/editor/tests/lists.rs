@@ -1,5 +1,5 @@
-//! The blank lines of the lists the editor edits: one form for all the
-//! items of a list, loose only where a block needs a blank line.
+//! Editing lists through the page editor, including keyboard indentation
+//! and the blank lines of lists changed by an edit.
 
 use super::*;
 
@@ -204,6 +204,102 @@ fn backspace_in_an_empty_task_item_makes_a_paragraph_at_once() {
     editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
     editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
     assert_eq!(page_text(&app, id), "- [ ] a\n- [ ] \n");
+}
+
+#[test]
+fn tab_at_a_parent_indents_its_first_child() {
+    let original = "* aaa\n* bbb\n  * ccc\n  * ddd\n";
+    let (mut app, _f, _, _) = app_with_page(original);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "bb");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(page_text(&app, id), "* aaa\n* bbb\n  * ddd\n    * ccc\n");
+    let page = &app.editors[&id].page;
+    assert_eq!(page.sel().head, page.text().find("bbb").unwrap() + 2);
+    assert_eq!(page.region_text(), Some("* bbb"));
+
+    command(&mut app, id, EditorCommand::Undo);
+    assert_eq!(page_text(&app, id), original);
+}
+
+#[test]
+fn tab_indents_a_selected_parent_and_child_without_the_following_child() {
+    let original = "* aaa\n* bbb\n  * ccc\n  * ddd\n";
+    let (mut app, _f, _, _) = app_with_page(original);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "bbb");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    let tab = key_event(Key::Named(Named::Tab), Modifiers::empty());
+    send(&mut app, Message::Window(id, WindowEvent::Key(tab)));
+    assert_eq!(page_text(&app, id), "* aaa\n  * bbb\n    * ccc\n  * ddd\n");
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 2)));
+
+    command(&mut app, id, EditorCommand::Undo);
+    assert_eq!(page_text(&app, id), original);
+}
+
+#[test]
+fn tab_moves_selected_siblings_as_a_group() {
+    let original = "> - aaa\n> - bbb\n> - ccc\n> - ddd\n";
+    let (mut app, _f, _, _) = app_with_page(original);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "ccc");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftUp));
+    let page = |app: &App| app.editors[&id].page.selected_blocks();
+    assert_eq!(page(&app), Some((2, 1)));
+    let tab = key_event(Key::Named(Named::Tab), Modifiers::empty());
+    send(&mut app, Message::Window(id, WindowEvent::Key(tab)));
+    assert_eq!(page_text(&app, id), "> - aaa\n>   - bbb\n>   - ccc\n> - ddd\n");
+    assert_eq!(page(&app), Some((2, 1)));
+
+    let tab = key_event(Key::Named(Named::Tab), Modifiers::SHIFT);
+    send(&mut app, Message::Window(id, WindowEvent::Key(tab)));
+    assert_eq!(page_text(&app, id), original);
+    assert_eq!(page(&app), Some((2, 1)));
+
+    command(&mut app, id, EditorCommand::Undo);
+    assert_eq!(page_text(&app, id), "> - aaa\n>   - bbb\n>   - ccc\n> - ddd\n");
+    command(&mut app, id, EditorCommand::Undo);
+    assert_eq!(page_text(&app, id), original);
+}
+
+#[test]
+fn tab_aligns_selected_siblings_with_different_marker_columns() {
+    let (mut app, _f, _, _) = app_with_page("   * aaa\n   * bbb\n* ccc\n* ddd\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "bbb");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    let tab = key_event(Key::Named(Named::Tab), Modifiers::empty());
+    send(&mut app, Message::Window(id, WindowEvent::Key(tab)));
+    assert_eq!(page_text(&app, id), "   * aaa\n     * bbb\n     * ccc\n* ddd\n");
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 2)));
+}
+
+#[test]
+fn tab_keeps_an_ordered_child_as_a_list_item() {
+    let (mut app, _f, _, _) = app_with_page("* aaa\n* bbb\n  1. ccc\n  2. ddd\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "bbb");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(page_text(&app, id), "* aaa\n* bbb\n  1. ddd\n\n     2. ccc\n");
+    let blocks = &app.editors[&id].page.doc().blocks;
+    assert!(matches!(&blocks[3].kind, crate::markdown::BlockKind::ListItem(item) if item.depth == 2));
+}
+
+#[test]
+fn tab_respects_selection_and_list_boundaries() {
+    let original = "- aaa\n- bbb\n  - child\n- ccc\n";
+    let (mut app, _f, _, _) = app_with_page(original);
+    let id = open_with_f1(&mut app);
+    select(&mut app, id, "bbb");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(page_text(&app, id), "- aaa\n  - bbb\n    - child\n- ccc\n");
+
+    click_after(&mut app, id, "child");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(page_text(&app, id), "- aaa\n  - bbb\n    - child\n- ccc\n");
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((2, 3)));
 }
 
 /// Ctrl+Up / Ctrl+Down, as the window gets them.

@@ -108,6 +108,7 @@ impl Editor {
         let Some((anchor, head)) = self.page.selected_blocks() else { return Task::none() };
         let last = self.page.doc().blocks.len().saturating_sub(1);
         match key {
+            Key::Named(Named::Tab) if !(m.control() || m.command() || m.alt()) => self.indent_selected_items(m.shift()),
             Key::Named(Named::ArrowUp | Named::ArrowDown) if m.shift() => {
                 let up = *key == Key::Named(Named::ArrowUp);
                 let head = if up { head.saturating_sub(1) } else { (head + 1).min(last) };
@@ -140,6 +141,18 @@ impl Editor {
         }
     }
 
+    fn indent_selected_items(&mut self, outdent: bool) -> Task<EditorMsg> {
+        let Some((anchor, head)) = self.page.selected_blocks() else { return Task::none() };
+        let doc = self.page.doc();
+        let sel = Sel { anchor: doc.blocks[anchor].range.start, head: doc.blocks[head].range.start };
+        if let Some(edited) =
+            edit::indent_list_blocks(self.page.text(), doc, anchor.min(head), anchor.max(head), sel, outdent)
+        {
+            self.page.apply_to_blocks(edited);
+        }
+        self.focus()
+    }
+
     pub(super) fn on_action(&mut self, action: Action) -> Task<EditorMsg> {
         self.menu = None;
         self.select_all_again = false;
@@ -165,6 +178,9 @@ impl Editor {
         self.select_all_again = false;
         if self.source.is_some() {
             return self.source_bind(bind, prefs);
+        }
+        if matches!(bind, Bind::Tab | Bind::ShiftTab) && self.page.selected_blocks().is_some() {
+            return self.indent_selected_items(bind == Bind::ShiftTab);
         }
         let Some(active) = self.page.active() else { return Task::none() };
         let region = active.region.clone();
@@ -201,7 +217,7 @@ impl Editor {
             }
             Bind::Tab | Bind::ShiftTab => {
                 let outdent = bind == Bind::ShiftTab;
-                if let Some(e) = edit::nested(&text, doc, region, sel, |t, d, r, s| edit::indent(t, d, r, s, outdent)) {
+                if let Some(e) = edit::indent(&text, doc, region, sel, outdent) {
                     self.page.apply(e);
                 }
             }

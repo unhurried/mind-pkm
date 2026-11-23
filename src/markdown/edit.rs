@@ -1247,17 +1247,41 @@ pub fn delete(text: &str, doc: &Document, region: Range<usize>, c: usize) -> Opt
     }
 }
 
-/// Tab (indent) or Shift+Tab (outdent) in the region: list items move a
-/// level with their nested items; code lines are indented. None when Tab
-/// has nothing to do here (it is swallowed).
+/// Tab or Shift+Tab while editing a block in the rendered page.
 pub fn indent(text: &str, doc: &Document, region: Range<usize>, sel: Sel, outdent: bool) -> Option<Edited> {
+    let block = doc.block_at(region.start)?;
+    if let BlockKind::ListItem(item) = &doc.blocks[block].kind {
+        let first_child = (!outdent && sel.is_empty())
+            .then(|| {
+                doc.blocks[block + 1..].iter().take_while(|b| b.range.start < item.subtree_end).find(|b| {
+                    b.outer == doc.blocks[block].outer
+                        && matches!(&b.kind, BlockKind::ListItem(i) if i.depth == item.depth + 1)
+                })
+            })
+            .flatten();
+        let edited = if let Some(child) = first_child {
+            indent_first_child(text, doc, child.range.clone(), sel)
+        } else {
+            shift_list_items(text, doc, block, block, sel, outdent, true)
+        };
+        return edited.or_else(|| Some(Edited { text: text.to_string(), sel, pending: None }));
+    }
     match region_kind(doc, text, &region) {
-        BlockKind::ListItem(_) => indent_list_item(text, doc, region, sel, outdent),
         BlockKind::Code { .. } | BlockKind::Math | BlockKind::Html | BlockKind::FrontMatter => {
-            Some(indent_lines(text, sel, outdent))
+            nested(text, doc, region, sel, |t, _, _, s| Some(indent_lines(t, s, outdent)))
         }
         _ => None,
     }
+}
+
+/// The first child has no preceding sibling. Place it after the next
+/// sibling and nest it there, as one edit with the caret still in the parent.
+fn indent_first_child(text: &str, doc: &Document, child: Range<usize>, sel: Sel) -> Option<Edited> {
+    let caret = Sel::caret(child.start);
+    let reordered = nested(text, doc, child, caret, |t, d, r, s| move_item(t, d, r, s, true))?;
+    let reordered_doc = Document::parse(&reordered.text);
+    let child = reordered_doc.block_at(reordered.sel.head)?;
+    shift_list_items(&reordered.text, &reordered_doc, child, child, sel, false, true)
 }
 
 const CODE_INDENT: &str = "    ";
@@ -1299,70 +1323,165 @@ fn indent_lines(text: &str, sel: Sel, outdent: bool) -> Edited {
     Edited { text: t, sel: Sel { anchor: s, head: e }, pending: None }
 }
 
-fn indent_list_item(text: &str, doc: &Document, region: Range<usize>, sel: Sel, outdent: bool) -> Option<Edited> {
-    let index = doc.blocks.iter().position(|b| b.range.start == region.start)?;
-    let BlockKind::ListItem(item) = &doc.blocks[index].kind else { return None };
-    let first = line_range(text, region.start);
-    let m = line_marker(&text[first.clone()])?;
-    // The item with its nested items.
-    let end = text[..item.subtree_end].trim_end().len().max(region.end);
-    let amount = if outdent {
-        if item.depth == 0 {
-            return Some(Edited { text: text.to_string(), sel, pending: None });
-        }
-        m.indent - parent_indent(text, region.start, m.indent)
-    } else {
-        // Under the previous item of the same list (past the blocks inside items).
-        let outer = doc.blocks[index].outer.len();
-        let prev = doc.blocks[..index].iter().rev().find_map(|b| match &b.kind {
-            _ if b.outer.len() > outer => None,
-            BlockKind::ListItem(p) if p.depth <= item.depth => Some((b, p.depth)),
-            BlockKind::ListItem(_) => None,
-            _ => Some((b, usize::MAX)),
-        });
-        let Some((prev, depth)) = prev.filter(|(_, d)| *d == item.depth) else {
-            return Some(Edited { text: text.to_string(), sel, pending: None });
-        };
-        let _ = depth;
-        let pm = line_marker(&text[line_range(text, prev.range.start)])?;
-        pm.end - pm.indent - pm.task.map_or(0, |t| t.len())
-    };
-    let mut out = String::new();
-    let shift = |offset: usize| -> isize {
-        // How far `offset` moves: the change of every line start before it.
-        let mut delta = 0isize;
-        let mut pos = first.start;
-        for line in text[first.start..end].split('\n') {
-            if pos > offset {
-                break;
-            }
-            let spaces = line.len() - line.trim_start_matches(' ').len();
-            if outdent {
-                delta -= spaces.min(amount) as isize;
-            } else if !line.trim().is_empty() {
-                delta += amount as isize;
-            }
-            pos += line.len() + 1;
-        }
-        delta
-    };
-    let (s, h) = (shift(sel.anchor), shift(sel.head));
-    for line in text[first.start..end].split('\n') {
-        if outdent {
-            let spaces = line.len() - line.trim_start_matches(' ').len();
-            out.push_str(&line[spaces.min(amount)..]);
-        } else if line.trim().is_empty() {
-            out.push_str(line);
-        } else {
-            out.push_str(&" ".repeat(amount));
-            out.push_str(line);
-        }
-        out.push('\n');
+/// Moves selected list blocks by one level. The endpoints are in document order.
+pub fn indent_list_blocks(
+    text: &str,
+    doc: &Document,
+    first: usize,
+    last: usize,
+    sel: Sel,
+    outdent: bool,
+) -> Option<Edited> {
+    shift_list_items(text, doc, first, last, sel, outdent, outdent)
+}
+
+fn shift_list_items(
+    text: &str,
+    doc: &Document,
+    first: usize,
+    last: usize,
+    sel: Sel,
+    outdent: bool,
+    include_children: bool,
+) -> Option<Edited> {
+    let (head, tail) = (&doc.blocks[first], &doc.blocks[last]);
+    let (BlockKind::ListItem(item), BlockKind::ListItem(last_item)) = (&head.kind, &tail.kind) else { return None };
+    let list = item_list(doc, first, item)?;
+    if head.outer != tail.outer || item.depth > last_item.depth || tail.range.start > list.range.end {
+        return None;
     }
-    out.pop();
-    let t = splice(text, first.start..end, &out);
-    let clamp = |o: usize, d: isize| ((o as isize + d).max(first.start as isize)) as usize;
-    Some(Edited { text: t, sel: Sel { anchor: clamp(sel.anchor, s), head: clamp(sel.head, h) }, pending: None })
+
+    let preceding = doc.blocks[..first].iter().rev().filter(|b| b.outer == head.outer);
+    let parent = if outdent {
+        let depth = item.depth.checked_sub(1)?;
+        preceding.filter(|b| b.range.start <= list.range.start).find(
+            |b| matches!(&b.kind, BlockKind::ListItem(i) if i.depth == depth && i.subtree_end > head.range.start),
+        )?
+    } else {
+        preceding
+            .take_while(|b| b.range.start >= list.range.start)
+            .find(|b| matches!(&b.kind, BlockKind::ListItem(i) if i.depth == item.depth))?
+    };
+
+    let outer = doc.outer_kinds(first);
+    let item_line = |at| {
+        let line = &text[line_range(text, at)];
+        &line[prefix_len(line, outer.iter().copied())..]
+    };
+    let marker = line_marker(item_line(head.range.start))?;
+    let parent_line = item_line(parent.range.start);
+    let parent_marker = line_marker(parent_line)?;
+    let column = if outdent {
+        parent_marker.indent
+    } else {
+        let end = parent_marker.end - parent_marker.task.map_or(0, |task| task.len());
+        end + usize::from(end == parent_line.len() && !parent_line.ends_with([' ', '\t']))
+    };
+
+    let mut end = item_span(text, tail, last_item).end;
+    if !include_children
+        && let Some(next) = doc.blocks[last + 1..]
+            .iter()
+            .take_while(|b| b.range.start < end)
+            .find(|b| b.outer == tail.outer && matches!(b.kind, BlockKind::ListItem(_)))
+    {
+        end = text[..line_range(text, next.range.start).start].trim_end_matches([' ', '\t', '\r', '\n']).len();
+        end = line_range(text, end.max(tail.range.end)).end;
+    }
+    let span = line_range(text, head.range.start).start..end;
+    // Siblings can start at different columns in the source. Each selected
+    // sibling and its contents shift from its own marker to the destination.
+    let mut columns = vec![(span.start, marker.indent)];
+    for b in &doc.blocks[first + 1..last + 1] {
+        if b.outer == head.outer && matches!(&b.kind, BlockKind::ListItem(i) if i.depth == item.depth) {
+            let start = line_range(text, b.range.start).start;
+            columns.push((start, line_marker(item_line(start))?.indent));
+        }
+    }
+    let mut edited = shift_list_lines(text, span.clone(), sel, &outer, &columns, column);
+    if !outdent && matches!(marker.kind, MarkerKind::Ordered(n, _) if n != 1) {
+        // An ordered list cannot interrupt a paragraph unless it starts at 1.
+        // If this marker was absorbed into the parent, separate the blocks.
+        let parsed = Document::parse(&edited.text);
+        let nested = parsed
+            .block_at(span.start)
+            .is_some_and(|i| matches!(&parsed.blocks[i].kind, BlockKind::ListItem(it) if it.depth == item.depth + 1));
+        if !nested {
+            let separator = format!("{}\n", container_prefix(&outer, true));
+            edited.text.insert_str(span.start, &separator);
+            edited.sel.anchor += separator.len() * usize::from(sel.anchor >= span.start);
+            edited.sel.head += separator.len() * usize::from(sel.head >= span.start);
+        }
+    }
+    Some(edited)
+}
+
+fn shift_list_lines(
+    text: &str,
+    span: Range<usize>,
+    sel: Sel,
+    outer: &[ContainerKind],
+    columns: &[(usize, usize)],
+    to: usize,
+) -> Edited {
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..span.start]);
+    let mut mapped = sel;
+    let mut pos = span.start;
+    let mut columns = columns.iter().copied().peekable();
+    let mut from = 0;
+    for line in text[span.clone()].split('\n') {
+        if let Some((start, col)) = columns.peek().copied()
+            && start == pos
+        {
+            from = col;
+            columns.next();
+        }
+        let prefix = prefix_len(line, outer.iter().copied());
+        out.push_str(&line[..prefix]);
+        let rest = &line[prefix..];
+        let spaces = rest.len() - rest.trim_start_matches(' ').len();
+        let remove = spaces.min(from.saturating_sub(to));
+        let blank = rest.trim_matches([' ', '\t', '\r']).is_empty();
+        let mut add = if blank { 0 } else { to.saturating_sub(from) };
+        if add > 0 && line[..prefix].ends_with('>') {
+            // A quote can originally have no space between its marker and text.
+            add += 1;
+        }
+        let out_start = out.len();
+        out.push_str(&" ".repeat(add));
+        out.push_str(&rest[remove..]);
+        let map = |offset: usize, mapped: &mut usize| {
+            if (pos..=pos + line.len()).contains(&offset) {
+                let at = offset - pos;
+                *mapped = if at < prefix {
+                    out_start - prefix + at
+                } else {
+                    out_start + add + (at - prefix).saturating_sub(remove)
+                };
+            }
+        };
+        map(sel.anchor, &mut mapped.anchor);
+        map(sel.head, &mut mapped.head);
+        pos += line.len() + 1;
+        if pos <= span.end {
+            out.push('\n');
+        }
+    }
+    let map_after = |offset: usize, mapped: &mut usize| {
+        if offset > span.end {
+            *mapped = out.len() + offset - span.end;
+        }
+    };
+    map_after(sel.anchor, &mut mapped.anchor);
+    map_after(sel.head, &mut mapped.head);
+    out.push_str(&text[span.end..]);
+    Edited { text: out, sel: mapped, pending: None }
+}
+
+fn item_list<'a>(doc: &'a Document, block: usize, item: &ListItem) -> Option<&'a super::parse::List> {
+    let start = doc.blocks[block].range.start;
+    doc.lists.iter().rev().find(|l| l.depth == item.depth && l.range.start <= start && start <= l.range.end)
 }
 
 /// Ctrl+Up / Ctrl+Down in a list item: the item, with its nested items and
@@ -1373,9 +1492,7 @@ pub fn move_item(text: &str, doc: &Document, region: Range<usize>, sel: Sel, dow
     let index = doc.blocks.iter().position(|b| b.range.start == region.start)?;
     let block = &doc.blocks[index];
     let BlockKind::ListItem(item) = &block.kind else { return None };
-    let start = block.range.start;
-    let list =
-        doc.lists.iter().rev().find(|l| l.depth == item.depth && l.range.start <= start && start <= l.range.end)?;
+    let list = item_list(doc, index, item)?;
     // The items of its list: the deeper ones are nested in them, those in
     // other containers (a quote in an item) belong to lists of their own.
     let siblings: Vec<usize> = (0..doc.blocks.len())
@@ -1574,7 +1691,7 @@ mod tests {
     fn tab_at(marked: &str, outdent: bool) -> String {
         let (text, region, c) = setup(marked);
         let doc = Document::parse(&text);
-        show(&nested(&text, &doc, region, Sel::caret(c), |t, d, r, s| indent(t, d, r, s, outdent)).expect("handled"))
+        show(&indent(&text, &doc, region, Sel::caret(c), outdent).expect("handled"))
     }
 
     #[test]
@@ -1857,11 +1974,19 @@ mod tests {
     }
 
     #[test]
-    fn tab_nests_list_items_with_their_children() {
-        assert_eq!(tab_at("- a\n- ‸b\n  - c\n- d", false), "- a\n  - ‸b\n    - c\n- d");
-        assert_eq!(tab_at("1. a\n2. ‸b", false), "1. a\n   2. ‸b");
-        // The first item can't be nested.
+    fn tab_nests_the_first_child_under_its_next_sibling() {
+        assert_eq!(tab_at("- a\n- b‸\n  - c\n  - d", false), "- a\n- b‸\n  - d\n    - c");
+        assert_eq!(tab_at("> - a\n> - b‸\n>   - c\n>   - d\n> - e", false), "> - a\n> - b‸\n>   - d\n>     - c\n> - e");
+        assert_eq!(tab_at("- a\n- b‸\n  - c\n- d", false), "- a\n- b‸\n  - c\n- d");
+    }
+
+    #[test]
+    fn tab_on_a_leaf_uses_its_previous_sibling() {
+        assert_eq!(tab_at("- a\n- ‸b\n- c", false), "- a\n  - ‸b\n- c");
+        assert_eq!(tab_at("1. a\n2. ‸b", false), "1. a\n\n   2. ‸b");
         assert_eq!(tab_at("- ‸a\n- b", false), "- ‸a\n- b");
+        assert_eq!(tab_at("- a\n\n+ b‸", false), "- a\n\n+ b‸");
+        assert_eq!(tab_at("- a\n- ‸", false), "- a\n  - ‸");
         assert_eq!(tab_at("- a\n  - ‸b\n    - c", true), "- a\n- ‸b\n  - c");
         assert_eq!(tab_at("- ‸a", true), "- ‸a");
     }
