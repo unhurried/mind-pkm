@@ -1132,7 +1132,16 @@ impl Page {
         self.apply_edit(edited, true);
     }
 
-    fn apply_edit(&mut self, mut edited: Edited, tidy: bool) {
+    /// Applies a structural edit whose mapped selection endpoints identify
+    /// the blocks that stay selected.
+    pub fn apply_to_blocks(&mut self, edited: Edited) {
+        let sel = self.apply_edit(edited, true);
+        if let (Some(anchor), Some(head)) = (self.doc.block_at(sel.anchor), self.doc.block_at(sel.head)) {
+            self.select_blocks(anchor, head);
+        }
+    }
+
+    fn apply_edit(&mut self, mut edited: Edited, tidy: bool) -> Sel {
         let before = self.snapshot();
         let changed = edited.text != self.text;
         // The parse of the text, when tidying it gave one.
@@ -1177,6 +1186,7 @@ impl Page {
             self.history.record(before, None, Instant::now());
         }
         self.history.break_typing();
+        edited.sel
     }
 
     /// Applies an edit made by typing `typed` in the live region (auto-pairing):
