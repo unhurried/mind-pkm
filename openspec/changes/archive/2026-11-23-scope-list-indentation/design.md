@@ -14,4 +14,4 @@ Keep list depth changes local to the target items. Use the same keyboard entry p
 
 ## Risks / Trade-offs
 
-A whole-block selection can span different lists. The range can end in a descendant within the starting list, provided the first item has a preceding sibling. A trailing unselected item keeps its source indentation, with list spacing normalized as usual.
+A whole-block selection can span different lists. The range can end in a descendant within the starting list, provided the first item has a preceding sibling. Trailing unselected items keep their depth. Their source indentation follows the new parent's content column when the marker widths differ.

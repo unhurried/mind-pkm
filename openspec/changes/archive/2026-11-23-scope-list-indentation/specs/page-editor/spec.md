@@ -11,6 +11,14 @@ In the rendered editor, Tab at a caret in a parent item SHALL move its first chi
 - **WHEN** `bbb` and `ccc` in that same list are selected as whole blocks and Tab is pressed
 - **THEN** `bbb` becomes a child of `aaa`, `ccc` stays a child of `bbb`, `ddd` stays at its original depth as a sibling of `bbb`, and the selection stays on `bbb` and `ccc`
 
+#### Scenario: Different marker widths
+- **WHEN** a selected parent and child are indented under an ordered item with a wider marker
+- **THEN** the selected items deepen by one level, and following unselected items keep their original depth
+
+#### Scenario: Indenting task items
+- **WHEN** Tab moves one or more task items
+- **THEN** each item keeps its checkbox state
+
 #### Scenario: Nesting sibling items together
 - **WHEN** one or more consecutive sibling items after the first are selected as whole blocks and Tab is pressed
 - **THEN** they are nested at the same level under the item before the selection

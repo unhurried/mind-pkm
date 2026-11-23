@@ -1371,12 +1371,7 @@ fn shift_list_items(
     let marker = line_marker(item_line(head.range.start))?;
     let parent_line = item_line(parent.range.start);
     let parent_marker = line_marker(parent_line)?;
-    let column = if outdent {
-        parent_marker.indent
-    } else {
-        let end = parent_marker.end - parent_marker.task.map_or(0, |task| task.len());
-        end + usize::from(end == parent_line.len() && !parent_line.ends_with([' ', '\t']))
-    };
+    let column = if outdent { parent_marker.indent } else { list_content_column(parent_line, &parent_marker) };
 
     let mut end = item_span(text, tail, last_item).end;
     if !include_children
@@ -1388,17 +1383,60 @@ fn shift_list_items(
         end = text[..line_range(text, next.range.start).start].trim_end_matches([' ', '\t', '\r', '\n']).len();
         end = line_range(text, end.max(tail.range.end)).end;
     }
-    let span = line_range(text, head.range.start).start..end;
+    let start = line_range(text, head.range.start).start;
     // Siblings can start at different columns in the source. Each selected
     // sibling and its contents shift from its own marker to the destination.
-    let mut columns = vec![(span.start, marker.indent)];
-    for b in &doc.blocks[first + 1..last + 1] {
-        if b.outer == head.outer && matches!(&b.kind, BlockKind::ListItem(i) if i.depth == item.depth) {
+    let mut columns = vec![(start, marker.indent, column)];
+    let mut last_root = first;
+    let mut root_end = item.subtree_end;
+    for (i, b) in doc.blocks.iter().enumerate().take(last + 1).skip(first + 1) {
+        if let BlockKind::ListItem(sibling) = &b.kind
+            && b.outer == head.outer
+            && sibling.depth == item.depth
+        {
             let start = line_range(text, b.range.start).start;
-            columns.push((start, line_marker(item_line(start))?.indent));
+            columns.push((start, line_marker(item_line(start))?.indent, column));
+            last_root = i;
+            root_end = sibling.subtree_end;
         }
     }
-    let mut edited = shift_list_lines(text, span.clone(), sel, &outer, &columns, column);
+    if !include_children && doc.blocks.get(last + 1).is_some_and(|b| b.range.start < root_end) {
+        // Trailing descendants keep their depth. Their new parents can have
+        // different marker widths, so old source columns may be too shallow
+        // or too deep for the new parent.
+        let root_indent = columns.last()?.1;
+        let mut parent_columns = vec![column];
+        for b in &doc.blocks[last_root..=last] {
+            if let BlockKind::ListItem(ancestor) = &b.kind
+                && b.outer == head.outer
+                && ancestor.subtree_end > tail.range.start
+            {
+                let line = item_line(b.range.start);
+                let marker = line_marker(line)?;
+                parent_columns.push(column + list_content_column(line, &marker).saturating_sub(root_indent));
+            }
+        }
+
+        let mut after_branch = end + 1;
+        columns.push((after_branch, 0, 0));
+        for b in doc.blocks[last + 1..].iter().take_while(|b| b.range.start < root_end) {
+            if let BlockKind::ListItem(branch) = &b.kind
+                && b.outer == head.outer
+                && b.range.start >= after_branch
+            {
+                let span = item_span(text, b, branch);
+                after_branch = span.end + 1;
+                let dest = *parent_columns.get(branch.depth.checked_sub(item.depth + 1)?)?;
+                let indent = line_marker(item_line(span.start))?.indent;
+                if indent != dest {
+                    columns.extend([(span.start, indent, dest), (after_branch, 0, 0)]);
+                    end = span.end;
+                }
+            }
+        }
+    }
+    let span = start..end;
+    let mut edited = shift_list_lines(text, span.clone(), sel, &outer, &columns);
     if !outdent && matches!(marker.kind, MarkerKind::Ordered(n, _) if n != 1) {
         // An ordered list cannot interrupt a paragraph unless it starts at 1.
         // If this marker was absorbed into the parent, separate the blocks.
@@ -1421,20 +1459,19 @@ fn shift_list_lines(
     span: Range<usize>,
     sel: Sel,
     outer: &[ContainerKind],
-    columns: &[(usize, usize)],
-    to: usize,
+    columns: &[(usize, usize, usize)],
 ) -> Edited {
     let mut out = String::with_capacity(text.len());
     out.push_str(&text[..span.start]);
     let mut mapped = sel;
     let mut pos = span.start;
     let mut columns = columns.iter().copied().peekable();
-    let mut from = 0;
+    let (mut from, mut to) = (0, 0);
     for line in text[span.clone()].split('\n') {
-        if let Some((start, col)) = columns.peek().copied()
+        while let Some((start, old, new)) = columns.peek().copied()
             && start == pos
         {
-            from = col;
+            (from, to) = (old, new);
             columns.next();
         }
         let prefix = prefix_len(line, outer.iter().copied());
@@ -1477,6 +1514,11 @@ fn shift_list_lines(
     map_after(sel.head, &mut mapped.head);
     out.push_str(&text[span.end..]);
     Edited { text: out, sel: mapped, pending: None }
+}
+
+fn list_content_column(line: &str, marker: &Marker) -> usize {
+    let end = marker.end - marker.task.as_ref().map_or(0, |task| task.len());
+    end + usize::from(end == line.len() && !line.ends_with([' ', '\t']))
 }
 
 fn item_list<'a>(doc: &'a Document, block: usize, item: &ListItem) -> Option<&'a super::parse::List> {

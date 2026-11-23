@@ -276,6 +276,51 @@ fn tab_aligns_selected_siblings_with_different_marker_columns() {
 }
 
 #[test]
+fn tab_keeps_unselected_ordered_items_at_their_depth() {
+    let original = "100. aaa\n1. bbb\n   1. ccc\n      1. eee\n   2. ddd\n      1. fff\n";
+    let (mut app, _f, _, _) = app_with_page(original);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "bbb");
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    let tab = key_event(Key::Named(Named::Tab), Modifiers::empty());
+    send(&mut app, Message::Window(id, WindowEvent::Key(tab)));
+
+    let page = &app.editors[&id].page;
+    assert_eq!(page.text(), "100. aaa\n     1. bbb\n        1. ccc\n        1. eee\n     2. ddd\n        1. fff\n");
+    assert_eq!(page.selected_blocks(), Some((1, 2)));
+    let depths: Vec<_> = page
+        .doc()
+        .blocks
+        .iter()
+        .map(|block| match &block.kind {
+            crate::markdown::BlockKind::ListItem(item) => item.depth,
+            _ => panic!("expected a list item"),
+        })
+        .collect();
+    assert_eq!(depths, [0, 1, 2, 2, 1, 2]);
+
+    command(&mut app, id, EditorCommand::Undo);
+    assert_eq!(page_text(&app, id), original);
+}
+
+#[test]
+fn tab_preserves_task_checkboxes_with_and_without_a_selection() {
+    let original = "- [ ] aaa\n- [x] bbb\n  - [x] ccc\n  - [ ] ddd\n";
+    let (mut app, _f, _, _) = app_with_page(original);
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "bbb");
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(page_text(&app, id), "- [ ] aaa\n- [x] bbb\n  - [ ] ddd\n    - [x] ccc\n");
+
+    command(&mut app, id, EditorCommand::Undo);
+    editor(&mut app, id, EditorMsg::Bind(Bind::ShiftDown));
+    let tab = key_event(Key::Named(Named::Tab), Modifiers::empty());
+    send(&mut app, Message::Window(id, WindowEvent::Key(tab)));
+    assert_eq!(page_text(&app, id), "- [ ] aaa\n  - [x] bbb\n    - [x] ccc\n  - [ ] ddd\n");
+    assert_eq!(app.editors[&id].page.selected_blocks(), Some((1, 2)));
+}
+
+#[test]
 fn tab_keeps_an_ordered_child_as_a_list_item() {
     let (mut app, _f, _, _) = app_with_page("* aaa\n* bbb\n  1. ccc\n  2. ddd\n");
     let id = open_with_f1(&mut app);
