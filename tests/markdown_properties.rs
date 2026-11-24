@@ -138,7 +138,9 @@ fn enter_changes_only_the_block(
                 && e.pending.is_none()
             {
                 let edited = Document::parse(&e.text);
-                if let Some((new_list, new_outer)) = ordered_list_at(&edited, list.range.start) {
+                // A blank line may be needed before a new empty first item.
+                let new_start = list.range.start + usize::from(e.text.as_bytes().get(list.range.start) == Some(&b'\n'));
+                if let Some((new_list, new_outer)) = ordered_list_at(&edited, new_start) {
                     prop_assert!(
                         e.text.starts_with(&text[..list.range.start]),
                         "before the ordered list of {:?}",
@@ -378,6 +380,18 @@ fn enter_before_an_ordered_marker_splits_before_the_text_and_renumbers() {
     let at = region.start;
     let edited = edit::enter(text, &doc, region, Sel::caret(at)).unwrap();
     assert_eq!(edited.text, "# Heading\n1. \n2. one\n3. one");
+    assert_eq!(edited.sel.head, edited.text.find("2. one").unwrap() + 3);
+}
+
+#[test]
+fn splitting_the_first_ordered_item_after_a_paragraph_keeps_the_list() {
+    let text = "text with **bold** and *em*\n1. one\n1. one\n1. one";
+    let doc = Document::parse(text);
+    let region = doc.blocks[1].range.clone();
+    let at = region.start;
+    enter_changes_only_the_block(text, &doc, region.clone(), at, false).unwrap();
+    let edited = edit::enter(text, &doc, region, Sel::caret(at)).unwrap();
+    assert_eq!(edited.text, "text with **bold** and *em*\n\n1. \n2. one\n3. one\n4. one");
     assert_eq!(edited.sel.head, edited.text.find("2. one").unwrap() + 3);
 }
 
