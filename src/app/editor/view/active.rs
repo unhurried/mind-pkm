@@ -3,7 +3,7 @@
 
 use super::blocks::{cell_base, cell_frame, math_view, mermaid_view, quote_view, sideways, table_row};
 use super::heading;
-use super::inline::{cell_lines, inline_text, run_font};
+use super::inline::{cell_lines, cell_text, run_font};
 use super::table_widths::{ColumnWidths, Piece};
 use super::theme::{
     CELL_PADDING, HEADING_SCALE, LINE_HEIGHT, LIST_INDENT, Palette, QUOTE_BAR, QUOTE_PADDING, TABLE_COLUMN_MAX, bold,
@@ -477,7 +477,11 @@ impl Editor {
             let mut frames = Row::new();
             for (c, inlines) in row_shown.iter().enumerate() {
                 let cell_width = widths.widths.get(c).copied().unwrap_or(40.0);
-                let align = t.align.get(c).copied().unwrap_or_default();
+                let align_x = match t.align.get(c) {
+                    Some(table::Align::Center) => Alignment::Center,
+                    Some(table::Align::Right) => Alignment::End,
+                    _ => Alignment::Start,
+                };
                 let selected = state.range.is_some_and(|range| range.contains((r, c)));
                 let active = (r, c) == state.cell;
                 let content: Element<EditorMsg> = match live_cell.take_if(|_| active) {
@@ -487,6 +491,7 @@ impl Editor {
                             // The cell frame handles a press that activated
                             // this cell and any resulting cell range drag.
                             .held(false)
+                            .table_cell(align_x, state.range.is_some())
                             .key_binding(move |k| keys::binding(k, bind));
                         mouse_area(editor)
                             .on_enter(EditorMsg::Table(TableMsg::Entered(r, c)))
@@ -494,12 +499,7 @@ impl Editor {
                             .on_right_press(EditorMsg::Table(TableMsg::Menu(r, c)))
                             .into()
                     }
-                    None => inline_text(inlines, base(r), ctx, None, None),
-                };
-                let align_x = match align {
-                    table::Align::Center => Alignment::Center,
-                    table::Align::Right => Alignment::End,
-                    _ => Alignment::Start,
+                    None => cell_text(inlines, base(r), ctx, cell_width, None, align_x),
                 };
                 let mut cell_box = container(content).width(cell_width).padding(CELL_PADDING).align_x(align_x);
                 if active {

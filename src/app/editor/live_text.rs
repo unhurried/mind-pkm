@@ -20,7 +20,9 @@ use iced::advanced::{Clipboard, Shell, image as core_image, input_method, mouse,
 use iced::time::{Duration, Instant};
 use iced::widget::text::{LineHeight, Shaping, Wrapping};
 use iced::widget::text_editor::{Binding, KeyPress, Motion, Status};
-use iced::{Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, keyboard, window};
+use iced::{
+    Alignment, Color, Element, Event, Font, Length, Pixels, Point, Rectangle, Renderer, Size, Theme, keyboard, window,
+};
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -116,6 +118,8 @@ pub struct LiveText<'a> {
     line_height: f32,
     selection: Color,
     caret: Color,
+    align_x: Alignment,
+    cell_range_selected: bool,
     /// The button is down from a press that began elsewhere (on the rendered
     /// block that became this one): moving the pointer selects from there.
     held: bool,
@@ -141,6 +145,8 @@ impl<'a> LiveText<'a> {
             line_height: 1.6,
             selection: Color::from_rgba(0.25, 0.5, 0.95, 0.25),
             caret: Color::BLACK,
+            align_x: Alignment::Start,
+            cell_range_selected: false,
             held: false,
             key_binding: Box::new(Binding::from_key_press),
         }
@@ -155,6 +161,12 @@ impl<'a> LiveText<'a> {
     pub fn colors(mut self, selection: Color, caret: Color) -> Self {
         self.selection = selection;
         self.caret = caret;
+        self
+    }
+
+    pub fn table_cell(mut self, align_x: Alignment, range_selected: bool) -> Self {
+        self.align_x = align_x;
+        self.cell_range_selected = range_selected;
         self
     }
 
@@ -382,6 +394,7 @@ impl LiveText<'_> {
         // Forget shapes no run uses any more (the empty line's stays).
         state.cache.retain(|k, _| k.text == " " || keys.iter().any(|x| x.as_ref() == Some(k)));
         state.flow = flow::layout(&items, width, empty, self.len);
+        state.flow.align_x(width, self.align_x);
         state.empty = empty;
         state.items = items;
         state.keys = keys;
@@ -780,7 +793,8 @@ impl LiveText<'_> {
             Binding::Custom(EditorMsg::Bind(b @ (Bind::Up | Bind::Down | Bind::ShiftUp | Bind::ShiftDown))) => {
                 let down = matches!(b, Bind::Down | Bind::ShiftDown);
                 let select = matches!(b, Bind::ShiftUp | Bind::ShiftDown);
-                match vertical(state, down) {
+                let target = if select && self.cell_range_selected { None } else { vertical(state, down) };
+                match target {
                     Some(at) => shell.publish(live(LiveMsg::MoveTo { at, select })),
                     None => {
                         state.preferred_x = None;

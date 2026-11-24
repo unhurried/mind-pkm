@@ -3,7 +3,7 @@
 
 use super::heading;
 use super::hit::{HitInfo, HitRun};
-use super::inline::{cell_lines, inline_text, paragraph_view};
+use super::inline::{cell_lines, cell_text, inline_text, paragraph_view};
 use super::rich::rich;
 use super::table_widths::ColumnWidths;
 use super::theme::{
@@ -148,6 +148,7 @@ fn code_text_view<'a>(
                     block,
                     runs: vec![HitRun { text: line.to_string(), size, font: code_font(), map: Some(map) }],
                     width: width - 2.0 * CODE_PADDING,
+                    align_x: Default::default(),
                 });
                 let mut area = mouse_area(rich.width(width - 2.0 * CODE_PADDING))
                     .on_press(EditorMsg::TextPressed)
@@ -329,7 +330,7 @@ fn table_view<'a>(t: &TableNode, ctx: &Ctx<'a>, block: usize, width: f32) -> Ele
                 _ => Alignment::Start,
             };
             contents = contents.push(
-                container(inline_text(&inlines, base(r), ctx, None, Some(block)))
+                container(cell_text(&inlines, base(r), ctx, w, Some(block), align_x))
                     .width(w)
                     .padding(CELL_PADDING)
                     .align_x(align_x),

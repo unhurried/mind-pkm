@@ -5,7 +5,7 @@ use super::blocks::{embed_view, image_view, math_view};
 use super::hit::{HitInfo, HitRun};
 use super::rich::rich;
 use super::table_widths::Piece;
-use super::theme::{LINE_HEIGHT, bold, code_font, italic};
+use super::theme::{CELL_PADDING, LINE_HEIGHT, bold, code_font, italic};
 use super::{Ctx, SpanLink, TextBase};
 use crate::app::editor::{EditorMsg, RightClick, TableMsg};
 use crate::app::press_point::press_in;
@@ -130,14 +130,42 @@ pub(super) fn inline_text<'a>(
     width: Option<f32>,
     block: Option<usize>,
 ) -> Element<'a, EditorMsg> {
+    text_lines(inlines, base, ctx, width, block, None)
+}
+
+/// The lines of a table cell, aligned individually within its padding.
+pub(super) fn cell_text<'a>(
+    inlines: &[Inline],
+    base: TextBase,
+    ctx: &Ctx<'a>,
+    cell_width: f32,
+    block: Option<usize>,
+    align_x: Alignment,
+) -> Element<'a, EditorMsg> {
+    let width = (cell_width - 2.0 * CELL_PADDING[1]).max(0.0);
+    text_lines(inlines, base, ctx, Some(width), block, Some(align_x))
+}
+
+fn text_lines<'a>(
+    inlines: &[Inline],
+    base: TextBase,
+    ctx: &Ctx<'a>,
+    width: Option<f32>,
+    block: Option<usize>,
+    cell_align: Option<Alignment>,
+) -> Element<'a, EditorMsg> {
     let mut lines: Vec<Element<'a, EditorMsg>> = Vec::new();
     for line in inlines.split(|i| matches!(i, Inline::Break { .. })) {
-        lines.push(text_line(line, base, ctx, width, block));
+        lines.push(text_line(line, base, ctx, width, block, cell_align));
     }
     if lines.len() == 1 {
         return lines.pop().unwrap_or_else(|| space().into());
     }
-    Column::with_children(lines).into()
+    let column = Column::with_children(lines);
+    match cell_align {
+        Some(align) => column.width(Fill).align_x(align).into(),
+        None => column.into(),
+    }
 }
 
 /// One line of text runs.
@@ -147,6 +175,7 @@ fn text_line<'a>(
     ctx: &Ctx<'a>,
     width: Option<f32>,
     block: Option<usize>,
+    cell_align: Option<Alignment>,
 ) -> Element<'a, EditorMsg> {
     let p = ctx.p;
     let mut spans: Vec<Span<'static, SpanLink, Font>> = Vec::new();
@@ -205,12 +234,17 @@ fn text_line<'a>(
         // An empty line keeps its height.
         return text(" ").size(base.size).line_height(LINE_HEIGHT).into();
     }
+    let align_x = cell_align.map_or_else(Default::default, Into::into);
     let mut rich = rich(spans, &ctx.editor.decoration_grid)
         .size(base.size)
         .font(base.font)
         .line_height(LINE_HEIGHT)
+        .align_x(align_x)
         .wrapping(Wrapping::WordOrGlyph);
-    if let Some(w) = width {
+    // A cell aligns each paragraph within its frame, so keep its width shrinkable.
+    if cell_align.is_none()
+        && let Some(w) = width
+    {
         rich = rich.width(w);
     }
     let Some(block) = block else {
@@ -222,7 +256,7 @@ fn text_line<'a>(
         return rich.into();
     };
     let rich = rich.on_link_click(|l: SpanLink| EditorMsg::Link(l.dest, l.at));
-    let info = Arc::new(HitInfo { block, runs: hits, width: width.unwrap_or(f32::INFINITY) });
+    let info = Arc::new(HitInfo { block, runs: hits, width: width.unwrap_or(f32::INFINITY), align_x });
     // Where an item dragged from the assets pane would go, in this text.
     let mark = ctx.editor.drop_mark_in(&info);
     let mut area =

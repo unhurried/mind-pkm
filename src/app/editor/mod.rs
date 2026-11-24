@@ -61,6 +61,8 @@ use iced::widget::operation;
 use iced::widget::text_editor::{Action, Content};
 use iced::{Point, Size, Subscription, Task, window};
 pub use keys::{Bind, EditorCommand};
+#[cfg(test)]
+pub(super) use live_text::CaretRect;
 pub use live_text::LiveMsg;
 pub use message::{DialogAnswer, EditorDialog, EditorMsg, Effect, RightClick};
 use page::Page;

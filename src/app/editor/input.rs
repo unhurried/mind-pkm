@@ -351,7 +351,12 @@ impl Editor {
         match msg {
             LiveMsg::Click { at, extend } => page.live_move_to(at, extend),
             LiveMsg::Drag(at) => page.live_move_to(at, true),
-            LiveMsg::MoveTo { at, select } => page.live_move_to(at, select),
+            LiveMsg::MoveTo { at, select } => {
+                if !select && let Some(range) = page.cell_range_mut() {
+                    *range = None;
+                }
+                page.live_move_to(at, select);
+            }
             LiveMsg::SelectWord(at) => page.live_select_word(at),
             LiveMsg::SelectAll => page.live_select_shown(None),
             LiveMsg::Motion { motion, select } => {
