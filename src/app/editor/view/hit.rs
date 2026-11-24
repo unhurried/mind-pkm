@@ -3,7 +3,7 @@
 use super::theme::{BODY_SIZE, LINE_HEIGHT};
 use crate::app::view::APP_FONT;
 use crate::markdown::content::SourceMap;
-use iced::advanced::text::{Paragraph as _, Shaping, Wrapping};
+use iced::advanced::text::{Alignment, Paragraph as _, Shaping, Wrapping};
 use iced::widget::text::{LineHeight, Span};
 use iced::{Font, Point, Size};
 
@@ -15,6 +15,7 @@ pub struct HitInfo {
     pub runs: Vec<HitRun>,
     /// The width the text was laid out in.
     pub width: f32,
+    pub align_x: Alignment,
 }
 
 #[derive(Debug, Clone)]
@@ -37,7 +38,7 @@ fn hit_paragraph(info: &HitInfo) -> iced::advanced::graphics::text::Paragraph {
         size: size.into(),
         line_height: LineHeight::Relative(LINE_HEIGHT),
         font: APP_FONT,
-        align_x: iced::advanced::text::Alignment::Default,
+        align_x: info.align_x,
         align_y: iced::alignment::Vertical::Top,
         shaping: Shaping::Advanced,
         wrapping: Wrapping::WordOrGlyph,
@@ -107,7 +108,12 @@ mod tests {
     #[test]
     fn a_click_maps_to_the_source_of_the_text_under_it() {
         // "hello world" rendered from `hello **world**`: "world" comes from 8..13.
-        let info = HitInfo { block: 0, runs: vec![run("hello ", 0..6), run("world", 8..13)], width: 1000.0 };
+        let info = HitInfo {
+            block: 0,
+            runs: vec![run("hello ", 0..6), run("world", 8..13)],
+            width: 1000.0,
+            align_x: Alignment::Default,
+        };
         assert_eq!(hit_test(&info, Point::new(0.0, 5.0)), Some(0));
         assert_eq!(hit_test(&info, Point::new(999.0, 5.0)), Some(13));
         // Somewhere inside "world".
@@ -118,7 +124,12 @@ mod tests {
     #[test]
     fn wrapped_lines_are_hit_by_their_height() {
         let text = "word ".repeat(30);
-        let info = HitInfo { block: 0, runs: vec![run(&text, 100..100 + text.len())], width: 120.0 };
+        let info = HitInfo {
+            block: 0,
+            runs: vec![run(&text, 100..100 + text.len())],
+            width: 120.0,
+            align_x: Alignment::Default,
+        };
         let first = hit_test(&info, Point::new(1.0, 5.0)).unwrap();
         let third = hit_test(&info, Point::new(1.0, 2.5 * BODY_SIZE * LINE_HEIGHT)).unwrap();
         assert_eq!(first, 100);

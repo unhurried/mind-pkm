@@ -451,6 +451,7 @@ struct Shown {
     texts: HashSet<String>,
     text_at: HashMap<String, Rectangle>,
     inputs: HashMap<widget::Id, Rectangle>,
+    caret: Option<Rectangle>,
 }
 
 impl Operation for Shown {
@@ -489,6 +490,12 @@ impl Operation for Shown {
     fn text(&mut self, _id: Option<&widget::Id>, bounds: Rectangle, text: &str) {
         self.texts.insert(text.to_string());
         self.text_at.insert(text.to_string(), bounds);
+    }
+
+    fn custom(&mut self, _id: Option<&widget::Id>, _bounds: Rectangle, state: &mut dyn std::any::Any) {
+        if let Some(caret) = state.downcast_ref::<super::editor::CaretRect>() {
+            self.caret = Some(caret.0);
+        }
     }
 }
 
@@ -1017,6 +1024,67 @@ fn clicking_between_table_cells_keeps_the_caret_in_the_table() {
     b.deliver(editor, release, second);
     let state = b.app.editors[&editor].page.active().unwrap().table().unwrap();
     assert_eq!(state.range, Some(crate::markdown::table::CellRange::new((1, 0), (2, 0))));
+}
+
+#[test]
+fn aligned_table_cells_keep_the_caret_on_the_right_line() {
+    use crate::markdown::{edit::Sel, table::CellRange};
+
+    let mut b = Bench::with_page(
+        1,
+        "| Start | Center | Right |\n| :--- | :---: | ---: |\n| left | x<br>centered | x<br>right |\n| next | | bottom |\n",
+    );
+    let editor = b.editor;
+    let table = block_of(&b, "| Start");
+    b.unmeasured(Message::Editor(editor, EditorMsg::TableCellPressed(table, 1, 0)));
+    // Run the focus operation normally returned by the editor after a move.
+    let press = |b: &mut Bench, key, modifiers| {
+        let cache = b.caches.remove(&editor).unwrap_or_default();
+        let mut ui = UserInterface::build(b.app.view(editor), WINDOW, cache, &mut b.renderer);
+        let active = b.app.editors[&editor].id("active");
+        ui.operate(&b.renderer, &mut operation::focusable::focus(active));
+        b.caches.insert(editor, ui.into_cache());
+        b.deliver(editor, Event::Keyboard(key_event(Key::Named(key), modifiers)), Point::ORIGIN);
+    };
+    let arrow = |b: &mut Bench, key| press(b, key, Modifiers::empty());
+    let state = |b: &Bench| {
+        let cell = b.app.editors[&editor].page.active().unwrap().table().unwrap();
+        (cell.cell, cell.cell_sel, cell.range)
+    };
+
+    arrow(&mut b, Named::ArrowRight);
+    assert_eq!(state(&b), ((1, 1), Sel::caret(0), None));
+    let shown = b.shown(editor);
+    let center = page_container(&mut b, &shown, "active-cell").unwrap();
+    let first_line = shown.caret.unwrap();
+    assert!((first_line.x - center.center_x()).abs() < 15.0, "{first_line:?} in {center:?}");
+    arrow(&mut b, Named::ArrowDown);
+    let second_line = b.shown(editor).caret.unwrap();
+    assert_eq!(state(&b).0, (1, 1));
+    assert!(second_line.y > first_line.y);
+    arrow(&mut b, Named::End);
+    arrow(&mut b, Named::ArrowRight);
+
+    assert_eq!(state(&b), ((1, 2), Sel::caret(0), None));
+    let shown = b.shown(editor);
+    let right = page_container(&mut b, &shown, "active-cell").unwrap();
+    assert!(shown.caret.unwrap().x > right.center_x());
+    arrow(&mut b, Named::ArrowDown);
+    assert_eq!(state(&b).0, (1, 2));
+    arrow(&mut b, Named::ArrowDown);
+    assert_eq!(state(&b), ((2, 2), Sel::caret(0), None));
+    arrow(&mut b, Named::ArrowUp);
+    assert_eq!(state(&b), ((1, 2), Sel::caret("x<br>right".len()), None));
+    let caret = b.shown(editor).caret.unwrap();
+    assert!(caret.x > right.center_x() && caret.y > first_line.y);
+
+    press(&mut b, Named::ArrowDown, Modifiers::SHIFT);
+    assert_eq!(state(&b).2, Some(CellRange::new((1, 2), (2, 2))));
+    press(&mut b, Named::ArrowUp, Modifiers::SHIFT);
+    assert_eq!(state(&b).2, Some(CellRange::new((1, 2), (1, 2))));
+    arrow(&mut b, Named::ArrowUp);
+    assert_eq!(state(&b).2, None);
+    assert!(b.shown(editor).caret.unwrap().y < caret.y);
 }
 
 /// Going into a table moves neither the table nor the block after it: its

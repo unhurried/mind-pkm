@@ -274,6 +274,7 @@ fn over_text_at(app: &mut App, id: window::Id, block: usize, text: &str, source:
             map: Some(crate::markdown::content::source_map(text.len(), source)),
         }],
         width: 600.0,
+        align_x: Default::default(),
     };
     editor(app, id, EditorMsg::PointerOver(std::sync::Arc::new(info), iced::Point::new(x, 5.0)));
 }

@@ -30,6 +30,7 @@ where
         size: None,
         line_height: LineHeight::default(),
         width: Length::Shrink,
+        align_x: Alignment::Default,
         font: None,
         wrapping: Wrapping::default(),
         hovered_link: None,
@@ -43,6 +44,7 @@ pub(super) struct Rich<'a, Link, Message> {
     size: Option<Pixels>,
     line_height: LineHeight,
     width: Length,
+    align_x: Alignment,
     font: Option<Font>,
     wrapping: Wrapping,
     hovered_link: Option<usize>,
@@ -70,6 +72,11 @@ impl<'a, Link, Message> Rich<'a, Link, Message> {
         self
     }
 
+    pub(super) fn align_x(mut self, align_x: Alignment) -> Self {
+        self.align_x = align_x;
+        self
+    }
+
     pub(super) fn wrapping(mut self, wrapping: Wrapping) -> Self {
         self.wrapping = wrapping;
         self
@@ -86,6 +93,7 @@ struct Text {
     bounds: Size,
     size: Pixels,
     font: Font,
+    align_x: Alignment,
     line_height: LineHeight,
     wrapping: Wrapping,
 }
@@ -98,7 +106,7 @@ impl Text {
             size: self.size,
             line_height: self.line_height,
             font: self.font,
-            align_x: Alignment::Default,
+            align_x: self.align_x,
             align_y: iced::alignment::Vertical::Top,
             shaping: Shaping::Advanced,
             wrapping: self.wrapping,
@@ -134,7 +142,14 @@ where
             let bounds = limits.max();
             let size = self.size.unwrap_or_else(|| renderer.default_size());
             let font = self.font.unwrap_or_else(|| renderer.default_font());
-            let text = Text { bounds, size, font, line_height: self.line_height, wrapping: self.wrapping };
+            let text = Text {
+                bounds,
+                size,
+                font,
+                align_x: self.align_x,
+                line_height: self.line_height,
+                wrapping: self.wrapping,
+            };
             if state.spans != self.spans {
                 state.paragraph = Paragraph::with_spans(text.with(self.spans.as_slice()));
                 state.spans.clone_from(&self.spans);

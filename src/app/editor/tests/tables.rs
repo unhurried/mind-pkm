@@ -200,6 +200,33 @@ fn typing_in_cells() {
 }
 
 #[test]
+fn arrows_cross_cell_edges_with_a_caret() {
+    use crate::markdown::edit::Sel;
+
+    let (mut app, _f, _, _) = app_with_page("| 見出し | Detail |\n| --- | ---: |\n| α | **β** |\n| | 終 |\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "α");
+    let check = |app: &mut App, bind: Bind, (r, c), at| {
+        editor(app, id, EditorMsg::Bind(bind.clone()));
+        let page = &app.editors[&id].page;
+        assert_eq!(cell(app, id), (r, c), "{bind:?}");
+        assert_eq!(page.live_sel(), Sel::caret(at), "{bind:?}");
+    };
+    check(&mut app, Bind::Right, (1, 1), 0);
+    check(&mut app, Bind::Up, (0, 1), "Detail".len());
+    check(&mut app, Bind::Down, (1, 1), 0);
+    check(&mut app, Bind::Left, (1, 0), "α".len());
+    check(&mut app, Bind::Down, (2, 0), 0);
+    check(&mut app, Bind::Up, (1, 0), "α".len());
+
+    editor(&mut app, id, EditorMsg::Bind(Bind::Tab));
+    assert_eq!(app.editors[&id].page.selected_source(), "**β**");
+    check(&mut app, Bind::Down, (2, 1), 0);
+    check(&mut app, Bind::Up, (1, 1), "**β**".len());
+    assert_eq!(rows(&app, id), strings(&[&["見出し", "Detail"], &["α", "**β**"], &["", "終"]]));
+}
+
+#[test]
 fn dragging_from_a_rendered_table_selects_cells() {
     let (mut app, _f, _, _) = app_with_page("| a | b |\n|---|---|\n| c | d |\n");
     let id = open_with_f1(&mut app);

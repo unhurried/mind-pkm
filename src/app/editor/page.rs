@@ -1106,22 +1106,22 @@ impl Page {
 
     /// Moves to another cell of the table being edited, selecting its text.
     pub fn go_to_cell(&mut self, cell: (usize, usize)) {
-        let Some(state) = self.active.as_mut().and_then(Active::table_mut) else { return };
-        let cell = (cell.0.min(state.table.rows.len() - 1), cell.1.min(state.table.columns() - 1));
-        state.cell = cell;
-        state.range = None;
-        state.cell_sel = Sel { anchor: 0, head: state.table.rows[cell.0][cell.1].len() };
-        self.sync_cell_sel();
-        self.history.break_typing();
+        self.move_to_cell(cell, |end| Sel { anchor: 0, head: end });
     }
 
     /// Moves to another cell with the cursor at the start (or end) of its text.
     pub fn go_to_cell_at(&mut self, cell: (usize, usize), at_end: bool) {
-        self.go_to_cell(cell);
-        if let Some(state) = self.active.as_mut().and_then(Active::table_mut) {
-            state.cell_sel = Sel::caret(if at_end { state.cell_sel.head } else { 0 });
-            self.sync_cell_sel();
-        }
+        self.move_to_cell(cell, |end| Sel::caret(if at_end { end } else { 0 }));
+    }
+
+    fn move_to_cell(&mut self, cell: (usize, usize), selection: impl FnOnce(usize) -> Sel) {
+        let Some(state) = self.active.as_mut().and_then(Active::table_mut) else { return };
+        let cell = (cell.0.min(state.table.rows.len() - 1), cell.1.min(state.table.columns() - 1));
+        state.cell = cell;
+        state.range = None;
+        state.cell_sel = selection(state.table.rows[cell.0][cell.1].len());
+        self.sync_cell_sel();
+        self.history.break_typing();
     }
 
     /// Applies the outcome of an editing rule as one undoable change, the

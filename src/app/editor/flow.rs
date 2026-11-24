@@ -72,7 +72,10 @@ pub struct Line {
     pub shown: Range<usize>,
     /// Ends with a line break (not wrapped).
     pub hard: bool,
-    pub width: f32,
+    /// The line's right edge, including any horizontal offset.
+    pub right: f32,
+    /// The space after the last visible character when the line wraps.
+    hanging_space: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -244,7 +247,8 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
 
     let mut flow = Flow { lines: Vec::new(), height: 0.0, len };
     let mut top = 0.0;
-    for line in lines {
+    let last_line = lines.len() - 1;
+    for (i, line) in lines.into_iter().enumerate() {
         let (ascent, descent, text_above) = line_metrics(&atoms, &line, empty);
         let mut frags: Vec<Frag> = Vec::new();
         let mut x = 0.0;
@@ -293,9 +297,24 @@ pub fn layout(items: &[Measured], width: f32, empty: (f32, f32), len: usize) -> 
         let prev_end = flow.lines.last().map_or(0, |l: &Line| l.shown.end);
         let shown = start.unwrap_or(prev_end)..end.unwrap_or(prev_end);
         let hard = line.last().is_some_and(|&a| atoms[a].newline);
+        let hanging_space = if !hard && i < last_line {
+            line.iter().rev().map(|&a| &atoms[a]).take_while(|a| a.space).map(|a| a.w).sum()
+        } else {
+            0.0
+        };
         let baseline = top + ascent;
         let text_top = text_above.map_or(top, |above| baseline - above);
-        flow.lines.push(Line { top, height: ascent + descent, baseline, text_top, frags, shown, hard, width: x });
+        flow.lines.push(Line {
+            top,
+            height: ascent + descent,
+            baseline,
+            text_top,
+            frags,
+            shown,
+            hard,
+            right: x,
+            hanging_space,
+        });
         top += ascent + descent;
     }
     flow.height = top;
@@ -358,6 +377,24 @@ pub struct Caret {
 }
 
 impl Flow {
+    /// Aligns each line within the available width, including empty lines.
+    pub fn align_x(&mut self, width: f32, alignment: iced::Alignment) {
+        let fraction = match alignment {
+            iced::Alignment::Start => return,
+            iced::Alignment::Center => 0.5,
+            iced::Alignment::End => 1.0,
+        };
+        for line in &mut self.lines {
+            let left = line.frags.first().map_or(0.0, |f| f.x);
+            let content_width = line.right - left - line.hanging_space;
+            let offset = (width - content_width).max(0.0) * fraction - left;
+            for frag in &mut line.frags {
+                frag.x += offset;
+            }
+            line.right += offset;
+        }
+    }
+
     /// The line a shown offset is on: at a wrap, the line after it.
     pub fn line_of(&self, d: usize) -> usize {
         for (i, l) in self.lines.iter().enumerate() {
@@ -384,7 +421,7 @@ impl Flow {
                 return Caret { x: f.x + offset_in(items, f, d), line };
             }
         }
-        Caret { x: l.frags.last().map_or(0.0, |f| f.x + f.width), line }
+        Caret { x: l.right, line }
     }
 
     /// The shown offset at the point (`x`, `y`) of the layout.
@@ -459,7 +496,21 @@ impl Flow {
         if target >= self.lines.len() {
             return None;
         }
-        Some(self.hit_line(items, target, x))
+        let at = self.hit_line(items, target, x);
+        let line = &self.lines[target];
+        // The offset at a soft wrap belongs to the next line. Use the
+        // preceding caret position so a vertical move still lands on its target.
+        if !line.hard
+            && line.shown.end == at
+            && self.lines.get(target + 1).is_some_and(|next| next.shown.start == at)
+            && let Some(frag) = line.frags.iter().rev().find(|f| !f.shown.is_empty())
+        {
+            return Some(match &items[frag.item] {
+                Measured::Text { clusters, .. } => clusters[frag.clusters.end - 1].start,
+                _ => frag.shown.start,
+            });
+        }
+        Some(at)
     }
 
     /// The rectangles (x, top, width, height) covering the shown range: the
@@ -492,7 +543,7 @@ impl Flow {
             if takes_break {
                 match line_rects.last_mut() {
                     Some(r) => r.2 += 4.0,
-                    None => line_rects.push((l.width, l.top, 4.0, l.height)),
+                    None => line_rects.push((l.right, l.top, 4.0, l.height)),
                 }
             }
             out.extend(line_rects.into_iter().filter(|r| r.2 > 0.0));
@@ -590,7 +641,24 @@ mod tests {
         assert_eq!(flow.lines[1].top, 16.0);
         assert_eq!(flow.height, 32.0);
         // The space hangs: the first line is 70 wide without it... and 80 with it.
-        assert_eq!(flow.lines[0].width, 80.0);
+        assert_eq!(flow.lines[0].right, 80.0);
+        let mut right_aligned = flow;
+        right_aligned.align_x(75.0, iced::Alignment::End);
+        assert_eq!(right_aligned.caret(&items, 7), Caret { x: 75.0, line: 0 });
+    }
+
+    #[test]
+    fn alignment_moves_wrapped_lines_and_carets_together() {
+        let items = [run("abcde", 0), Measured::Newline { at: 5 }];
+        let mut flow = layout(&items, 32.0, (12.0, 4.0), 6);
+        flow.align_x(32.0, iced::Alignment::End);
+        assert_eq!(flow.lines[0].frags[0].x, 2.0);
+        assert_eq!(flow.lines[1].frags[0].x, 12.0);
+        assert_eq!(flow.caret(&items, 3), Caret { x: 12.0, line: 1 });
+        assert_eq!(flow.caret(&items, 6), Caret { x: 32.0, line: 2 });
+        assert_eq!(flow.hit_line(&items, 1, 17.0), 4);
+        assert_eq!(flow.rects(&items, 3..4), vec![(12.0, 16.0, 10.0, 16.0)]);
+        assert_eq!(flow.vertical(&items, 4, 32.0, false), Some(2));
     }
 
     #[test]

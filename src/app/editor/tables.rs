@@ -238,15 +238,14 @@ impl Editor {
             Bind::Delete => self.page.perform(Action::Edit(Edit::Delete)),
             Bind::Type(ch) => self.page.perform(Action::Edit(Edit::Insert(ch))),
             Bind::Up | Bind::Down => {
+                // The live widget has already handled movement within the cell's lines.
                 let down = bind == Bind::Down;
-                if !self.cell_moves(if down { Motion::Down } else { Motion::Up }) {
-                    if down && r + 1 < rows {
-                        self.page.go_to_cell((r + 1, c));
-                    } else if !down && r > 0 {
-                        self.page.go_to_cell((r - 1, c));
-                    } else if let Some(b) = self.page.neighbor(down) {
-                        self.page.enter_block(b, down, None);
-                    }
+                if down && r + 1 < rows {
+                    self.page.go_to_cell_at((r + 1, c), false);
+                } else if !down && r > 0 {
+                    self.page.go_to_cell_at((r - 1, c), true);
+                } else if let Some(b) = self.page.neighbor(down) {
+                    self.page.enter_block(b, down, None);
                 }
             }
             Bind::Left | Bind::Right => {
