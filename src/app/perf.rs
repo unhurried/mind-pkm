@@ -16,7 +16,7 @@ use super::command::Command;
 use super::editor::{Bind, EditorCommand, EditorMsg};
 use super::profile::{self, Phase};
 use super::scroll_watch::Visible;
-use super::test_support::{headless_renderer, key_event, remove_in_temp};
+use super::test_support::{headless_renderer, key_event, remove_in_temp, typing_event};
 use super::viewport::NEAR_MARGIN;
 use super::{App, MAP_SCROLL_ID, MapMsg, Message, WindowEvent};
 use crate::mindmap::NodeId;
@@ -450,6 +450,7 @@ struct Shown {
     containers: Vec<(widget::Id, Rectangle)>,
     texts: HashSet<String>,
     text_at: HashMap<String, Rectangle>,
+    inputs: HashMap<widget::Id, Rectangle>,
 }
 
 impl Operation for Shown {
@@ -476,6 +477,12 @@ impl Operation for Shown {
         }
         if id == Some(&widget::Id::new(MAP_SCROLL_ID)) {
             self.map = Some((bounds, translation));
+        }
+    }
+
+    fn text_input(&mut self, id: Option<&widget::Id>, bounds: Rectangle, _state: &mut dyn operation::TextInput) {
+        if let Some(id) = id {
+            self.inputs.insert(id.clone(), bounds);
         }
     }
 
@@ -1089,4 +1096,43 @@ fn the_table_toolbar_floats_above_the_table() {
     assert!(shown.texts.contains("Insert Row Above") && !shown.texts.contains("Resize"));
     b.unmeasured(Message::Editor(editor, EditorMsg::Menu(None)));
     assert!(b.shown(editor).texts.contains("Resize"));
+}
+
+#[test]
+fn the_code_language_field_floats_without_moving_the_next_block() {
+    let source = "Before.\n\n```rust\nlet x = 1;\nlet y = 2;\n\n```\n\nAfter.";
+    let mut b = Bench::with_page(1, source);
+    let editor = b.editor;
+    let input = b.app.editors[&editor].id("code-language");
+    let next = format!("block-{}", block_of(&b, "After."));
+    let code = format!("block-{}", block_of(&b, "```rust"));
+    let shown = b.shown(editor);
+    let below = page_container(&mut b, &shown, &next).unwrap();
+    let rendered = page_container(&mut b, &shown, &code).unwrap();
+    assert!(!shown.inputs.contains_key(&input));
+
+    b.unmeasured(Message::Editor(editor, EditorMsg::PressedAt(source.find("let x").unwrap())));
+    b.unmeasured(Message::Editor(editor, EditorMsg::Released));
+    let shown = b.shown(editor);
+    let after = page_container(&mut b, &shown, &next).unwrap();
+    assert!((after.y - below.y).abs() < 0.5, "{below:?} -> {after:?}");
+    let field = shown.inputs[&input];
+    assert!((field.y - rendered.y - rendered.height - 4.0).abs() < 0.5, "{field:?} below {rendered:?}");
+    assert!((field.x + field.width - rendered.x - rendered.width).abs() < 0.5);
+
+    let at = field.center();
+    b.deliver(editor, moved(at), at);
+    b.deliver(editor, Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)), at);
+    b.deliver(editor, Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)), at);
+    b.deliver(editor, Event::Keyboard(key(Named::End)), at);
+    b.deliver(editor, Event::Keyboard(typing_event(Key::Character("x".into()), Modifiers::empty(), "x")), at);
+    assert!(b.app.editors[&editor].page.text().contains("```rustx\nlet x = 1;"));
+
+    let end = b.app.editors[&editor].page.text().len();
+    b.unmeasured(Message::Editor(editor, EditorMsg::PressedAt(end)));
+    b.unmeasured(Message::Editor(editor, EditorMsg::Released));
+    let shown = b.shown(editor);
+    assert!(!shown.inputs.contains_key(&input));
+    let after = page_container(&mut b, &shown, "active-box").unwrap();
+    assert!((after.y - below.y).abs() < 0.5, "{below:?} -> {after:?}");
 }
