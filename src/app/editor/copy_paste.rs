@@ -2,7 +2,7 @@
 //! the window or chosen with Format → Image - and pasted image data.
 
 use super::clipboard::{self, ClipboardContent};
-use super::page::content_sel;
+use super::page::{Mode, content_sel};
 use super::{Editor, EditorMsg, EditorPrefs, Effect};
 use crate::app::blocking;
 use crate::markdown::edit::{self, Sel};
@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 impl Editor {
-    /// Copies the selection (Markdown, and HTML unless `markdown_only`).
+    /// Copies the selection as text, with HTML unless `markdown_only`.
     /// Returns whether there was something to copy.
     pub(super) fn copy(&mut self, markdown_only: bool, effects: &mut Vec<Effect>) -> bool {
         // A range of table cells: tab-separated text and an HTML table, or a Markdown table.
@@ -32,14 +32,16 @@ impl Editor {
             effects.push(Effect::Copy { text, html });
             return true;
         }
-        let text = match &self.source {
-            Some(source) => source.selection().unwrap_or_default(),
-            None => self.page.selected_source(),
+        let active_mode = self.page.active().map(|active| &active.mode);
+        let (text, is_code) = match (&self.source, active_mode) {
+            (Some(source), _) => (source.selection().unwrap_or_default(), false),
+            (None, Some(Mode::Code(_, content))) => (content.selection().unwrap_or_default(), true),
+            (None, _) => (self.page.selected_source(), false),
         };
         if text.is_empty() {
             return false;
         }
-        let html = (!markdown_only).then(|| html::fragment(&text));
+        let html = (!markdown_only).then(|| if is_code { html::code_fragment(&text) } else { html::fragment(&text) });
         self.copied = Some(text.clone());
         effects.push(Effect::Copy { text, html });
         true

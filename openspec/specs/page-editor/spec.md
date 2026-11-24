@@ -662,6 +662,11 @@ Ctrl+C SHALL put the selection on the clipboard as HTML (rich text) together wit
 - **WHEN** a selection is copied in the editor and pasted elsewhere in it
 - **THEN** exactly the copied Markdown is inserted
 
+#### Scenario: Copying text inside a code block
+- **WHEN** multiple lines of code are selected in a code block inside a list item and copied
+- **THEN** the clipboard contains the selected code with its own indentation, excluding the list item's indentation and the fences
+- **AND** when copied with Ctrl+C, the HTML contains the same code as preformatted text
+
 ### Requirement: Pasting into code
 Inside a code block, math block, front matter or HTML block, Ctrl+V SHALL paste the clipboard's plain text as it is, without converting an HTML flavor to Markdown. A clipboard holding HTML only SHALL paste the text of that HTML, one line per block element.
 

@@ -175,6 +175,11 @@ pub fn fragment(markdown: &str) -> String {
     body(&Document::parse(markdown), &HtmlOptions::plain())
 }
 
+/// Selected code as preformatted text for the clipboard.
+pub fn code_fragment(code: &str) -> String {
+    format!("<pre><code>{}</code></pre>", escape(code))
+}
+
 fn is_toc(doc: &Document, range: &Range<usize>) -> bool {
     doc.blocks.iter().any(|b| b.kind == BlockKind::Toc && b.range.start <= range.start && range.start <= b.range.end)
 }

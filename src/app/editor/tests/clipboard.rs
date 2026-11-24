@@ -21,6 +21,38 @@ fn copy_puts_markdown_and_html_on_the_clipboard() {
 }
 
 #[test]
+fn copying_code_uses_the_selected_body_text() {
+    for (source, selected_source, expected) in [
+        (
+            "- item\n\n  ```sh\n  echo one\n    echo two\n  echo three\n  ```\n",
+            "one\n    echo two\n  echo",
+            "one\n  echo two\necho",
+        ),
+        ("> ```\n> <tag>&\n> \n> \tsecond\n> ```\n", "<tag>&\n> \n> \tsecond", "<tag>&\n\n\tsecond"),
+        ("  ```\n  one\n   two\n  ```\n", "one\n   two", "one\n two"),
+        ("    one\n      two\n    three\n", "one\n      two\n    three", "one\n  two\nthree"),
+    ] {
+        let (mut app, _f, _, _) = app_with_page(source);
+        let id = open_with_f1(&mut app);
+        select(&mut app, id, selected_source);
+
+        press(&mut app, id, "c", Modifiers::CTRL);
+        let copied = clipboard(&app);
+        assert_eq!(copied.text.as_deref(), Some(expected), "{source:?}");
+        assert!(copied.html.as_deref().is_some_and(|html| html.starts_with("<pre><code>")), "{copied:?}");
+        if expected.contains('<') {
+            assert_eq!(copied.html.as_deref(), Some("<pre><code>&lt;tag&gt;&amp;\n\n\tsecond</code></pre>"));
+        }
+
+        press(&mut app, id, "c", Modifiers::CTRL | Modifiers::SHIFT);
+        let copied = clipboard(&app);
+        assert_eq!(copied.text.as_deref(), Some(expected));
+        assert_eq!(copied.html, None);
+        assert_eq!(page_text(&app, id), source);
+    }
+}
+
+#[test]
 fn html_from_other_applications_is_pasted_as_markdown() {
     let (mut app, _f, _, _) = app_with_page("x\n");
     let id = open_with_f1(&mut app);
