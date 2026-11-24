@@ -13,8 +13,8 @@
 //! that keep the markup of elements partly deleted.
 
 use super::content::{self, Inline, Link, Style};
-use super::parse::{BlockKind, ContainerKind, Document, Events, prefix_len};
-use pulldown_cmark::Event;
+use super::parse::{BlockKind, ContainerKind, Document, Events, inline_destination, matching_end, prefix_len};
+use pulldown_cmark::{Event, LinkType, Tag};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -70,6 +70,8 @@ pub struct Display {
     pub elements: Vec<Range<usize>>,
     /// The elements shown with their Markdown.
     pub revealed: Vec<usize>,
+    /// Shown byte ranges of link destinations revealed at the cursor.
+    pub destinations: Vec<Range<usize>>,
     /// Hidden source runs and the element each belongs to (None: block syntax).
     hidden: Vec<(Range<usize>, Option<usize>)>,
 }
@@ -313,6 +315,22 @@ impl Display {
         }
         d.content = start..end;
         d.hidden = hidden;
+        d.destinations = events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (event, source))| {
+                if !matches!(event, Event::Start(Tag::Link { link_type: LinkType::Inline, .. }))
+                    || !(source.start <= cursor && cursor <= source.end)
+                {
+                    return None;
+                }
+                let label_end = events[i + 1..matching_end(events, i)].last().map_or(source.start, |(_, r)| r.end);
+                let address = inline_destination(&text[source.clone()], label_end.saturating_sub(source.start))?;
+                let start = d.to_shown(source.start + address.start);
+                let end = d.to_shown(source.start + address.end);
+                (start < end).then_some(start..end)
+            })
+            .collect();
         d
     }
 
@@ -334,6 +352,7 @@ impl Display {
             content: back(&d.content),
             elements: d.elements.iter().map(back).collect(),
             revealed: d.revealed,
+            destinations: d.destinations,
             hidden: d.hidden.iter().map(|(r, o)| (back(r), *o)).collect(),
         }
     }
@@ -666,6 +685,27 @@ mod tests {
         // Nested elements around the cursor.
         assert_eq!(shown_text("**a _b‸_ c** d"), "**a _b_ c** d");
         assert_eq!(shown_text("**a _b_ c‸** d"), "**a b c** d");
+    }
+
+    #[test]
+    fn only_the_revealed_link_destination_is_marked_as_an_address() {
+        for (markdown, expected) in [
+            ("see [**li‸nk**](https://example.org/(more) \"title\") text", "https://example.org/(more)"),
+            ("see [li‸nk](<folder/Japanese 日本語.md> 'title') text", "folder/Japanese 日本語.md"),
+            ("see [li‸nk](folder/my page.md) text", "folder/my page.md"),
+            ("see [li‸nk](\nhttps://example.org/more\n\"title\") text", "https://example.org/more"),
+        ] {
+            let (display, _, _) = shown(markdown);
+            assert_eq!(display.destinations.iter().map(|r| &display.text[r.clone()]).collect::<Vec<_>>(), [expected]);
+        }
+
+        let (hidden, _, _) = shown("see [link](https://example.org) te‸xt");
+        assert!(hidden.destinations.is_empty());
+        let cell = "[link](./very-long-file-name.md)";
+        let display = Display::for_cell(cell, cell.find("long").unwrap());
+        let range = display.destinations.first().unwrap();
+        assert_eq!(&display.text[range.clone()], "./very-long-file-name.md");
+        assert_eq!(&cell[display.to_source(range.start)..display.to_source(range.end)], "./very-long-file-name.md");
     }
 
     #[test]

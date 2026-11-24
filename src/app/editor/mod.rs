@@ -17,6 +17,7 @@
 //! page's file - saving, closing, changes on disk - with the dialogs'
 //! answers in `file`.
 
+mod address;
 mod assets;
 pub mod clipboard;
 mod column;

@@ -555,6 +555,29 @@ struct Destination {
     close: usize,
 }
 
+/// The destination bytes of a parsed inline link, after its label's events.
+pub(super) fn inline_destination(link: &str, label_end: usize) -> Option<Range<usize>> {
+    let delimiter = label_end + link.get(label_end..)?.find("](")?;
+    let tail = link.get(delimiter + 2..)?.strip_suffix(')')?;
+    let body = tail.trim_start();
+    let start = delimiter + 2 + tail.len() - body.len();
+    if let Some(angle) = body.strip_prefix('<') {
+        let mut escaped = false;
+        let end = angle.find(|ch| {
+            let closes = ch == '>' && !escaped;
+            escaped = ch == '\\' && !escaped;
+            closes
+        })?;
+        return Some(start + 1..start + 1 + end);
+    }
+    if let Some(d) = destination(link, delimiter).filter(|d| d.close + 1 == link.len()) {
+        return Some(d.range);
+    }
+    // CommonMark also accepts line breaks around the destination and title.
+    let len = body.find(char::is_whitespace).unwrap_or(body.len());
+    Some(start..start + len)
+}
+
 /// The destination of the link whose `](` is at `i`: the parenthesized part,
 /// parentheses balanced, on the same line, without a title at its end. None
 /// when the `]` has no `[` before it, nothing closes the parentheses, or the
