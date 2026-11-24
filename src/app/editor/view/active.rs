@@ -17,7 +17,7 @@ use crate::app::editor::page::{Active, Live, Mode, TableState};
 use crate::app::editor::press_relay::PressRelay;
 use crate::app::editor::render::{RenderKey, Rendered};
 use crate::app::editor::{DataHandle, Editor, EditorMsg, EditorPrefs, RightClick, TableMsg};
-use crate::app::floating::floating;
+use crate::app::floating::{Placement, floating};
 use crate::app::ime::ime_aligned;
 use crate::app::right_press::right_press_in;
 use crate::app::view::APP_FONT;
@@ -322,24 +322,26 @@ impl Editor {
         let editor = PressRelay::relaying(editor, self.held(Padding::ZERO));
         let editor = right_press_in(editor, Padding::ZERO, |p| EditorMsg::RightClicked(RightClick::Editor(p)));
         let language = text_input("language", &code.info)
+            .id(self.id("code-language"))
             .on_input(EditorMsg::CodeLanguage)
             .size(ctx.size(0.75))
             .padding([1, 6])
             .width(140)
             .style(move |_: &Theme, _| text_input::Style {
-                background: Background::Color(Color::TRANSPARENT),
+                background: Background::Color(p.code_bg),
                 border: border::color(p.border).width(1).rounded(3),
                 icon: p.muted,
                 placeholder: p.muted,
                 value: p.text,
                 selection: p.selection,
             });
-        container(column![ime_aligned(editor), row![space().width(Fill), language]].spacing(4))
+        let code_box = container(ime_aligned(editor))
             .id(self.id("active-box"))
             .padding(padding)
             .width(Fill)
-            .style(move |_| container::background(p.code_bg).border(border::rounded(4)))
-            .into()
+            .style(move |_| container::background(p.code_bg).border(border::rounded(4)));
+        let shown = !self.menu_open() && self.dialogs.is_empty();
+        floating(code_box, language, 4.0, shown, Placement::BelowRight).into()
     }
 
     /// The block with the cursor in its rendered form, around the editing widget.
@@ -531,7 +533,7 @@ impl Editor {
         // table moves nothing. Hidden while a menu or a dialog is open, which
         // it would otherwise cover.
         let shown = !self.menu_open() && self.dialogs.is_empty();
-        floating(grid, self.table_toolbar(p), 4.0, shown).into()
+        floating(grid, self.table_toolbar(p), 4.0, shown, Placement::AboveLeft).into()
     }
 
     /// What the cells of the table being edited show: the cursor's cell its

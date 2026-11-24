@@ -52,7 +52,10 @@ fn nodes_view<'a>(nodes: &[Node], ctx: &Ctx<'a>, width: f32, block: usize) -> El
                     inline_text(inlines, b, ctx, Some(w), Some(block))
                 })
             }
-            Node::Code { lang, text: code } => code_text_view(code, lang.as_deref(), None, ctx, width, block),
+            Node::Code { lang, text: code } => {
+                let code = code.strip_suffix('\n').unwrap_or(code);
+                code_text_view(code, lang.as_deref(), None, ctx, width, block)
+            }
             Node::Math(tex) => math_view(tex, true, ctx),
             Node::Quote(children) => quote_view(nodes_view(children, ctx, width - QUOTE_PADDING, block), p),
             Node::List { start, items } => {
@@ -107,7 +110,8 @@ fn code_view<'a>(
             code.push_str(t);
         }
     }
-    code_text_view(&code, lang, Some(&starts), ctx, width, block)
+    let code = code.strip_suffix('\n').unwrap_or(&code);
+    code_text_view(code, lang, Some(&starts), ctx, width, block)
 }
 
 /// Code in a box, highlighted for its language; `starts` are the source
@@ -121,7 +125,6 @@ fn code_text_view<'a>(
     block: usize,
 ) -> Element<'a, EditorMsg> {
     let p = ctx.p;
-    let code = code.strip_suffix('\n').unwrap_or(code);
     let size = ctx.size(0.9);
     let colored = highlight::highlight_code_cached(code, lang, p.dark);
     let mut lines = Column::new();
