@@ -269,6 +269,7 @@ fn over_text_at(app: &mut App, id: window::Id, block: usize, text: &str, source:
         block,
         runs: vec![crate::app::editor::view::HitRun {
             text: text.into(),
+            breaks: Vec::new(),
             size: crate::app::editor::view::BODY_SIZE,
             font: crate::app::view::APP_FONT,
             map: Some(crate::markdown::content::source_map(text.len(), source)),

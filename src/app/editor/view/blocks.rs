@@ -146,7 +146,13 @@ fn code_text_view<'a>(
                 let map = content::source_map(line.len(), start..start + line.len());
                 let info = Arc::new(HitInfo {
                     block,
-                    runs: vec![HitRun { text: line.to_string(), size, font: code_font(), map: Some(map) }],
+                    runs: vec![HitRun {
+                        text: line.to_string(),
+                        breaks: Vec::new(),
+                        size,
+                        font: code_font(),
+                        map: Some(map),
+                    }],
                     width: width - 2.0 * CODE_PADDING,
                     align_x: Default::default(),
                 });

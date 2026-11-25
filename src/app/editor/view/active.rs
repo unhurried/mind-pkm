@@ -10,6 +10,7 @@ use super::theme::{
     code_font, code_text_style, editor_style, region_text_style,
 };
 use super::{Ctx, TextBase};
+use crate::app::editor::address;
 use crate::app::editor::highlight::{self, MarkdownHighlighter};
 use crate::app::editor::keys::{self, BindContext, EditorCommand};
 use crate::app::editor::live_text::{LiveText, Run, RunKind, TextLook};
@@ -74,8 +75,12 @@ fn live_runs(
 ) -> Vec<Run> {
     let p = ctx.p;
     let mut runs = Vec::new();
+    let mut addresses = address::ranges(&display.text);
+    addresses.extend(display.destinations.iter().cloned());
+    addresses.sort_unstable_by_key(|r| r.start);
+    let mut addresses = addresses.into_iter().peekable();
     // Text with its line breaks as runs of their own.
-    let push_text = |runs: &mut Vec<Run>, shown: std::ops::Range<usize>, look: TextLook| {
+    let push_lines = |runs: &mut Vec<Run>, shown: std::ops::Range<usize>, look: TextLook| {
         let mut start = shown.start;
         for (i, _) in display.text[shown.clone()].match_indices('\n') {
             let at = shown.start + i;
@@ -95,6 +100,23 @@ fn live_runs(
             });
         }
     };
+    let mut push_text = |runs: &mut Vec<Run>, shown: std::ops::Range<usize>, look: TextLook| {
+        let mut start = shown.start;
+        while let Some(address) = addresses.peek().filter(|r| r.start < shown.end) {
+            let from = address.start.max(start);
+            let end = address.end.min(shown.end);
+            if from < end {
+                push_lines(runs, start..from, look.clone());
+                push_lines(runs, from..end, TextLook { wrap_address: true, ..look.clone() });
+                start = end;
+            }
+            if address.end > shown.end {
+                break;
+            }
+            addresses.next();
+        }
+        push_lines(runs, start..shown.end, look);
+    };
     let plain = |size: f32, font: Font, color: Color| TextLook {
         font,
         size,
@@ -103,6 +125,7 @@ fn live_runs(
         strike: false,
         background: None,
         link: None,
+        wrap_address: false,
     };
     for u in &display.units {
         match &u.look {
@@ -133,6 +156,7 @@ fn live_runs(
                     strike: style.strike,
                     background,
                     link: link.as_ref().map(|l| (l.dest.clone(), u.source.start)),
+                    wrap_address: false,
                 };
                 push_text(&mut runs, u.shown.clone(), look);
             }

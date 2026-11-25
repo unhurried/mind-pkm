@@ -973,7 +973,7 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) 
         }
         let edited = Edited::new(edited, cursor);
         if matches!(m.kind, MarkerKind::Ordered(..)) && item.number.is_some() {
-            renumber_split_list(edited)
+            renumber_split_list(edited, starts_item.then_some(first.start))
         } else {
             edited
         }
@@ -995,8 +995,19 @@ fn enter_list_item(text: &str, region: Range<usize>, c: usize, item: &ListItem) 
 }
 
 /// Writes the displayed numbers of the ordered list that received the split.
-fn renumber_split_list(edited: Edited) -> Edited {
-    let doc = Document::parse(&edited.text);
+fn renumber_split_list(mut edited: Edited, emptied_item: Option<usize>) -> Edited {
+    let mut doc = Document::parse(&edited.text);
+    // An empty item cannot interrupt a paragraph. Restore the list boundary
+    // before finding the siblings to renumber.
+    if let Some(start) = emptied_item
+        && let Some(block) = doc.block_at(start).map(|i| &doc.blocks[i])
+        && block.range.start < start
+        && block.kind == BlockKind::Paragraph
+    {
+        edited.text.insert(start, '\n');
+        edited.sel = Sel::caret(edited.sel.head + 1);
+        doc = Document::parse(&edited.text);
+    }
     let text = &doc.text;
     let line = line_range(text, edited.sel.head);
     let Some(block) = doc.blocks.iter().find(|b| b.range.start == line.start) else { return edited };
@@ -1830,6 +1841,7 @@ mod tests {
         // Lists in a quote.
         assert_eq!(enter_at("> - a‸"), "> - a\n> - ‸");
         assert_eq!(enter_at("> 1. a‸\n> 2. b"), "> 1. a\n> 2. ‸\n> 3. b");
+        assert_eq!(enter_at("> Before\n> 1. ‸one\n> 1. two"), "> Before\n>\n> 1. \n> 2. ‸one\n> 3. two");
         assert_eq!(enter_at("> - a\n> - ‸"), "> - a\n>\n> ¶");
         assert_eq!(enter_at("> - ‸"), "> ¶");
         // A heading in a quote.

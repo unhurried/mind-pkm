@@ -5,6 +5,7 @@
 //! keys and the IME into messages - offsets where the layout is needed (a
 //! click, Up/Down, Home/End), motions and insertions otherwise.
 
+use super::address;
 use super::decoration;
 use super::flow::{self, Cluster, DECORATION_THICKNESS, Flow, Measured};
 use super::keys::Bind;
@@ -61,6 +62,7 @@ pub struct TextLook {
     pub background: Option<Color>,
     /// A link's destination and its source offset (Ctrl+click follows it).
     pub link: Option<(String, usize)>,
+    pub wrap_address: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +207,7 @@ struct ShapeKey {
     font: Font,
     size: u32,
     line_height: u32,
+    wrap_address: bool,
 }
 
 struct Focus {
@@ -265,9 +268,13 @@ impl operation::Focusable for State {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CaretRect(pub Rectangle);
 
-fn shape(text: &str, font: Font, size: f32, line_height: f32, shown_start: usize) -> Shaped {
+fn shape(text: &str, font: Font, size: f32, line_height: f32, shown_start: usize, wrap_address: bool) -> Shaped {
+    // Shape addresses as in the rendered view, including at potential breaks
+    // inside ligatures. The layout offsets still refer to the original text.
+    let breaks: Vec<_> = if wrap_address { address::character_breaks(text).collect() } else { Vec::new() };
+    let layout_text = (!breaks.is_empty()).then(|| address::layout_text(text, 0..text.len(), &breaks));
     let paragraph = Paragraph::with_text(core_text::Text {
-        content: text,
+        content: layout_text.as_deref().unwrap_or(text),
         bounds: Size::INFINITE,
         size: Pixels(size),
         line_height: LineHeight::Relative(line_height),
@@ -290,19 +297,24 @@ fn shape(text: &str, font: Font, size: f32, line_height: f32, shown_start: usize
         descent = run.line_height - ascent;
         width = run.line_w;
         for g in run.glyphs {
+            let start = address::text_offset(g.start, &breaks);
+            let end = address::text_offset(g.end, &breaks);
+            if start == end {
+                continue;
+            }
             match clusters.last_mut() {
-                Some(c) if c.start == shown_start + g.start => c.w = (g.x + g.w - c.x).max(c.w),
+                Some(c) if c.start == shown_start + start => c.w = (g.x + g.w - c.x).max(c.w),
                 _ => {
-                    let ch = text[g.start..].chars().next().unwrap_or(' ');
+                    let ch = text[start..].chars().next().unwrap_or(' ');
                     clusters.push(Cluster {
-                        start: shown_start + g.start,
-                        end: shown_start + g.end,
+                        start: shown_start + start,
+                        end: shown_start + end,
                         x: g.x,
                         w: g.w,
-                        space: ch == ' ' || ch == '\t' || ch == '\u{3000}',
-                        break_before: flow::is_cjk(ch),
-                        no_break_after: flow::no_break_after(ch),
-                        no_break_before: flow::no_break_before(ch),
+                        space: !wrap_address && matches!(ch, ' ' | '\t' | '\u{3000}'),
+                        break_before: wrap_address || flow::is_cjk(ch),
+                        no_break_after: !wrap_address && flow::no_break_after(ch),
+                        no_break_before: !wrap_address && flow::no_break_before(ch),
                     })
                 }
             }
@@ -325,6 +337,7 @@ impl LiveText<'_> {
                 font: look.font,
                 size: look.size.to_bits(),
                 line_height: self.line_height.to_bits(),
+                wrap_address: look.wrap_address,
             }),
             _ => None,
         }
@@ -336,9 +349,10 @@ impl LiveText<'_> {
             font: self.base.0,
             size: self.base.1.to_bits(),
             line_height: self.line_height.to_bits(),
+            wrap_address: false,
         };
         let shaped =
-            state.cache.entry(key).or_insert_with(|| shape(" ", self.base.0, self.base.1, self.line_height, 0));
+            state.cache.entry(key).or_insert_with(|| shape(" ", self.base.0, self.base.1, self.line_height, 0, false));
         (shaped.ascent, shaped.descent)
     }
 
@@ -350,8 +364,10 @@ impl LiveText<'_> {
             let item = match &run.kind {
                 RunKind::Text { text, look } => {
                     let k = key.clone().unwrap_or_else(|| unreachable!());
-                    let shaped =
-                        state.cache.entry(k).or_insert_with(|| shape(text, look.font, look.size, self.line_height, 0));
+                    let shaped = state
+                        .cache
+                        .entry(k)
+                        .or_insert_with(|| shape(text, look.font, look.size, self.line_height, 0, look.wrap_address));
                     let clusters = shaped
                         .clusters
                         .iter()
@@ -361,8 +377,10 @@ impl LiveText<'_> {
                 }
                 RunKind::Label { text, look } => {
                     let k = key.clone().unwrap_or_else(|| unreachable!());
-                    let shaped =
-                        state.cache.entry(k).or_insert_with(|| shape(text, look.font, look.size, self.line_height, 0));
+                    let shaped = state
+                        .cache
+                        .entry(k)
+                        .or_insert_with(|| shape(text, look.font, look.size, self.line_height, 0, false));
                     object_or_decoration(&run.shown, shaped.width, shaped.ascent, shaped.descent, false, false)
                 }
                 RunKind::Image { handle, max_width } => {
@@ -876,6 +894,27 @@ mod tests {
     const SIZE: f32 = 15.0;
     const LINE_HEIGHT: f32 = 1.6;
 
+    #[test]
+    fn an_editable_address_wraps_at_its_next_character_including_punctuation() {
+        let prefix = "[Link](";
+        let url = "https://example.org/(long-path)";
+        let addr = shape(url, APP_FONT, SIZE, LINE_HEIGHT, prefix.len(), true);
+        let leading = shape(prefix, APP_FONT, SIZE, LINE_HEIGHT, 0, false);
+        let len = prefix.len() + url.len();
+        let cut = url.find(':').unwrap();
+        let width = leading.width + addr.clusters[cut].x + addr.clusters[cut].w / 4.0;
+        let metrics = (addr.ascent, addr.descent);
+        let item =
+            |s: Shaped| Measured::Text { clusters: s.clusters, ascent: s.ascent, descent: s.descent, glyph: s.glyph };
+        let items = [item(leading), item(addr)];
+        let flow = flow::layout(&items, width, metrics, len);
+        let offset = prefix.len() + cut;
+        assert_eq!(flow.lines[0].shown.end, offset);
+        assert_eq!(flow.lines[1].shown.start, offset);
+        assert_eq!(flow.caret(&items, offset).line, 1);
+        assert_eq!(flow.hit(&items, 0.0, flow.lines[1].top + 1.0), offset);
+    }
+
     type TestRun<'a> = (&'a str, f32, Font);
 
     /// The height of the runs as the rendered text widget lays them out.
@@ -902,7 +941,7 @@ mod tests {
         let items: Vec<Measured> = runs
             .iter()
             .map(|(t, size, font)| {
-                let shaped = shape(t, *font, *size, LINE_HEIGHT, at);
+                let shaped = shape(t, *font, *size, LINE_HEIGHT, at, false);
                 at += t.len();
                 Measured::Text {
                     clusters: shaped.clusters,
@@ -912,7 +951,7 @@ mod tests {
                 }
             })
             .collect();
-        let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0);
+        let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0, false);
         flow::layout(&items, 1000.0, (empty.ascent, empty.descent), at).height
     }
 
@@ -947,7 +986,7 @@ mod tests {
             at = 1;
         }
         for (t, size, font) in runs {
-            let shaped = shape(t, *font, *size, LINE_HEIGHT, at);
+            let shaped = shape(t, *font, *size, LINE_HEIGHT, at, false);
             at += t.len();
             items.push(Measured::Text {
                 clusters: shaped.clusters,
@@ -956,7 +995,7 @@ mod tests {
                 glyph: shaped.glyph,
             });
         }
-        let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0);
+        let empty = shape(" ", APP_FONT, SIZE, LINE_HEIGHT, 0, false);
         let flow = flow::layout(&items, 1000.0, (empty.ascent, empty.descent), at);
         let line = &flow.lines[0];
         let (underline, strike) = flow::decoration_tops(line.text_top, runs[runs.len() - 1].1, LINE_HEIGHT);
@@ -991,7 +1030,7 @@ mod tests {
     #[test]
     fn an_underline_is_clear_of_the_baseline_and_inside_the_line() {
         for (name, font) in [("text", APP_FONT), ("code", code_font())] {
-            let shaped = shape("a link", font, SIZE, LINE_HEIGHT, 0);
+            let shaped = shape("a link", font, SIZE, LINE_HEIGHT, 0, false);
             let (underline, _) = flow::decoration_tops(0.0, SIZE, LINE_HEIGHT);
             let below = underline - shaped.ascent;
             assert!(below >= SIZE * 0.1, "{name}: {below} below the baseline");

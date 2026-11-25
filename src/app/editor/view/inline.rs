@@ -7,6 +7,7 @@ use super::rich::rich;
 use super::table_widths::Piece;
 use super::theme::{CELL_PADDING, LINE_HEIGHT, bold, code_font, italic};
 use super::{Ctx, SpanLink, TextBase};
+use crate::app::editor::address;
 use crate::app::editor::{EditorMsg, RightClick, TableMsg};
 use crate::app::press_point::press_in;
 use crate::markdown::content::{Inline, Link, SourceMap, Style};
@@ -14,7 +15,9 @@ use iced::advanced::text::Wrapping;
 use iced::widget::text::Span;
 use iced::widget::{Column, Row, container, mouse_area, pin, space, stack, text};
 use iced::{Alignment, Color, Element, Fill, Font};
+use std::ops::Range;
 use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// A paragraph: lines of text, or images, math and embeds among the text.
 pub(super) fn paragraph_view<'a>(
@@ -85,40 +88,66 @@ pub(super) fn paragraph_view<'a>(
     col.into()
 }
 
-/// Text runs split into words (and single CJK characters), so that they can wrap in a row.
+/// Text runs split into words and individual characters in CJK text and URLs,
+/// so that they can wrap around inline objects in a row.
 fn split_words(runs: &[Inline]) -> Vec<Vec<Inline>> {
     let mut out = Vec::new();
-    for run in runs {
+    for (run, breaks) in runs.iter().zip(line_breaks(runs)) {
         let Inline::Text { text, style, link, map } = run else {
             out.push(vec![run.clone()]);
             continue;
         };
+        let mut breaks = breaks.into_iter().peekable();
         let mut start = 0;
-        let chars: Vec<(usize, char)> = text.char_indices().collect();
-        for (n, (i, c)) in chars.iter().enumerate() {
-            let next = chars.get(n + 1).map(|(j, _)| *j).unwrap_or(text.len());
-            let cjk = *c as u32 >= 0x2e80;
-            let boundary = c.is_whitespace() || cjk || chars.get(n + 1).is_some_and(|(_, d)| *d as u32 >= 0x2e80);
-            if boundary || next == text.len() {
-                let piece = &text[start..next];
-                if !piece.is_empty() {
-                    out.push(vec![Inline::Text {
-                        text: piece.to_string(),
-                        style: *style,
-                        link: link.clone(),
-                        map: map_slice(map, start..next),
-                    }]);
-                }
+        let mut chars = text.grapheme_indices(true).peekable();
+        while let Some((i, chars_here)) = chars.next() {
+            let next = i + chars_here.len();
+            let cjk = chars_here.starts_with(|c: char| c as u32 >= 0x2e80);
+            let next_cjk = chars.peek().is_some_and(|(_, s)| s.starts_with(|c: char| c as u32 >= 0x2e80));
+            let address_break = breaks.next_if_eq(&next).is_some();
+            if chars_here.starts_with(char::is_whitespace) || cjk || next_cjk || address_break || next == text.len() {
+                out.push(vec![Inline::Text {
+                    text: text[start..next].to_string(),
+                    style: *style,
+                    link: link.clone(),
+                    map: map.slice(start..next),
+                }]);
                 start = next;
             }
-            let _ = i;
         }
     }
     out
 }
 
-fn map_slice(map: &SourceMap, range: std::ops::Range<usize>) -> SourceMap {
-    map.slice(range)
+/// The address break positions in each run. A URL can span multiple styles
+/// in the same link label. Inline objects and link boundaries end the scan.
+fn line_breaks(runs: &[Inline]) -> Vec<Vec<usize>> {
+    let mut line = String::new();
+    let mut previous_link = None;
+    let ranges: Vec<Range<usize>> = runs
+        .iter()
+        .map(|run| match run {
+            Inline::Text { text, link, .. } => {
+                if previous_link != link.as_ref() {
+                    line.push(' ');
+                }
+                previous_link = link.as_ref();
+                let start = line.len();
+                line.push_str(text);
+                start..line.len()
+            }
+            _ => {
+                previous_link = None;
+                line.push(' ');
+                line.len()..line.len()
+            }
+        })
+        .collect();
+    let mut breaks = address::breaks(&line).into_iter().peekable();
+    ranges
+        .into_iter()
+        .map(|range| std::iter::from_fn(|| breaks.next_if(|&at| at <= range.end)).map(|at| at - range.start).collect())
+        .collect()
 }
 
 /// The spans of text runs (no images), as one text per line. With a page
@@ -180,7 +209,7 @@ fn text_line<'a>(
     let p = ctx.p;
     let mut spans: Vec<Span<'static, SpanLink, Font>> = Vec::new();
     let mut hits: Vec<HitRun> = Vec::new();
-    for run in runs {
+    for (run, breaks) in runs.iter().zip(line_breaks(runs)) {
         match run {
             Inline::Text { text: t, style, link, map } => {
                 let (size, font) = run_font(*style, base);
@@ -196,7 +225,8 @@ fn text_line<'a>(
                 }
                 // Pieces in and out of find matches.
                 for (piece, found) in match_pieces(t, map, ctx) {
-                    let mut span = Span::new(t[piece].to_string()).size(size).font(font).color(color);
+                    let mut span =
+                        Span::new(address::layout_text(t, piece, &breaks)).size(size).font(font).color(color);
                     if style.underline || link.is_some() {
                         span = span.underline(true);
                     }
@@ -215,7 +245,7 @@ fn text_line<'a>(
                     }
                     spans.push(span);
                 }
-                hits.push(HitRun { text: t.clone(), size, font, map: Some(map.clone()) });
+                hits.push(HitRun { text: t.clone(), breaks, size, font, map: Some(map.clone()) });
             }
             Inline::FootnoteRef { label, number, source } => {
                 let size = base.size * 0.75;
@@ -225,7 +255,7 @@ fn text_line<'a>(
                         .color(p.link)
                         .link(SpanLink { dest: format!("^{label}"), at: source.start }),
                 );
-                hits.push(HitRun { text: format!("[{number}]"), size, font: base.font, map: None });
+                hits.push(HitRun { text: format!("[{number}]"), breaks: Vec::new(), size, font: base.font, map: None });
             }
             _ => {}
         }
