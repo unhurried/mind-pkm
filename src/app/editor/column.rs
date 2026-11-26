@@ -88,7 +88,8 @@ pub fn entries(page: &Page) -> Vec<Entry> {
     // Whether the active region is among them yet.
     let mut placed = false;
     for (i, block) in doc.blocks.iter().enumerate() {
-        for at in blank_paragraphs_before(doc, i) {
+        for blank in blank_paragraphs_before(doc, i) {
+            let at = blank.at;
             if !placed && let Some(offset) = empty_active_at.filter(|&offset| offset <= at) {
                 shown.push(Shown::Active);
                 placed = true;

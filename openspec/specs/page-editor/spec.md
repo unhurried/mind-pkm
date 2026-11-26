@@ -433,7 +433,7 @@ Backspace at the start of the text of a task item with text SHALL remove only it
 - **THEN** the page holds an empty paragraph
 
 ### Requirement: Blank lines in edited lists
-An edited list SHALL use one form for all its items: tight, with no blank lines between items or before blocks inside items, or loose, with one blank line in each place except where blank lines represent an empty paragraph. A nested list SHALL take its own form. The form SHALL be applied after an editing command and when the caret leaves a block whose text was edited. Lists no edit changed, and pages only opened or saved, SHALL keep their source.
+An edited list SHALL use one form for all its items: tight, with no blank lines between items or before blocks inside items, or loose, with one blank line in each place except where blank lines represent an empty paragraph. A nested list SHALL take its own form. The form SHALL be applied after an editing command other than empty paragraph deletion and when the caret leaves a block whose text was edited. Lists no edit changed, and pages only opened or saved, SHALL keep their source.
 
 #### Scenario: A new item in a list with mixed blank lines
 - **WHEN** the source is `* a`, a blank line, `* b`, `* c`, the list holds only single-line items, and Enter is pressed at the end of `c` and `d` is typed
@@ -831,3 +831,23 @@ The Paragraph menu SHALL offer Move Item Up (Ctrl+Up) and Move Item Down (Ctrl+D
 #### Scenario: Moving in the source mode
 - **WHEN** the source mode is on, the cursor is in `- b` of `- a` / `- b` and Ctrl+Up is pressed
 - **THEN** the page is `- b` / `- a`
+
+### Requirement: Deleting displayed empty paragraphs
+
+With the caret in a displayed empty paragraph backed by Markdown source, Backspace and Delete SHALL remove exactly that empty paragraph, preserving the adjacent blocks and their required separators. Backspace SHALL place the caret at the end of the preceding block and Delete at the start of the following block. At the start of the document, either key SHALL place the caret at the start of the following block. Each deletion SHALL be one undoable edit.
+
+#### Scenario: Empty paragraph between two paragraphs
+
+- **WHEN** the source contains three blank lines between the paragraphs `one` and `two` and the user clicks the displayed empty paragraph and presses Delete
+- **THEN** one blank source line remains, the paragraphs remain distinct, and the caret is at the start of `two`
+- **AND** Undo restores the deleted empty paragraph and its caret position
+
+#### Scenario: Several empty paragraphs above a heading
+
+- **WHEN** the user moves the caret from a heading into the closest of two empty paragraphs at the start of a page and presses Backspace
+- **THEN** one empty paragraph remains and the caret is at the start of the heading text
+
+#### Scenario: Empty paragraph in a container
+
+- **WHEN** the caret is in a displayed empty paragraph inside a quote or list item and the user presses Backspace or Delete
+- **THEN** the neighbouring blocks keep their quote markers or list indentation and remain in their original containers
