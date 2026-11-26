@@ -791,9 +791,15 @@ pub fn content_start(text: &str, block_start: usize) -> usize {
     }
 }
 
+/// A displayed empty paragraph's caret and the source to remove when it is deleted.
+pub struct BlankParagraph {
+    pub at: usize,
+    pub range: Range<usize>,
+}
+
 /// The editable empty paragraphs before text, from top to bottom.
 /// A pair of blank source lines leaves room for a paragraph between blocks.
-pub fn blank_paragraphs_before(doc: &Document, index: usize) -> Vec<usize> {
+pub fn blank_paragraphs_before(doc: &Document, index: usize) -> Vec<BlankParagraph> {
     let block = &doc.blocks[index];
     if !matches!(block.kind, BlockKind::Heading(_) | BlockKind::Paragraph) {
         return Vec::new();
@@ -805,7 +811,7 @@ pub fn blank_paragraphs_before(doc: &Document, index: usize) -> Vec<usize> {
     let lower_bound = after_previous.max(container_start);
     let kinds = block.outer.iter().map(|&i| doc.containers[i].kind);
     let mut end = line_range(text, block.range.start).start;
-    let mut second = false;
+    let mut pair_end = None;
     let mut blanks = Vec::new();
     while end > lower_bound {
         let line = line_range(text, end - 1);
@@ -814,11 +820,17 @@ pub fn blank_paragraphs_before(doc: &Document, index: usize) -> Vec<usize> {
         if line.start < lower_bound || !source[prefix..].trim_matches([' ', '\t']).is_empty() {
             break;
         }
-        if second {
-            blanks.push(line.start + prefix);
+        if let Some(pair_end) = pair_end.take() {
+            blanks.push(BlankParagraph { at: line.start + prefix, range: line.start..pair_end });
+        } else {
+            pair_end = Some(end);
         }
-        second = !second;
         end = line.start;
+    }
+    // A lone pair between blocks shares a line with their Markdown separator.
+    if index > 0 && blanks.len() == 1 && pair_end.is_none() {
+        let blank = &mut blanks[0];
+        blank.range.end = line_range(text, blank.at).end + 1;
     }
     blanks.reverse();
     blanks

@@ -223,6 +223,9 @@ impl Editor {
             }
             Bind::Backspace => {
                 if pending {
+                    if self.page.delete_blank_paragraph(false) {
+                        return self.focus();
+                    }
                     // An empty new paragraph goes; the cursor to the end of the block before.
                     let before = self.page.neighbor(false);
                     self.page.deactivate();
@@ -252,6 +255,9 @@ impl Editor {
             }
             Bind::Delete => {
                 if pending {
+                    if self.page.delete_blank_paragraph(true) {
+                        return self.focus();
+                    }
                     let after = self.page.neighbor(true);
                     self.page.deactivate();
                     if let Some(b) = after {

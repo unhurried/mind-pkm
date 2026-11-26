@@ -1301,7 +1301,7 @@ impl Page {
         let Some(active) = &self.active else { return false };
         let block = if after || self.pending.is_some() { self.neighbor(true) } else { self.active_block() };
         let Some(block) = block else { return false };
-        let mut blanks = edit::blank_paragraphs_before(&self.doc, block).into_iter();
+        let mut blanks = edit::blank_paragraphs_before(&self.doc, block).into_iter().map(|blank| blank.at);
         let at = if after {
             blanks.find(|&at| at >= active.region.end && self.pending().is_none_or(|p| at > p.at))
         } else {
@@ -1309,6 +1309,21 @@ impl Page {
         };
         let Some(at) = at else { return false };
         self.place(Sel::caret(at));
+        true
+    }
+
+    /// Removes the source of the displayed empty paragraph at the caret.
+    pub fn delete_blank_paragraph(&mut self, forward: bool) -> bool {
+        let Some(pending) = &self.pending else { return false };
+        let Some(after) = self.neighbor(true) else { return false };
+        let Some(blank) =
+            edit::blank_paragraphs_before(&self.doc, after).into_iter().find(|blank| blank.at == pending.at)
+        else {
+            return false;
+        };
+        let next = self.doc.blocks[after].range.start - blank.range.len();
+        let at = if forward { next } else { self.neighbor(false).map_or(next, |b| self.doc.blocks[b].range.end) };
+        self.set_text(edit::splice(&self.text, blank.range, ""), Sel::caret(at));
         true
     }
 

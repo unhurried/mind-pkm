@@ -610,6 +610,92 @@ fn clicking_an_empty_paragraph_replaces_its_row_with_the_active_editor() {
 }
 
 #[test]
+fn deleting_a_displayed_empty_paragraph_preserves_the_block_separator() {
+    use super::super::column::{Shown, entries};
+
+    for (source, expected, previous, next) in [
+        ("one\n\n\ntwo\n", "one\n\ntwo\n", "one", "two"),
+        ("one\n\n\n\ntwo\n", "one\n\ntwo\n", "one", "two"),
+        ("> one\n>\n> \t\n> two\n", "> one\n> \t\n> two\n", "one", "two"),
+        (
+            "* Item\n\n\n  Paragraph\n\n* next\n* final\n",
+            "* Item\n\n  Paragraph\n\n* next\n* final\n",
+            "Item",
+            "Paragraph",
+        ),
+    ] {
+        for key in [Bind::Backspace, Bind::Delete] {
+            let (mut app, _f, _, _) = app_with_page(source);
+            let id = open_with_f1(&mut app);
+            let at = entries(&app.editors[&id].page)
+                .iter()
+                .find_map(|entry| match entry.shown {
+                    Shown::Blank { at, .. } => Some(at),
+                    _ => None,
+                })
+                .expect("a displayed empty paragraph");
+            let caret = if key == Bind::Backspace {
+                expected.find(previous).unwrap() + previous.len()
+            } else {
+                expected.find(next).unwrap()
+            };
+            editor(&mut app, id, EditorMsg::PressedAt(at));
+            bind(&mut app, id, key);
+            let page = &app.editors[&id].page;
+            assert_eq!(page.text(), expected);
+            assert_eq!(page.sel().head, caret);
+            assert!(entries(page).iter().all(|entry| !matches!(entry.shown, Shown::Blank { .. })));
+
+            editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
+            let page = &app.editors[&id].page;
+            assert_eq!(page.text(), source);
+            assert_eq!(page.sel().head, at);
+            assert!(page.pending().is_some());
+
+            editor(&mut app, id, EditorMsg::Command(EditorCommand::Redo));
+            assert_eq!(page_text(&app, id), expected);
+            assert_eq!(app.editors[&id].page.sel().head, caret);
+        }
+    }
+}
+
+#[test]
+fn deleting_one_of_several_leading_empty_paragraphs_survives_reopening() {
+    use super::super::column::{Shown, entries};
+    use super::super::page::Page;
+
+    let (mut app, _f, _, path) = app_with_page("\n \t\n\n\n## Plan\n");
+    std::fs::write(&path, "\u{feff}\r\n \t\r\n\r\n\r\n## Plan\r\n").unwrap();
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::BlockPressed(0));
+    bind(&mut app, id, Bind::Up);
+    assert_eq!(app.editors[&id].page.sel().head, 4);
+    bind(&mut app, id, Bind::Backspace);
+    assert_eq!(page_text(&app, id), "\n \t\n## Plan\n");
+    assert_eq!(app.editors[&id].page.sel().head, 7);
+    editor(&mut app, id, EditorMsg::Command(EditorCommand::Save));
+
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "\u{feff}\r\n \t\r\n## Plan\r\n");
+    let reopened = Page::open(&path).unwrap();
+    let shown = entries(&reopened).into_iter().map(|entry| entry.shown).collect::<Vec<_>>();
+    assert_eq!(shown, [Shown::Blank { before: 0, at: 0 }, Shown::Block(0)]);
+}
+
+#[test]
+fn deleting_an_unwritten_paragraph_leaves_the_source_intact() {
+    for key in [Bind::Backspace, Bind::Delete] {
+        let source = "## Plan\n";
+        let (mut app, _f, _, _) = app_with_page(source);
+        let id = open_with_f1(&mut app);
+        click_after(&mut app, id, "Plan");
+        bind(&mut app, id, Bind::Enter);
+        assert!(app.editors[&id].page.pending().is_some());
+        bind(&mut app, id, key);
+        assert_eq!(page_text(&app, id), source);
+    }
+}
+
+#[test]
 fn enter_at_the_start_of_a_paragraph_keeps_the_caret_with_its_text() {
     for (before, after, with_intro) in [
         ("Paragraph\n", "\n\nParagraph\n", "Intro\n\nParagraph\n"),
