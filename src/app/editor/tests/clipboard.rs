@@ -155,7 +155,7 @@ fn inserted_images_go_one_per_line() {
 }
 
 #[test]
-fn dropped_files_are_copied_into_the_assets_folder() {
+fn pasted_images_are_copied_and_other_pasted_files_are_linked_in_place() {
     let (_app, f, _, page) = app_with_page("x\n");
     let picture = f.dir.path().join("photo.png");
     std::fs::write(&picture, b"png").unwrap();
@@ -165,6 +165,37 @@ fn dropped_files_are_copied_into_the_assets_folder() {
     let md = crate::markdown::images::files_markdown(&page, "x\n", &[picture, pdf], &opts).unwrap();
     assert_eq!(md, vec!["![](Plan.assets/photo.png)".to_string(), "[doc.pdf](../doc.pdf)".to_string()]);
     assert!(f.doc_dir.join("Plan.assets").join("photo.png").is_file());
+}
+
+#[test]
+fn dropped_attachment_is_copied_and_linked_without_overwriting_existing_files() {
+    use crate::markdown::images::{ImageOptions, dropped_attachment_markdown, local_path};
+    use crate::markdown::parse::Document;
+    use pulldown_cmark::{Event, Tag};
+
+    let (_app, f, _, page) = app_with_page("x\n");
+    let source = f.dir.path().join("report [draft] #1.pdf");
+    std::fs::write(&source, b"first").unwrap();
+    let opts = ImageOptions { copy: false, folder: "images".into(), ..ImageOptions::default() };
+    let md = dropped_attachment_markdown(&page, &source, &opts).unwrap();
+    let assets = f.doc_dir.join("Plan.assets");
+    let stored = assets.join(source.file_name().unwrap());
+    assert_eq!(std::fs::read(&stored).unwrap(), b"first");
+    let doc = Document::parse(&md);
+    let destination = doc.events.iter().find_map(|(event, _)| match event {
+        Event::Start(Tag::Link { dest_url, .. }) => local_path(&page, dest_url, None),
+        _ => None,
+    });
+    assert_eq!(destination.as_deref(), Some(stored.as_path()));
+    assert_eq!(dropped_attachment_markdown(&page, &stored, &opts).unwrap(), md);
+    assert_eq!(std::fs::read_dir(&assets).unwrap().count(), 1);
+
+    std::fs::write(&source, b"second").unwrap();
+    let second = dropped_attachment_markdown(&page, &source, &opts).unwrap();
+    assert!(second.ends_with("-1.pdf)"));
+    assert_eq!(std::fs::read(assets.join("report [draft] #1-1.pdf")).unwrap(), b"second");
+    assert_eq!(std::fs::read(&source).unwrap(), b"second");
+    assert_eq!(std::fs::read(&stored).unwrap(), b"first");
 }
 
 #[test]

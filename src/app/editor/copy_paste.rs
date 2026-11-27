@@ -122,6 +122,17 @@ impl Editor {
         Task::perform(blocking(move || images::files_markdown(&page, &text, &files, &opts)), EditorMsg::Inserted)
     }
 
+    pub(super) fn drop_file(&mut self, file: PathBuf, prefs: &EditorPrefs) -> Task<EditorMsg> {
+        if images::is_image(&file) {
+            return self.insert_files(vec![file], prefs);
+        }
+        let (page, opts) = (self.page.path().to_path_buf(), prefs.images.clone());
+        Task::perform(
+            blocking(move || images::dropped_attachment_markdown(&page, &file, &opts).map(|link| vec![link])),
+            EditorMsg::Inserted,
+        )
+    }
+
     /// Saves pasted image data as a PNG in the image folder and inserts it.
     fn insert_image_data(&mut self, image: clipboard::PastedImage, prefs: &EditorPrefs) -> Task<EditorMsg> {
         let (page, text, opts) = (self.page.path().to_path_buf(), self.page.text().to_string(), prefs.images.clone());

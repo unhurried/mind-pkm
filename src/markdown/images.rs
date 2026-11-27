@@ -47,14 +47,14 @@ pub fn image_folder(page: &Path, text: &str, opts: &ImageOptions) -> PathBuf {
 /// A path in `dir` for a file named `name` that is free: `name`, else
 /// `stem-1.ext`, `stem-2.ext`...
 pub fn free_name(dir: &Path, name: &str) -> PathBuf {
-    let candidate = dir.join(name);
-    if !candidate.exists() {
-        return candidate;
-    }
+    file_names(dir, name).find(|p| !p.exists()).expect("file names are unbounded")
+}
+
+fn file_names<'a>(dir: &'a Path, name: &str) -> impl Iterator<Item = PathBuf> + use<'a> {
     let path = Path::new(name);
     let stem = paths::file_stem(path);
     let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-    (1..).map(|n| dir.join(format!("{stem}-{n}{ext}"))).find(|p| !p.exists()).unwrap_or(candidate)
+    std::iter::once(dir.join(name)).chain((1..).map(move |n| dir.join(format!("{stem}-{n}{ext}"))))
 }
 
 /// How the page at `page` refers to `file`: relative with `/` (the options
@@ -140,6 +140,50 @@ pub fn files_markdown(page: &Path, text: &str, files: &[PathBuf], opts: &ImageOp
             Ok(markdown_for(page, &target, opts))
         })
         .collect()
+}
+
+/// Links a dropped non-image file through the page's assets folder.
+pub fn dropped_attachment_markdown(page: &Path, file: &Path, opts: &ImageOptions) -> Result<String, String> {
+    if file.is_dir() {
+        return Ok(markdown_for(page, file, opts));
+    }
+    let target = copy_attachment(page, file).map_err(|e| format!("failed to copy {}: {e}", file.display()))?;
+    let name = paths::file_name(&target);
+    let name = name.replace('\\', "\\\\").replace('[', "\\[").replace(']', "\\]");
+    let mut dest = reference(page, &target, opts);
+    if !opts.escape
+        && (dest.contains(['#', '%', '(', ')', '<', '>', '\\', '&', ':', '|']) || dest.contains(char::is_control))
+    {
+        dest = escape_path(&dest);
+    }
+    Ok(format!("[{name}]({dest})"))
+}
+
+fn copy_attachment(page: &Path, file: &Path) -> std::io::Result<PathBuf> {
+    use std::io::{Error, ErrorKind};
+
+    if !file.metadata()?.is_file() {
+        return Err(Error::new(ErrorKind::InvalidInput, "expected a regular file"));
+    }
+    let page = paths::normalize(page);
+    let folder = crate::pkm::assets::assets_dir_of(&page);
+    let parent = page.parent().ok_or_else(|| Error::new(ErrorKind::InvalidInput, "page has no parent folder"))?;
+    let resolved = paths::resolve_inside(&folder, parent)?;
+    if paths::resolve_inside(file, &resolved).is_ok() || paths::resolve_inside(file, &folder).is_ok() {
+        return Ok(file.to_path_buf());
+    }
+    std::fs::create_dir_all(&resolved)?;
+    let mut source = std::fs::File::open(file)?;
+    let mut staged = tempfile::NamedTempFile::new_in(&resolved)?;
+    std::io::copy(&mut source, &mut staged)?;
+    for target in file_names(&resolved, &paths::file_name(file)) {
+        match staged.persist_noclobber(&target) {
+            Ok(_) => return Ok(folder.join(paths::file_name(&target))),
+            Err(e) if e.error.kind() == ErrorKind::AlreadyExists => staged = e.file,
+            Err(e) => return Err(e.error),
+        }
+    }
+    unreachable!("file names are unbounded")
 }
 
 /// A value of the page's YAML front matter (`key: value` at the top level).

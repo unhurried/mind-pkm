@@ -449,7 +449,7 @@ impl Editor {
                 Task::none()
             }
             EditorMsg::CloseRequested => self.close_requested(effects),
-            EditorMsg::FileDropped(path) => self.insert_files(vec![path], prefs),
+            EditorMsg::FileDropped(path) => self.drop_file(path, prefs),
             EditorMsg::Focused => Task::none(),
             EditorMsg::Pasted(content, plain) => self.pasted(content, plain, prefs),
             EditorMsg::LinkClipboard(text) => {
