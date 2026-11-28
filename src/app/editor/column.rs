@@ -5,7 +5,7 @@
 
 use super::page::Page;
 use crate::markdown::BlockKind;
-use crate::markdown::edit::{Pending, blank_paragraphs_before};
+use crate::markdown::edit::Pending;
 use crate::markdown::parse::ContainerKind;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -87,8 +87,16 @@ pub fn entries(page: &Page) -> Vec<Entry> {
     let mut active_block = None;
     // Whether the active region is among them yet.
     let mut placed = false;
-    for (i, block) in doc.blocks.iter().enumerate() {
-        for blank in blank_paragraphs_before(doc, i) {
+    let mut blanks = page.blank_lines().iter().peekable();
+    for i in 0..=doc.blocks.len() {
+        while let Some(blank) = blanks.next_if(|blank| blank.before == i) {
+            if !page.shows_blank_line(blank)
+                || pending.is_none()
+                    && active
+                        .is_some_and(|a| !a.region.is_empty() && (a.region.start..=a.region.end).contains(&blank.at))
+            {
+                continue;
+            }
             let at = blank.at;
             if !placed && let Some(offset) = empty_active_at.filter(|&offset| offset <= at) {
                 shown.push(Shown::Active);
@@ -99,6 +107,7 @@ pub fn entries(page: &Page) -> Vec<Entry> {
             }
             shown.push(Shown::Blank { before: i, at });
         }
+        let Some(block) = doc.blocks.get(i) else { break };
         if let Some(a) = active {
             let overlaps = block.range.end >= a.region.start && block.range.start <= a.region.end;
             if pending.is_none() && overlaps {
@@ -129,13 +138,21 @@ pub fn entries(page: &Page) -> Vec<Entry> {
         (b.kind.clone(), b.outer.iter().map(|&c| (doc.containers[c].kind, Some(c))).collect())
     };
     let mut entries: Vec<Entry> = Vec::new();
+    let mut previous_block = None;
     // How many blocks with a source of each hash came before.
     let mut sources: HashMap<u64, usize> = HashMap::new();
     for s in shown {
         let (kind, outer) = match (s, pending, active_block) {
             (Shown::Block(i), _, _) => of_block(i),
-            (Shown::Blank { before, .. }, _, _) => (BlockKind::Paragraph, of_block(before).1),
-            (Shown::Active, Some(pd), _) => (BlockKind::Paragraph, pd.outer.iter().map(|&k| (k, None)).collect()),
+            (Shown::Blank { at, .. }, _, _) => (BlockKind::Paragraph, blank_outer(page, at)),
+            (Shown::Active, Some(pd), _) => {
+                let outer = if page.blank_line(pd.at).is_some_and(|line| line.kinds(doc) == pd.outer) {
+                    blank_outer(page, pd.at)
+                } else {
+                    pd.outer.iter().map(|&k| (k, None)).collect()
+                };
+                (BlockKind::Paragraph, outer)
+            }
             (Shown::Active, None, Some(i)) => (active.map_or(BlockKind::Paragraph, |a| a.kind.clone()), of_block(i).1),
             (Shown::Active, None, None) => (BlockKind::Paragraph, Vec::new()),
         };
@@ -147,7 +164,15 @@ pub fn entries(page: &Page) -> Vec<Entry> {
             (Shown::Active, None, None) => 0..0,
         };
         let previous = entries.last();
-        let gap = gap(previous.map(|p| &p.kind), &kind);
+        let source_blank =
+            matches!(s, Shown::Blank { .. }) || s == Shown::Active && page.blank_line(covers.start).is_some();
+        let gap = if source_blank {
+            Gap::None
+        } else {
+            let gap = gap(previous_block.as_ref(), &kind);
+            previous_block = Some(kind.clone());
+            gap
+        };
         let shared = previous.map(|p| shared(&p.outer, &outer)).unwrap_or_default();
         let key = match s {
             Shown::Block(_) => {
@@ -164,6 +189,14 @@ pub fn entries(page: &Page) -> Vec<Entry> {
         entries.push(Entry { shown: s, kind, outer, covers, gap, shared, key });
     }
     entries
+}
+
+fn blank_outer(page: &Page, at: usize) -> Vec<(ContainerKind, Option<usize>)> {
+    page.blank_line(at)
+        .into_iter()
+        .flat_map(|line| &line.outer)
+        .map(|&i| (page.doc().containers[i].kind, Some(i)))
+        .collect()
 }
 
 /// What the entries of the column are made from, besides the page's text
@@ -248,8 +281,11 @@ mod tests {
     #[test]
     fn blocks_with_the_room_between_them() {
         let p = page("# Title\n\nPara\n\n- a\n- b\n\n1. c\n\n## Next\n");
-        assert_eq!(shown(&p), (0..6).map(Shown::Block).collect::<Vec<_>>());
-        let gaps: Vec<Gap> = entries(&p).iter().map(|e| e.gap).collect();
+        let entries = entries(&p);
+        let blocks: Vec<_> = entries.iter().filter(|e| matches!(e.shown, Shown::Block(_))).collect();
+        assert_eq!(blocks.iter().map(|e| e.shown).collect::<Vec<_>>(), (0..6).map(Shown::Block).collect::<Vec<_>>());
+        assert_eq!(entries.len() - blocks.len(), 4);
+        let gaps: Vec<Gap> = blocks.iter().map(|e| e.gap).collect();
         assert_eq!(gaps, [Gap::None, Gap::Normal, Gap::Normal, Gap::Tight, Gap::Normal, Gap::Heading]);
     }
 
@@ -300,7 +336,7 @@ mod tests {
     fn keys(page: &Page) -> Vec<(String, EntryKey)> {
         entries(page)
             .iter()
-            .filter(|e| e.shown != Shown::Active)
+            .filter(|e| matches!(e.shown, Shown::Block(_)))
             .map(|e| (page.text()[e.covers.clone()].to_string(), e.key))
             .collect()
     }
@@ -348,10 +384,11 @@ mod tests {
     fn blocks_in_a_quote_share_it_through_the_gap() {
         let p = page("before\n\n> one\n>\n> two\n");
         let entries = entries(&p);
-        assert_eq!(entries.len(), 3);
-        assert_eq!(entries[1].kinds(), [ContainerKind::Quote]);
-        assert!(entries[1].shared.is_empty(), "the paragraph before is outside the quote");
-        assert_eq!(entries[2].shared, [ContainerKind::Quote]);
+        assert_eq!(entries.len(), 4);
+        assert!(entries[1].kinds().is_empty(), "the blank line before is outside the quote");
+        assert_eq!(entries[2].kinds(), [ContainerKind::Quote]);
+        assert!(entries[2].shared.is_empty(), "the paragraph before is outside the quote");
+        assert_eq!(entries[3].shared, [ContainerKind::Quote]);
     }
 
     #[test]

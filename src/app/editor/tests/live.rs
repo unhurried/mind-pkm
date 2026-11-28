@@ -242,9 +242,9 @@ fn an_undetermined_marker_left_behind_is_what_the_text_says() {
     click_after(&mut app, id, "a");
     let kinds: Vec<BlockKind> = app.editors[&id].page.doc().blocks.iter().map(|b| b.kind.clone()).collect();
     assert_eq!(kinds, vec![BlockKind::Paragraph, BlockKind::Heading(1)]);
-    // Undo takes the marker back as typed.
+    // Undo takes the marker back as typed and restores its blank row.
     assert!(app.editors.get_mut(&id).unwrap().page.undo());
-    assert_eq!(page_text(&app, id), "a\n");
+    assert_eq!(page_text(&app, id), "a\n\n");
 }
 
 #[test]

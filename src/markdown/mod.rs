@@ -3,6 +3,7 @@
 //! export to HTML. The page text is the single source of truth: everything
 //! here reads it or returns edited text, never regenerates it from a tree.
 
+pub(crate) mod blanks;
 pub mod content;
 pub mod count;
 pub mod edit;

@@ -63,6 +63,9 @@ impl Editor {
                 Key::Named(Named::End) => self.page.perform(Action::Move(Motion::End)),
                 _ => {}
             }
+            if matches!(key, Key::Named(Named::Enter)) && self.page.pending().is_some() {
+                return self.on_bind(Bind::Enter, prefs);
+            }
             for c in typed.iter().flat_map(|t| t.chars()) {
                 let _ = self.on_action(Action::Edit(Edit::Insert(c)));
             }
@@ -188,24 +191,20 @@ impl Editor {
         if in_table {
             return self.table_bind(bind);
         }
-        let text = self.page.text().to_string();
         // The rules work on the source: at the start / end of what a block
         // shows, that is its content's start / end.
         let sel = self.page.rule_sel();
+        if bind == Bind::Enter && self.page.enter_blank_line(&region, sel) {
+            return self.focus();
+        }
+        let text = self.page.text().to_string();
         let doc = self.page.doc();
         let pending = self.page.pending().is_some();
         match bind {
-            Bind::Enter => {
-                if pending {
-                    // An empty new paragraph in a quote or list item leaves it.
-                    self.page.leave_pending_container();
-                    return self.focus();
-                }
-                match edit::nested(&text, doc, region, sel, edit::enter) {
-                    Some(e) => self.page.apply(e),
-                    None => self.page.perform(Action::Edit(Edit::Enter)),
-                }
-            }
+            Bind::Enter => match edit::nested(&text, doc, region, sel, edit::enter) {
+                Some(e) => self.page.apply(e),
+                None => self.page.perform(Action::Edit(Edit::Enter)),
+            },
             Bind::ShiftEnter => {
                 if pending {
                     return Task::none();
@@ -298,12 +297,11 @@ impl Editor {
         let after = self.page.cursor_token();
         if self.page.pending().is_some() || before == after {
             let column = self.page.column();
+            // Below code ending a quote or list item, enter a row in that container first.
+            let ends_container = down && self.page.ends_container();
             match self.page.neighbor(down) {
-                // Below code ending a quote or list item: a new paragraph in it.
-                Some(_) if down && self.page.pending().is_none() && self.page.ends_container() => {
-                    self.page.new_paragraph_after()
-                }
-                _ if self.page.enter_blank_paragraph(down) => {}
+                _ if self.page.enter_blank_paragraph(down, ends_container) => {}
+                _ if ends_container => self.page.new_paragraph_after(),
                 Some(b) => self.page.enter_block(b, down, Some(column)),
                 // Below the last block, when it is code: a new paragraph.
                 None if down && self.page.pending().is_none() => self.page.new_paragraph_after(),
@@ -338,7 +336,7 @@ impl Editor {
         }
         if self.page.at_edge(right) || self.page.pending().is_some() {
             match self.page.neighbor(right) {
-                _ if self.page.enter_blank_paragraph(right) => {}
+                _ if self.page.enter_blank_paragraph(right, false) => {}
                 Some(b) => self.page.enter_block(b, right, None),
                 None if right && self.page.pending().is_none() => self.page.new_paragraph_after(),
                 None => {}
