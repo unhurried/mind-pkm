@@ -168,6 +168,7 @@ pub const MENUS: &[Menu<Command>] = &[
             ("Use Built-in Editor", "", Command::ToggleBuiltinEditor),
         ],
     ),
+    ("Help", &[("About Mind PKM...", "", Command::About)]),
 ];
 
 /// A node's right-click menu: commands of the menu bar, None for a separator.
