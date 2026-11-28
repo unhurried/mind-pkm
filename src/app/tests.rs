@@ -921,6 +921,25 @@ fn context_menu_items_are_commands_of_the_menu_bar() {
     }
 }
 
+#[test]
+fn help_shows_the_running_version_without_an_open_map() {
+    let mut app = App::new(remove_in_temp);
+    let (menu, (_, entries)) = super::view::MENUS.iter().enumerate().find(|(_, (label, _))| *label == "Help").unwrap();
+    let &(_, _, command) = entries.iter().find(|(label, _, _)| *label == "About Mind PKM...").unwrap();
+
+    send(&mut app, MapMsg::Menu(Some(menu)));
+    send(&mut app, MapMsg::Command(command));
+    assert_eq!(app.menu, None);
+    assert!(matches!(
+        app.dialogs.front(),
+        Some(Dialog::Message(text)) if text == concat!("Mind PKM\nVersion ", env!("CARGO_PKG_VERSION"))
+    ));
+
+    send(&mut app, MapMsg::DialogOk);
+    assert!(app.dialogs.is_empty());
+    assert!(app.doc.is_none());
+}
+
 // --- Editing a node's text in the node ---
 
 fn app_with_child(text: &str) -> (App, crate::mindmap::NodeId) {
