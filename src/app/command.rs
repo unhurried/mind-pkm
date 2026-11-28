@@ -41,6 +41,7 @@ pub enum Command {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    About,
     // PKM
     PkmOpen,
     PkmEdit,
@@ -88,6 +89,10 @@ impl App {
             Command::New => return self.guard_unsaved(AfterUnsaved::New),
             Command::Open => return self.guard_unsaved(AfterUnsaved::Open),
             Command::Exit => return self.guard_unsaved(AfterUnsaved::Exit),
+            Command::About => {
+                self.message(concat!("Mind PKM\nVersion ", env!("CARGO_PKG_VERSION")));
+                return Task::none();
+            }
             Command::ToggleBuiltinEditor => {
                 let prefs =
                     super::editor::EditorPrefs { builtin: !self.editor_prefs.builtin, ..self.editor_prefs.clone() };
@@ -99,7 +104,9 @@ impl App {
         let Some(doc) = &mut self.doc else { return Task::none() };
         let focus = doc.focus();
         match cmd {
-            Command::New | Command::Open | Command::Exit | Command::ToggleBuiltinEditor => Task::none(),
+            Command::New | Command::Open | Command::Exit | Command::About | Command::ToggleBuiltinEditor => {
+                Task::none()
+            }
             Command::Save => self.save(None),
             Command::SaveAs => self.choose_file(FileAction::SaveAs(None)),
             Command::Undo => {

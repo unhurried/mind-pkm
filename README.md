@@ -68,6 +68,8 @@ File → New creates a map skeleton with `config > docDirPath` (edit its child t
 
 File → Open opens a map (`.mm`) in place of the open one, or a Markdown file (`.md`) in an editor window of its own (see [Page Editor](#page-editor)), leaving the map as it is.
 
+Help → About Mind PKM... shows the running application's version, including on the welcome screen.
+
 ## PKM Commands
 
 The PKM menu holds the commands of the former add-on, with the same function keys (and Ctrl shortcuts as aliases for some):
