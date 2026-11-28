@@ -10,6 +10,7 @@
 //! formatting) return a new text and selection, after which the region is
 //! derived anew.
 
+use crate::markdown::blanks::{self, BlankLine};
 use crate::markdown::edit::{self, CodeBody, Edited, Pending, Sel};
 use crate::markdown::history::{History, Snapshot};
 use crate::markdown::lists::{self, Shift};
@@ -19,6 +20,7 @@ use crate::markdown::parse::{ContainerKind, prefix_len};
 use crate::markdown::table::{self, CellRange, Table};
 use crate::markdown::{BlockKind, Document};
 use iced::widget::text_editor::{Action, Content, Cursor, Edit, Motion, Position};
+use std::cell::OnceCell;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
@@ -195,6 +197,9 @@ pub struct Page {
     text: String,
     crlf: bool,
     doc: Document,
+    blank_lines: OnceCell<Vec<BlankLine>>,
+    /// Source lines left by deleting all the text in the active paragraph.
+    vacated: Vec<Range<usize>>,
     /// The text as last loaded or saved.
     saved: String,
     /// The file's modification time when it was last loaded or saved.
@@ -246,6 +251,8 @@ impl Page {
             text,
             crlf,
             doc,
+            blank_lines: OnceCell::new(),
+            vacated: Vec::new(),
             modified: None,
             sel: Sel::default(),
             active: None,
@@ -271,6 +278,24 @@ impl Page {
     /// The text parsed into blocks.
     pub fn doc(&self) -> &Document {
         &self.doc
+    }
+
+    pub fn blank_lines(&self) -> &[BlankLine] {
+        self.blank_lines.get_or_init(|| blanks::rows(&self.doc))
+    }
+
+    pub fn shows_blank_line(&self, line: &BlankLine) -> bool {
+        !self.vacated.contains(&line.range)
+    }
+
+    pub fn blank_line(&self, at: usize) -> Option<&BlankLine> {
+        let lines = self.blank_lines();
+        lines.binary_search_by_key(&at, |line| line.at).ok().map(|i| &lines[i])
+    }
+
+    fn active_blank_line(&self) -> Option<&BlankLine> {
+        let pending = self.pending()?;
+        self.blank_line(pending.at).filter(|line| line.kinds(&self.doc) == pending.outer)
     }
 
     /// The cursor and selection in the text.
@@ -353,6 +378,7 @@ impl Page {
     /// gives the same (`Document::reparse`).
     fn reparse(&mut self) {
         self.doc = std::mem::take(&mut self.doc).reparse(&self.text, self.tentative);
+        self.blank_lines.take();
         self.revision += 1;
     }
 
@@ -360,6 +386,7 @@ impl Page {
     fn parsed(&mut self, doc: Document) {
         debug_assert!(doc.text == self.text && self.tentative.is_none());
         self.doc = doc;
+        self.blank_lines.take();
         self.revision += 1;
     }
 
@@ -465,7 +492,17 @@ impl Page {
         let shift = self.leave();
         let sel = Sel { anchor: shift.map(sel.anchor), head: shift.map(sel.head) };
         let head = sel.head;
-        let region = edit::region_at(&self.doc, head).or_else(|| hold_break.then(|| self.with_break(head)).flatten());
+        let line_break = hold_break.then(|| self.with_break(head)).flatten();
+        if line_break.is_none()
+            && sel.is_empty()
+            && let Some(blank) = self.blank_line(head)
+        {
+            let pending =
+                Pending { at: head, prefix: String::new(), suffix: String::new(), outer: blank.kinds(&self.doc) };
+            self.start_pending(pending);
+            return;
+        }
+        let region = edit::region_at(&self.doc, head).or(line_break);
         match region {
             Some(region) => {
                 // Each mode makes only what it uses: a text editor shapes its
@@ -709,8 +746,12 @@ impl Page {
             if insert.is_empty() {
                 return;
             }
-            let (text, start) = pending.materialize(&self.text, insert);
-            let cursor = start + pending.prefixed(insert).len();
+            let (text, start, cursor) = if let Some(line) = self.active_blank_line() {
+                line.write(&self.doc, insert)
+            } else {
+                let (text, start) = pending.materialize(&self.text, insert);
+                (text, start, start + pending.prefixed(insert).len())
+            };
             self.pending = None;
             self.text = text;
             self.settle(cursor, start, &shape, insert);
@@ -721,6 +762,7 @@ impl Page {
             return;
         }
         let segment = self.segment();
+        let block = self.active_block();
         let Some(a) = &mut self.active else { return };
         let live = match &mut a.mode {
             Mode::Live(live) => &*live,
@@ -742,14 +784,27 @@ impl Page {
         let (text, cursor) = replace_shown(&self.text, &live.display, shown, self.sel.head, insert);
         let start = a.region.start;
         let end = (a.region.end + text.len()).saturating_sub(self.text.len()).max(start);
-        if end == start {
-            // All of the block's text deleted: an empty block until it is left.
-            a.region = start..start;
+        let emptied = if insert.is_empty()
+            && let Some(i) = block
+            && self.doc.blocks[i].kind == BlockKind::Paragraph
+        {
+            let kinds = self.doc.outer_kinds(i);
+            text[start..end]
+                .split('\n')
+                .all(|line| line[prefix_len(line, kinds.iter().copied())..].trim_matches([' ', '\t']).is_empty())
+                .then_some(i)
+        } else {
+            None
+        };
+        self.vacated = emptied.map_or_else(Vec::new, |i| blanks::vacated_lines(&self.doc, i, &text));
+        if end == start || emptied.is_some() {
+            // All the paragraph's text was deleted. Keep its row active until it is left.
+            a.region = cursor..cursor;
         }
         self.text = text;
         self.settle(cursor, segment.min(cursor), &shape, insert);
-        if end == start {
-            self.sel = Sel::caret(start);
+        if end == start || emptied.is_some() {
+            self.sel = Sel::caret(cursor);
             self.refresh_live();
         } else {
             self.active = None;
@@ -891,6 +946,14 @@ impl Page {
         let mut at = active.region.clone();
         if let Some(p) = self.pending.take() {
             at = p.at..p.at;
+        } else if !self.vacated.is_empty() {
+            for range in self.vacated.drain(..).rev() {
+                shift = shift.then(Shift::removing(range.clone()));
+                self.text.replace_range(range, "");
+            }
+            self.reparse();
+            self.sel = Sel::caret(shift.map(active.region.start));
+            at = self.sel.range();
         } else if active.region.is_empty() && !self.text.is_empty() {
             let (text, to) = edit::collapse_blank_lines(&self.text, active.region.start);
             if text != self.text {
@@ -1169,6 +1232,7 @@ impl Page {
         }
         self.active = None;
         self.pending = None;
+        self.vacated.clear();
         self.tentative = None;
         self.text = edited.text;
         match parsed {
@@ -1178,7 +1242,7 @@ impl Page {
         match edited.pending {
             Some(p) => self.start_pending(p),
             None => {
-                self.hold_break = true;
+                self.hold_break = tidy;
                 self.place(edited.sel)
             }
         }
@@ -1243,6 +1307,7 @@ impl Page {
         let Some(s) = step else { return false };
         self.active = None;
         self.pending = None;
+        self.vacated.clear();
         self.tentative = None;
         self.blocks = None;
         self.untidy = false;
@@ -1296,34 +1361,80 @@ impl Page {
         }
     }
 
-    /// Moves to an empty paragraph adjacent to the active block or paragraph.
-    pub fn enter_blank_paragraph(&mut self, after: bool) -> bool {
+    /// Moves to a blank source row before reaching the next block.
+    pub fn enter_blank_paragraph(&mut self, after: bool, stay_inside: bool) -> bool {
         let Some(active) = &self.active else { return false };
-        let block = if after || self.pending.is_some() { self.neighbor(true) } else { self.active_block() };
-        let Some(block) = block else { return false };
-        let mut blanks = edit::blank_paragraphs_before(&self.doc, block).into_iter().map(|blank| blank.at);
-        let at = if after {
-            blanks.find(|&at| at >= active.region.end && self.pending().is_none_or(|p| at > p.at))
+        let index = self.blank_lines().partition_point(|line| line.at < active.region.start);
+        let edge = if after { active.region.end } else { active.region.start };
+        let row = if after {
+            let rows = &self.blank_lines()[index..];
+            let start = rows.partition_point(|line| line.at <= edge);
+            rows[start..].iter().find(|line| self.shows_blank_line(line))
         } else {
-            blanks.rfind(|&at| at < active.region.start)
+            self.blank_lines()[..index].iter().rev().find(|line| self.shows_blank_line(line))
         };
-        let Some(at) = at else { return false };
-        self.place(Sel::caret(at));
+        let target = self.neighbor(after).map(|i| &self.doc.blocks[i]);
+        let Some(row) = row.filter(|r| {
+            (!stay_inside || self.active_block().is_some_and(|i| r.outer.starts_with(&self.doc.blocks[i].outer)))
+                && target.is_none_or(|block| if after { r.at < block.range.start } else { r.at > block.range.end })
+        }) else {
+            return false;
+        };
+        self.place(Sel::caret(row.at));
         true
     }
 
-    /// Removes the source of the displayed empty paragraph at the caret.
+    /// Handles Enter in editable whitespace and next to rendered text.
+    pub fn enter_blank_line(&mut self, region: &Range<usize>, sel: Sel) -> bool {
+        if let Some(line) = self.active_blank_line() {
+            let (text, at) = line.insert_after(&self.doc);
+            self.set_text(text, Sel::caret(at));
+            return true;
+        }
+        if let Some(pending) = self.pending() {
+            if !pending.outer.is_empty() {
+                self.leave_pending_container();
+            } else if let Some(before) = self.neighbor(true) {
+                self.add_blank_beside(before, true, false);
+            } else if let Some(after) = self.neighbor(false) {
+                self.add_blank_beside(after, false, false);
+            } else if self.doc.blocks.is_empty() {
+                let at = pending.at;
+                self.set_text(edit::splice(&self.text, at..at, "\n"), Sel::caret(at));
+            }
+            return true;
+        }
+        let Some(index) = self.active_block() else { return false };
+        let block = &self.doc.blocks[index];
+        if edit::enter_above(&self.text, &self.doc, region, sel).is_some() {
+            return self.add_blank_beside(index, true, true);
+        }
+        if sel.is_empty()
+            && sel.head == region.end
+            && block.outer.is_empty()
+            && matches!(block.kind, BlockKind::Paragraph | BlockKind::Heading(_))
+        {
+            return self.add_blank_beside(index, false, false);
+        }
+        false
+    }
+
+    fn add_blank_beside(&mut self, index: usize, before: bool, keep_text_caret: bool) -> bool {
+        let Some((text, at)) = blanks::insert_beside(&self.doc, index, before) else { return false };
+        let caret = if keep_text_caret { self.sel.head + text.len() - self.text.len() } else { at };
+        self.set_text(text, Sel::caret(caret));
+        true
+    }
+
+    /// Removes one editable source line and keeps the neighboring blocks.
     pub fn delete_blank_paragraph(&mut self, forward: bool) -> bool {
-        let Some(pending) = &self.pending else { return false };
-        let Some(after) = self.neighbor(true) else { return false };
-        let Some(blank) =
-            edit::blank_paragraphs_before(&self.doc, after).into_iter().find(|blank| blank.at == pending.at)
-        else {
-            return false;
-        };
-        let next = self.doc.blocks[after].range.start - blank.range.len();
-        let at = if forward { next } else { self.neighbor(false).map_or(next, |b| self.doc.blocks[b].range.end) };
-        self.set_text(edit::splice(&self.text, blank.range, ""), Sel::caret(at));
+        let Some(blank) = self.active_blank_line() else { return false };
+        let range = blank.range.clone();
+        let previous = blank.before.checked_sub(1).map(|i| self.doc.blocks[i].range.end);
+        let next = self.doc.blocks.get(blank.before).map(|b| b.range.start - range.len());
+        let at = if forward { next.or(previous) } else { previous.or(next) }
+            .unwrap_or(range.start.min(self.text.len() - range.len()));
+        self.set_text(edit::splice(&self.text, range, ""), Sel::caret(at));
         true
     }
 

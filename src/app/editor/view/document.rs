@@ -320,9 +320,15 @@ impl Editor {
                 }
                 // Room to click below the last block.
                 let last = previous_end.map_or(0, |end| content_end(page.text(), 0..end));
+                let end = page.text().len();
+                let end = page
+                    .blank_lines()
+                    .last()
+                    .filter(|line| line.range.end == end && line.outer.is_empty())
+                    .map_or(end, |line| line.at);
                 let mut room = mouse_area(container(space()).width(Fill).height(120.0 * ctx.zoom))
-                    .on_press(EditorMsg::PressedAt(page.text().len()))
-                    .on_right_press(EditorMsg::RightClicked(RightClick::At(page.text().len())));
+                    .on_press(EditorMsg::PressedAt(end))
+                    .on_right_press(EditorMsg::RightClicked(RightClick::At(end)));
                 if dragging {
                     room = room.on_move(move |_| EditorMsg::Assets(AssetsMsg::GapHovered(last)));
                 }

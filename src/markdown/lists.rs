@@ -3,11 +3,10 @@
 //! an item, makes every item a paragraph with room around it. The editor
 //! writes a list it edits in one of two forms - tight, without blank lines
 //! between its items and before the blocks of its items, or loose, with one
-//! blank line in each of these places. Empty paragraphs between text blocks are
-//! kept in a loose list. The parser otherwise decides when a list can be
-//! tight: the tight form is parsed and kept when it has the same blocks.
+//! blank line in each of these places. Extra blank rows are kept in a loose
+//! list. The parser otherwise decides whether the tight form keeps every block.
 
-use super::edit::{blank_paragraphs_before, container_prefix};
+use super::edit::container_prefix;
 use super::parse::{BlockKind, Document, List, ListItem};
 use std::ops::Range;
 
@@ -62,6 +61,11 @@ impl Shift {
         Shift { steps: vec![vec![splice]] }
     }
 
+    /// Where offsets go when an exact source range is removed.
+    pub fn removing(range: Range<usize>) -> Shift {
+        Shift { steps: vec![vec![Splice { at: range.start, removed: range.len(), inserted: 0 }]] }
+    }
+
     /// This shift followed by `then`.
     pub fn then(mut self, then: Shift) -> Shift {
         self.steps.extend(then.steps);
@@ -113,7 +117,7 @@ fn separators(doc: &Document, list: &List) -> Vec<Separator> {
             range: nl..end,
             before_item: item,
             after_empty_item: empty_item,
-            has_empty_paragraph: !blank_paragraphs_before(doc, next).is_empty(),
+            has_empty_paragraph: text[nl + 1..end].bytes().filter(|&b| b == b'\n').count() > 1,
         });
     }
     out
@@ -153,7 +157,7 @@ fn rewrite(doc: &Document, list: &List, separators: &[Separator], form: Form) ->
 /// What must stay the same when a list's blank lines change: each block's
 /// kind (a list item's looseness and offsets aside), the kinds of the
 /// containers around it, and its lines.
-fn same_blocks(a: &Document, b: &Document) -> bool {
+pub(super) fn same_blocks(a: &Document, b: &Document) -> bool {
     fn key(doc: &Document, i: usize) -> (BlockKind, Vec<crate::markdown::parse::ContainerKind>, Vec<&str>) {
         let block = &doc.blocks[i];
         let kind = match &block.kind {
@@ -252,8 +256,9 @@ mod tests {
             let mixed = format!("* a\n* b\n\n  {block}\n* c\n");
             assert_eq!(tidied(&mixed), format!("* a\n\n* b\n\n  {block}\n\n* c\n"), "{block}");
         }
-        // The blank paragraph above text remains. Extra space between items is normalized.
-        assert_eq!(tidied("* a\n\n\n  p\n\n\n* b\n"), "* a\n\n\n  p\n\n* b\n");
+        // Extra blank rows within and between items are kept.
+        let spaced = "* a\n\n\n  p\n\n\n* b\n";
+        assert_eq!(tidied(spaced), spaced);
     }
 
     #[test]

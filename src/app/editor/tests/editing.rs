@@ -436,8 +436,8 @@ fn enter_after_an_items_text_keeps_its_code_block() {
     click_after(&mut app, id, "* aaa");
     editor(&mut app, id, EditorMsg::Bind(Bind::Enter));
     typing(&mut app, id, "b");
-    // The list needs no blank lines before the code block: it is written tight.
-    assert_eq!(page_text(&app, id), "* aaa\n  ```json\n  aaa\n  ```\n* b\n");
+    // The extra blank row before the code block survives editing the list.
+    assert_eq!(page_text(&app, id), "* aaa\n\n  \n  ```json\n  aaa\n  ```\n\n* b\n");
     assert_eq!(app.editors[&id].page.region_text(), Some("* b"));
 }
 
@@ -485,7 +485,7 @@ fn a_press_is_held_for_the_editor_that_takes_the_block_s_place() {
 
 /// The page after typing "bbb " into the heading the cursor was moved to with `go`.
 fn typed_into_heading(go: impl FnOnce(&mut App, window::Id)) -> String {
-    let (mut app, _f, _, _) = app_with_page("before\n\n### aaa\n\nafter\n");
+    let (mut app, _f, _, _) = app_with_page("before\n### aaa\nafter\n");
     let id = open_with_f1(&mut app);
     go(&mut app, id);
     typing(&mut app, id, "bbb ");
@@ -502,7 +502,7 @@ fn home(app: &mut App, id: window::Id) {
 
 #[test]
 fn typing_at_the_start_of_a_heading_goes_after_its_marker() {
-    let expected = "before\n\n### bbb aaa\n\nafter\n";
+    let expected = "before\n### bbb aaa\nafter\n";
     // Right arrow at the end of the block before.
     assert_eq!(
         typed_into_heading(|app, id| {
@@ -545,10 +545,10 @@ fn typing_at_the_start_of_a_heading_goes_after_its_marker() {
 #[test]
 fn enter_at_a_heading_start_keeps_the_caret_in_the_heading() {
     for (before, after) in [
-        ("## Plan\n", "\n\n## Plan\n"),
-        ("Before\n\n## Plan\n", "Before\n\n\n\n## Plan\n"),
-        ("> ## Plan\n", ">\n>\n> ## Plan\n"),
-        ("* List\n  ## Plan\n* next\n", "* List\n\n\n  ## Plan\n\n* next\n"),
+        ("## Plan\n", "\n## Plan\n"),
+        ("Before\n\n## Plan\n", "Before\n\n\n## Plan\n"),
+        ("> ## Plan\n", ">\n> ## Plan\n"),
+        ("* List\n  ## Plan\n* next\n", "* List\n\n\n  ## Plan\n* next\n"),
     ] {
         let (mut app, _f, _, _) = app_with_page(before);
         let id = open_with_f1(&mut app);
@@ -573,9 +573,9 @@ fn enter_at_a_heading_start_keeps_the_caret_in_the_heading() {
 #[test]
 fn an_empty_paragraph_above_a_heading_can_be_entered_and_typed_into() {
     for (source, expected) in [
-        ("## Plan\n", "Intro\n\n## Plan\n"),
-        ("> ## Plan\n", "> Intro\n>\n> ## Plan\n"),
-        ("* List\n  ## Plan\n* next\n", "* List\n\n  Intro\n\n  ## Plan\n\n* next\n"),
+        ("## Plan\n", "Intro\n## Plan\n"),
+        ("> ## Plan\n", "> Intro\n> ## Plan\n"),
+        ("* List\n  ## Plan\n* next\n", "* List\n\n  Intro\n\n  ## Plan\n* next\n"),
     ] {
         let (mut app, _f, _, _) = app_with_page(source);
         let id = open_with_f1(&mut app);
@@ -598,15 +598,14 @@ fn clicking_an_empty_paragraph_replaces_its_row_with_the_active_editor() {
     let (mut app, _f, _, _) = app_with_page("\n\n\n\n## Plan\n");
     let id = open_with_f1(&mut app);
     let shown = |app: &App| entries(&app.editors[&id].page).into_iter().map(|e| e.shown).collect::<Vec<_>>();
-    let first = Shown::Blank { before: 0, at: 0 };
-    let second = Shown::Blank { before: 0, at: 2 };
-    assert_eq!(shown(&app), [first, second, Shown::Block(0)]);
+    let row = |at| Shown::Blank { before: 0, at };
+    assert_eq!(shown(&app), [row(0), row(1), row(2), row(3), Shown::Block(0)]);
     editor(&mut app, id, EditorMsg::PressedAt(2));
-    assert_eq!(shown(&app), [first, Shown::Active, Shown::Block(0)]);
+    assert_eq!(shown(&app), [row(0), row(1), Shown::Active, row(3), Shown::Block(0)]);
     bind(&mut app, id, Bind::Up);
-    assert_eq!(shown(&app), [Shown::Active, second, Shown::Block(0)]);
+    assert_eq!(shown(&app), [row(0), Shown::Active, row(2), row(3), Shown::Block(0)]);
     type_keys(&mut app, id, "Intro");
-    assert_eq!(page_text(&app, id), "Intro\n\n\n\n## Plan\n");
+    assert_eq!(page_text(&app, id), "\nIntro\n\n\n## Plan\n");
 }
 
 #[test]
@@ -615,8 +614,8 @@ fn deleting_a_displayed_empty_paragraph_preserves_the_block_separator() {
 
     for (source, expected, previous, next) in [
         ("one\n\n\ntwo\n", "one\n\ntwo\n", "one", "two"),
-        ("one\n\n\n\ntwo\n", "one\n\ntwo\n", "one", "two"),
-        ("> one\n>\n> \t\n> two\n", "> one\n> \t\n> two\n", "one", "two"),
+        ("one\n\n\n\ntwo\n", "one\n\n\ntwo\n", "one", "two"),
+        ("> one\n>\n> \t\n> two\n", "> one\n>\n> two\n", "one", "two"),
         (
             "* Item\n\n\n  Paragraph\n\n* next\n* final\n",
             "* Item\n\n  Paragraph\n\n* next\n* final\n",
@@ -644,7 +643,8 @@ fn deleting_a_displayed_empty_paragraph_preserves_the_block_separator() {
             let page = &app.editors[&id].page;
             assert_eq!(page.text(), expected);
             assert_eq!(page.sel().head, caret);
-            assert!(entries(page).iter().all(|entry| !matches!(entry.shown, Shown::Blank { .. })));
+            let remaining = entries(page).iter().filter(|entry| matches!(entry.shown, Shown::Blank { .. })).count();
+            assert_eq!(remaining, usize::from(expected == "one\n\n\ntwo\n"));
 
             editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
             let page = &app.editors[&id].page;
@@ -669,22 +669,25 @@ fn deleting_one_of_several_leading_empty_paragraphs_survives_reopening() {
     let id = open_with_f1(&mut app);
     editor(&mut app, id, EditorMsg::BlockPressed(0));
     bind(&mut app, id, Bind::Up);
-    assert_eq!(app.editors[&id].page.sel().head, 4);
+    assert_eq!(app.editors[&id].page.sel().head, 5);
     bind(&mut app, id, Bind::Backspace);
-    assert_eq!(page_text(&app, id), "\n \t\n## Plan\n");
-    assert_eq!(app.editors[&id].page.sel().head, 7);
+    assert_eq!(page_text(&app, id), "\n \t\n\n## Plan\n");
+    assert_eq!(app.editors[&id].page.sel().head, 8);
     editor(&mut app, id, EditorMsg::Command(EditorCommand::Save));
 
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "\u{feff}\r\n \t\r\n## Plan\r\n");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "\u{feff}\r\n \t\r\n\r\n## Plan\r\n");
     let reopened = Page::open(&path).unwrap();
     let shown = entries(&reopened).into_iter().map(|entry| entry.shown).collect::<Vec<_>>();
-    assert_eq!(shown, [Shown::Blank { before: 0, at: 0 }, Shown::Block(0)]);
+    assert_eq!(
+        shown,
+        [0, 1, 4].map(|at| Shown::Blank { before: 0, at }).into_iter().chain([Shown::Block(0)]).collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn deleting_an_unwritten_paragraph_leaves_the_source_intact() {
     for key in [Bind::Backspace, Bind::Delete] {
-        let source = "## Plan\n";
+        let source = "> Plan\n";
         let (mut app, _f, _, _) = app_with_page(source);
         let id = open_with_f1(&mut app);
         click_after(&mut app, id, "Plan");
@@ -698,9 +701,9 @@ fn deleting_an_unwritten_paragraph_leaves_the_source_intact() {
 #[test]
 fn enter_at_the_start_of_a_paragraph_keeps_the_caret_with_its_text() {
     for (before, after, with_intro) in [
-        ("Paragraph\n", "\n\nParagraph\n", "Intro\n\nParagraph\n"),
-        ("> Paragraph\n", ">\n>\n> Paragraph\n", "> Intro\n>\n> Paragraph\n"),
-        ("* Item\n\n  Paragraph\n", "* Item\n\n\n\n  Paragraph\n", "* Item\n\n  Intro\n\n  Paragraph\n"),
+        ("Paragraph\n", "\nParagraph\n", "Intro\n\nParagraph\n"),
+        ("> Paragraph\n", ">\n> Paragraph\n", "> Intro\n>\n> Paragraph\n"),
+        ("* Item\n\n  Paragraph\n", "* Item\n\n\n  Paragraph\n", "* Item\n\n  Intro\n\n  Paragraph\n"),
     ] {
         let (mut app, _f, _, _) = app_with_page(before);
         let id = open_with_f1(&mut app);
@@ -792,4 +795,93 @@ fn a_paragraph_typed_into_a_math_block_keeps_the_cursor() {
     type_keys(&mut app, id, "}");
     typing(&mut app, id, "X");
     assert_eq!(page_text(&app, id), "Intro\n\n$$\n\\frac{1}{0}X\n$$\n");
+}
+
+#[test]
+fn enter_in_blank_rows_adds_one_line_per_edit_and_saves_them() {
+    use super::super::page::Page;
+
+    for (source, expected, block, first, last) in [
+        ("one", "one\n\n\n\n", "one", 4, 6),
+        ("one\n\ntwo\n", "one\n\n\n\n\ntwo\n", "one", 5, 7),
+        ("## Plan\n", "## Plan\n\n\n\n", "Plan", 8, 10),
+    ] {
+        let (mut app, _f, _, path) = app_with_page(source);
+        let id = open_with_f1(&mut app);
+        click_after(&mut app, id, block);
+        for at in first..=last {
+            bind(&mut app, id, Bind::Enter);
+            assert_eq!(app.editors[&id].page.sel().head, at);
+        }
+        assert_eq!(page_text(&app, id), expected);
+        editor(&mut app, id, EditorMsg::Command(EditorCommand::Save));
+        let reopened = Page::open(&path).unwrap();
+        assert_eq!(reopened.text(), expected);
+        assert_eq!(reopened.blank_lines().len(), 3);
+
+        for at in (first..last).rev() {
+            editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
+            assert_eq!(app.editors[&id].page.sel().head, at);
+        }
+        editor(&mut app, id, EditorMsg::Command(EditorCommand::Undo));
+        assert_eq!(page_text(&app, id), source);
+        editor(&mut app, id, EditorMsg::Command(EditorCommand::Redo));
+        assert_eq!(app.editors[&id].page.sel().head, first);
+    }
+}
+
+#[test]
+fn blank_rows_can_be_added_in_a_quote_and_traversed_with_arrows() {
+    let (mut app, _f, _, _) = app_with_page("> one\n>\n>\n> two\n>\n");
+    let id = open_with_f1(&mut app);
+    click_after(&mut app, id, "one");
+    bind(&mut app, id, Bind::Right);
+    assert_eq!(app.editors[&id].page.sel().head, 9);
+    bind(&mut app, id, Bind::Enter);
+    assert_eq!(page_text(&app, id), "> one\n>\n>\n>\n> two\n>\n");
+    let page = &app.editors[&id].page;
+    assert_eq!(page.sel().head, 11);
+    assert_eq!(page.pending().unwrap().outer, [crate::markdown::parse::ContainerKind::Quote]);
+    bind(&mut app, id, Bind::Up);
+    assert_eq!(app.editors[&id].page.sel().head, 9);
+    bind(&mut app, id, Bind::Down);
+    bind(&mut app, id, Bind::Down);
+    assert_eq!(app.editors[&id].page.region_text(), Some("> two"));
+    bind(&mut app, id, Bind::Right);
+    bind(&mut app, id, Bind::Down);
+    assert_eq!(app.editors[&id].page.sel().head, 19);
+    bind(&mut app, id, Bind::Delete);
+    assert_eq!(page_text(&app, id), "> one\n>\n>\n>\n> two\n");
+}
+
+#[test]
+fn blank_only_pages_can_add_and_remove_individual_lines() {
+    let (mut app, _f, _, _) = app_with_page("\n\n");
+    let id = open_with_f1(&mut app);
+    editor(&mut app, id, EditorMsg::PressedAt(0));
+    bind(&mut app, id, Bind::Enter);
+    assert_eq!(page_text(&app, id), "\n\n\n");
+    assert_eq!(app.editors[&id].page.sel().head, 1);
+    bind(&mut app, id, Bind::Down);
+    assert_eq!(app.editors[&id].page.sel().head, 2);
+    bind(&mut app, id, Bind::Delete);
+    assert_eq!(page_text(&app, id), "\n\n");
+    bind(&mut app, id, Bind::Up);
+    assert_eq!(app.editors[&id].page.sel().head, 1);
+}
+
+#[test]
+fn typing_on_a_blank_row_keeps_the_other_rows_and_markdown_structure() {
+    for (source, row, expected) in [
+        ("one\n\n\n\ntwo\n", 5, "one\n\nX\n\n\ntwo\n"),
+        ("one\n\n\n\ntwo\n", 6, "one\n\n\nX\n\ntwo\n"),
+        ("\n\n---\n", 1, "\nX\n\n---\n"),
+        ("one\n\n```\ncode\n```\n", 4, "one\n\nX\n```\ncode\n```\n"),
+    ] {
+        let (mut app, _f, _, _) = app_with_page(source);
+        let id = open_with_f1(&mut app);
+        editor(&mut app, id, EditorMsg::PressedAt(row));
+        type_keys(&mut app, id, "X");
+        assert_eq!(page_text(&app, id), expected);
+    }
 }

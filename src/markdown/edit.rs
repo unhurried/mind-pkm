@@ -791,54 +791,18 @@ pub fn content_start(text: &str, block_start: usize) -> usize {
     }
 }
 
-/// A displayed empty paragraph's caret and the source to remove when it is deleted.
-pub struct BlankParagraph {
-    pub at: usize,
-    pub range: Range<usize>,
-}
-
-/// The editable empty paragraphs before text, from top to bottom.
-/// A pair of blank source lines leaves room for a paragraph between blocks.
-pub fn blank_paragraphs_before(doc: &Document, index: usize) -> Vec<BlankParagraph> {
-    let block = &doc.blocks[index];
-    if !matches!(block.kind, BlockKind::Heading(_) | BlockKind::Paragraph) {
-        return Vec::new();
-    }
-
-    let text = &doc.text;
-    let after_previous = index.checked_sub(1).map_or(0, |i| doc.blocks[i].range.end);
-    let container_start = block.outer.last().map_or(0, |&i| doc.containers[i].range.start);
-    let lower_bound = after_previous.max(container_start);
-    let kinds = block.outer.iter().map(|&i| doc.containers[i].kind);
-    let mut end = line_range(text, block.range.start).start;
-    let mut pair_end = None;
-    let mut blanks = Vec::new();
-    while end > lower_bound {
-        let line = line_range(text, end - 1);
-        let source = &text[line.clone()];
-        let prefix = prefix_len(source, kinds.clone());
-        if line.start < lower_bound || !source[prefix..].trim_matches([' ', '\t']).is_empty() {
-            break;
-        }
-        if let Some(pair_end) = pair_end.take() {
-            blanks.push(BlankParagraph { at: line.start + prefix, range: line.start..pair_end });
-        } else {
-            pair_end = Some(end);
-        }
-        end = line.start;
-    }
-    // A lone pair between blocks shares a line with their Markdown separator.
-    if index > 0 && blanks.len() == 1 && pair_end.is_none() {
-        let blank = &mut blanks[0];
-        blank.range.end = line_range(text, blank.at).end + 1;
-    }
-    blanks.reverse();
-    blanks
-}
-
 /// Enter at the cursor of the active `region`. None when the text editor's
 /// own line break is wanted (tables are edited elsewhere).
 pub fn enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Option<Edited> {
+    if let Some((line, content)) = enter_above(text, doc, &region, sel) {
+        return Some(Edited::new(splice(text, line..line, "\n\n"), content + 2));
+    }
+    enter_block(text, doc, region, sel)
+}
+
+/// The source line and text position when Enter at the start of a displayed
+/// heading or paragraph inserts a row above it.
+pub(crate) fn enter_above(text: &str, doc: &Document, region: &Range<usize>, sel: Sel) -> Option<(usize, usize)> {
     if sel.is_empty() && sel.head < region.end {
         let line = line_range(text, region.start);
         let source = &text[line.clone()];
@@ -846,6 +810,8 @@ pub fn enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Opti
             && matches!(doc.blocks[index].kind, BlockKind::Heading(_) | BlockKind::Paragraph)
             && !doc.block_events(index).is_empty()
         {
+            let prefix = prefix_len(source, doc.outer_kinds(index));
+            let source = &source[prefix..];
             let marker = if matches!(doc.blocks[index].kind, BlockKind::Heading(_)) {
                 line_marker(source).filter(|m| matches!(m.kind, MarkerKind::Heading(_))).map_or(0, |m| m.end)
             } else {
@@ -853,11 +819,11 @@ pub fn enter(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Opti
             };
             let content = line.end - source[marker..].trim_start_matches([' ', '\t']).len();
             if sel.head <= content {
-                return Some(Edited::new(splice(text, line.start..line.start, "\n\n"), content + 2));
+                return Some((line.start, content));
             }
         }
     }
-    enter_block(text, doc, region, sel)
+    None
 }
 
 fn enter_block(text: &str, doc: &Document, region: Range<usize>, sel: Sel) -> Option<Edited> {

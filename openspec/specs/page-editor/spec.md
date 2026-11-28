@@ -154,12 +154,13 @@ A cursor placed in a block edited rendered, in syntax the block does not show (a
 - **THEN** the heading reads `### bbb aaa`
 
 ### Requirement: Clicking places the cursor
-A click on the page SHALL always leave a cursor in a block:
-- on a block's text: at the clicked position, the block staying rendered;
-- anywhere in an empty list item's row: at the start of its text;
-- right of a line, within the page's column: at the end of that line, also with math or an image;
-- between two blocks: in the nearer one, at the end of the block above or the start of the block below;
-- in the margin left or right of the column: at the start of the line at the click's height.
+Clicking SHALL place the cursor:
+- on text, at the clicked position with the block rendered;
+- in an empty list item, at the start of its text;
+- to the right of a line within the column, at its end, including math and image lines;
+- in an editable blank row, in that row;
+- in block spacing, at the end of the block above or the start of the one below, whichever is closer;
+- in a side margin, at the start of the line at the click's height.
 
 #### Scenario: Click in the middle of a word
 - **WHEN** the rendered paragraph `hello world` is clicked between `wor` and `ld`
@@ -197,7 +198,7 @@ When no block is active (as right after a page opens), typing a character, Up, D
 - **THEN** the page reads `# Page1 unsaved`
 
 ### Requirement: Moving between blocks with the keyboard
-Up and Down on the first and last line of a block, Left at its start and Right at its end SHALL move the cursor into the previous or next block. Up/Down SHALL keep the cursor's horizontal position where the line is long enough.
+Up and Down on the first and last line of a block, Left at its start and Right at its end SHALL move the cursor into the adjacent editable blank row or the previous or next block. Up/Down SHALL keep the cursor's horizontal position where the line is long enough.
 
 #### Scenario: Down out of a block
 - **WHEN** the cursor is on the last line of a paragraph and Down is pressed
@@ -304,7 +305,7 @@ A line making a code fence (with an optional info string), a thematic break (`--
 - **THEN** `---` is shown as text until Enter, and then a thematic break is shown with the cursor in a new paragraph after it
 
 ### Requirement: Enter and Shift+Enter
-At the start of a nonempty rendered paragraph or heading with a collapsed selection, Enter SHALL insert an empty paragraph above it and keep the caret with the text. Elsewhere in a paragraph, Enter SHALL split it at the caret and activate the second paragraph. Enter at the end of a heading SHALL start a new paragraph below it. Shift+Enter SHALL break the line inside a paragraph.
+At the start of a nonempty rendered paragraph or heading with a collapsed selection, Enter SHALL insert an empty paragraph above it and keep the caret with the text. Elsewhere in a paragraph, Enter SHALL split it at the caret and activate the second paragraph. Enter at the end of a top-level paragraph or heading SHALL create and activate a saved blank row below it. Shift+Enter SHALL break the line inside a paragraph.
 
 #### Scenario: New paragraph
 - **WHEN** the cursor is in the middle of `onetwo` (after `one`) and Enter is pressed
@@ -333,7 +334,7 @@ At the start of a nonempty rendered paragraph or heading with a collapsed select
 
 #### Scenario: Enter at the end of a heading
 - **WHEN** Enter is pressed after `Plan` in the rendered heading `## Plan`
-- **THEN** the caret is in a new empty paragraph below the heading
+- **THEN** the caret is in a new empty paragraph below the heading and it is visible after saving and reopening
 
 #### Scenario: Enter at the start of a paragraph or quote
 - **WHEN** Enter is pressed before the first character of a nonempty paragraph, including one in a quote or a list item
@@ -433,7 +434,7 @@ Backspace at the start of the text of a task item with text SHALL remove only it
 - **THEN** the page holds an empty paragraph
 
 ### Requirement: Blank lines in edited lists
-An edited list SHALL use one form for all its items: tight, with no blank lines between items or before blocks inside items, or loose, with one blank line in each place except where blank lines represent an empty paragraph. A nested list SHALL take its own form. The form SHALL be applied after an editing command other than empty paragraph deletion and when the caret leaves a block whose text was edited. Lists no edit changed, and pages only opened or saved, SHALL keep their source.
+An edited list SHALL use one form for all its items: tight, with no blank lines between items or before blocks inside items, or loose, with one separator blank line in each place. It SHALL keep extra blank rows. A nested list SHALL take its own form. The form SHALL be applied after an editing command other than blank row insertion and deletion and when the caret leaves a block whose text was edited. Lists no edit changed, and pages only opened or saved, SHALL keep their source.
 
 #### Scenario: A new item in a list with mixed blank lines
 - **WHEN** the source is `* a`, a blank line, `* b`, `* c`, the list holds only single-line items, and Enter is pressed at the end of `c` and `d` is typed
@@ -833,13 +834,12 @@ The Paragraph menu SHALL offer Move Item Up (Ctrl+Up) and Move Item Down (Ctrl+D
 - **THEN** the page is `- b` / `- a`
 
 ### Requirement: Deleting displayed empty paragraphs
-
-With the caret in a displayed empty paragraph backed by Markdown source, Backspace and Delete SHALL remove exactly that empty paragraph, preserving the adjacent blocks and their required separators. Backspace SHALL place the caret at the end of the preceding block and Delete at the start of the following block. At the start of the document, either key SHALL place the caret at the start of the following block. Each deletion SHALL be one undoable edit.
+With the caret in a displayed empty paragraph backed by Markdown source, Backspace and Delete SHALL remove exactly one Markdown blank line for that row, preserving the adjacent blocks and their required separators. Backspace SHALL prefer the preceding block end and Delete the following block start. When that block is absent, either key SHALL use the other block or a valid editing position in a page with only blank rows. Each deletion SHALL be one undoable edit.
 
 #### Scenario: Empty paragraph between two paragraphs
 
 - **WHEN** the source contains three blank lines between the paragraphs `one` and `two` and the user clicks the displayed empty paragraph and presses Delete
-- **THEN** one blank source line remains, the paragraphs remain distinct, and the caret is at the start of `two`
+- **THEN** two blank source lines remain, the paragraphs remain distinct, and the caret is at the start of `two`
 - **AND** Undo restores the deleted empty paragraph and its caret position
 
 #### Scenario: Several empty paragraphs above a heading
@@ -851,3 +851,39 @@ With the caret in a displayed empty paragraph backed by Markdown source, Backspa
 
 - **WHEN** the caret is in a displayed empty paragraph inside a quote or list item and the user presses Backspace or Delete
 - **THEN** the neighbouring blocks keep their quote markers or list indentation and remain in their original containers
+
+#### Scenario: Deleting a trailing blank row or a row in a blank page
+- **WHEN** Backspace or Delete is pressed on a displayed blank row at the end of the document or in a document consisting entirely of blank lines
+- **THEN** that source line is removed and the caret stays at a valid editing position
+
+### Requirement: Displaying Markdown blank lines
+The rendered page SHALL show one editable row for each extra Markdown blank line between blocks and for each blank line at the document edges. A required Markdown separator or loose-list separator SHALL be represented by block spacing. Blank lines inside a code, YAML, or math block SHALL belong to that block.
+
+#### Scenario: Extra lines between paragraphs
+- **WHEN** two paragraphs have three blank source lines between them
+- **THEN** the page shows the paragraph separation and two editable blank rows
+
+#### Scenario: Blank rows beside a code block and at the end of the page
+- **WHEN** extra blank lines appear before a fenced code block or after the last block
+- **THEN** each extra line is an editable row
+- **AND** a newline terminating the final nonempty source line contributes no blank row
+
+#### Scenario: Blank rows in and around containers
+- **WHEN** extra blank lines occur in a quote, in a list item, or outside those containers
+- **THEN** each row is displayed and editable within the container it belongs to, or at the page level if outside
+
+#### Scenario: Opening and saving existing blank lines
+- **WHEN** a page with blank lines is opened and saved without editing
+- **THEN** its blank lines are preserved
+
+### Requirement: Editing Markdown blank lines
+The user SHALL be able to click or move the caret into each visible blank row. Enter in a source-backed blank row SHALL add one blank line in its container and move the caret to the new row. Each insertion SHALL be undoable. Text typed on a blank row SHALL become a paragraph with the separators its neighbors require.
+
+#### Scenario: Repeated Enter and reopening
+- **WHEN** the caret is on a displayed blank line and Enter is pressed twice
+- **THEN** two blank lines are added, the caret moves to the last new row, and both lines remain visible after saving and reopening
+- **AND** each Undo takes back one insertion and restores the caret
+
+#### Scenario: Typing on a blank line
+- **WHEN** text is typed into an editable blank row between paragraphs
+- **THEN** it becomes a separate paragraph and the neighboring paragraphs remain distinct
